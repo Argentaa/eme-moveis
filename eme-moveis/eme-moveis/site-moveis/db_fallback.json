@@ -1,0 +1,127 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "admin",
+      "password": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9"
+    }
+  ],
+  "projects": [
+    {
+      "id": 1,
+      "title": "Seu vinho, no cenário certo. ",
+      "category": "Adega",
+      "mainImage": "/uploads/projetos/file-1780261359261-471718991.png",
+      "album": [
+        "/uploads/projetos/file-1780259983882-766917399.png",
+        "/uploads/projetos/file-1780259986263-559476563.png",
+        "/uploads/projetos/file-1780259989081-611508589.png"
+      ],
+      "description": "Ambientes pensados para transformar rótulos em experiência, unindo sofisticação, iluminação e design sob medida."
+    },
+    {
+      "id": 2,
+      "title": "Onde a casa realmente acontece.",
+      "category": "Cozinha",
+      "mainImage": "/uploads/projetos/file-1780260148341-324207098.png",
+      "album": [
+        "/uploads/projetos/file-1780260148341-324207098.png",
+        "/uploads/projetos/file-1780260152611-410000640.png",
+        "/uploads/projetos/file-1780260154918-754636405.png",
+        "/uploads/projetos/file-1780260157718-960206194.png",
+        "/uploads/projetos/file-1780260159831-988299822.png",
+        "/uploads/projetos/file-1780260163247-407309339.png",
+        "/uploads/projetos/file-1780260165748-393442982.png",
+        "/uploads/projetos/file-1780260167972-38382652.png",
+        "/uploads/projetos/file-1780260170595-521154035.png",
+        "/uploads/projetos/file-1780260174343-830483120.png",
+        "/uploads/projetos/file-1780260176352-263326058.png",
+        "/uploads/projetos/file-1780260178340-534445300.png",
+        "/uploads/projetos/file-1780260180330-445497361.png",
+        "/uploads/projetos/file-1780260182802-238777015.png",
+        "/uploads/projetos/file-1780260184616-37077102.png",
+        "/uploads/projetos/file-1780260186742-371969392.png",
+        "/uploads/projetos/file-1780260191302-229833534.png"
+      ],
+      "description": "Cozinhas que unem convivência, praticidade e personalidade, desenhadas para acompanhar cada momento da casa."
+    },
+    {
+      "id": 3,
+      "title": "Conforto que começa no ambiente. ",
+      "category": "Quarto",
+      "mainImage": "/uploads/projetos/file-1780261344126-507106371.png",
+      "album": [
+        "/uploads/projetos/file-1780260249532-505213957.png",
+        "/uploads/projetos/file-1780260264433-168641402.png",
+        "/uploads/projetos/file-1780260266863-304134834.png",
+        "/uploads/projetos/file-1780260270646-41140488.png"
+      ],
+      "description": "Espaços criados para desacelerar, descansar e refletir a personalidade de quem vive ali.\n\n"
+    },
+    {
+      "id": 4,
+      "title": "Funcionalidade com cara de spa.",
+      "category": "Banheiro",
+      "mainImage": "/uploads/projetos/file-1780261335318-301398700.png",
+      "album": [
+        "/uploads/projetos/file-1780260302932-999401333.png",
+        "/uploads/projetos/file-1780260305622-235919142.png",
+        "/uploads/projetos/file-1780260307685-690642887.png"
+      ],
+      "description": "Projetos que equilibram conforto, organização e estética para criar um espaço leve, elegante e prático no dia a dia."
+    },
+    {
+      "id": 5,
+      "title": "Design para receber e viver.",
+      "category": "Sala",
+      "mainImage": "/uploads/projetos/file-1780261327415-258502415.png",
+      "album": [
+        "/uploads/projetos/file-1780260334015-527210717.png",
+        "/uploads/projetos/file-1780260337946-363511731.png",
+        "/uploads/projetos/file-1780260340240-162569278.png",
+        "/uploads/projetos/file-1780260344268-62934326.png"
+      ],
+      "description": "Ambientes que conectam elegância e aconchego, feitos para transformar encontros em experiências memoráveis.\n\n"
+    },
+    {
+      "id": 6,
+      "title": "Tudo no lugar, sem perder o estilo.",
+      "category": "Closet",
+      "mainImage": "/uploads/projetos/file-1780261313945-515678664.png",
+      "album": [
+        "/uploads/projetos/file-1780260375110-667707771.png"
+      ],
+      "description": "Closets planejados para valorizar cada detalhe da rotina, com soluções inteligentes e acabamento que impressiona.\n"
+    }
+  ],
+  "timeline": [
+    {
+      "id": 1,
+      "year": "2022",
+      "title": "Fundação da eMe Móveis",
+      "description": "Nascimento da eMe Móveis no Rio Grande do Sul, com foco inicial em cozinhas planejadas e painéis.",
+      "image": ""
+    },
+    {
+      "id": 2,
+      "year": "2023",
+      "title": "Primeiro móvel produzido",
+      "description": "Entrega do primeiro dormitório completo com ferragens telescópicas e iluminação integrada de alto padrão.",
+      "image": ""
+    },
+    {
+      "id": 21,
+      "year": "2024",
+      "title": "Sede e show-room próprio",
+      "description": "Inauguração de nossa sede em Frederico Westphalen/RS, apresentando as últimas tendências em acabamentos e MDF premium.",
+      "image": ""
+    },
+    {
+      "id": 3,
+      "year": "2026",
+      "title": "Mais de 100 Projetos Entregues",
+      "description": "Marca histórica de projetos entregues e clientes satisfeitos em nossa região, unindo qualidade e exclusividade.",
+      "image": ""
+    }
+  ]
+}

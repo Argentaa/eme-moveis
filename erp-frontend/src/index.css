@@ -1,0 +1,171 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Segoe UI", Arial, ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Segoe UI", Arial, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom styles for high-end feel */
+body {
+  background-color: #09090b; /* zinc-950 */
+  color: #f4f4f5; /* zinc-100 */
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+html[data-theme="light"],
+html[data-theme="light"] body {
+  background-color: #f5f3ef;
+  color: #1f2937;
+}
+
+/* Custom scrollbar for dark premium look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #7f1d1d;
+}
+
+/* Glassmorphism utility */
+.glass-panel {
+  background-color: rgba(18, 18, 24, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.glass-panel-hover {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-panel-hover:hover {
+  background-color: rgba(24, 24, 32, 0.8);
+  border-color: rgba(220, 38, 38, 0.2); /* red-600 */
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
+}
+
+/* Custom status glow and dots */
+.glow-red {
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+}
+
+/* Active sidebar link */
+.active-link-glow {
+  box-shadow: inset 4px 0 0 #dc2626; /* red-600 */
+  background: linear-gradient(90deg, rgba(127, 29, 29, 0.25) 0%, rgba(0,0,0,0) 100%);
+}
+
+/* Light theme overrides for the existing Tailwind utility-heavy screens. */
+.theme-light {
+  background: #f5f3ef !important;
+  color: #1f2937 !important;
+}
+
+.theme-light .glass-panel {
+  background-color: rgba(255, 255, 255, 0.92);
+  border-color: rgba(148, 163, 184, 0.35);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.theme-light .active-link-glow {
+  background: linear-gradient(90deg, rgba(220, 38, 38, 0.12) 0%, rgba(255,255,255,0) 100%);
+}
+
+.theme-light :is(
+  [class*="bg-neutral-950"],
+  [class*="bg-zinc-950"],
+  [class*="bg-zinc-955"],
+  [class*="bg-zinc-900"],
+  [class*="bg-zinc-850"],
+  [class*="bg-zinc-805"]
+) {
+  background-color: #ffffff !important;
+}
+
+.theme-light :is(
+  [class*="bg-red-950"],
+  [class*="bg-emerald-950"],
+  [class*="bg-amber-950"],
+  [class*="bg-rose-950"]
+) {
+  background-color: #fff7ed !important;
+}
+
+.theme-light :is(
+  [class*="text-white"],
+  [class*="text-zinc-100"],
+  [class*="text-zinc-200"],
+  [class*="text-zinc-300"]
+) {
+  color: #1f2937 !important;
+}
+
+.theme-light :is(
+  [class*="text-zinc-400"],
+  [class*="text-zinc-500"],
+  [class*="text-zinc-600"],
+  [class*="text-zinc-650"]
+) {
+  color: #64748b !important;
+}
+
+.theme-light :is(
+  [class*="border-zinc-900"],
+  [class*="border-zinc-850"],
+  [class*="border-zinc-805"],
+  [class*="border-zinc-800"],
+  [class*="border-zinc-c800"]
+) {
+  border-color: #d1d5db !important;
+}
+
+.theme-light input,
+.theme-light select,
+.theme-light textarea {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  border-color: #9ca3af !important;
+}
+
+.theme-light input::placeholder,
+.theme-light textarea::placeholder {
+  color: #6b7280 !important;
+}
+
+.theme-light table thead {
+  background-color: #f3f4f6 !important;
+}
+
+/* ── Agenda / CalendarView — overrides modo claro ─────────────── */
+.theme-light .calendar-event {
+  background-color: #f8fafc;
+  color: #18181b;
+  border: 1px solid #e2e8f0;
+}
+.theme-light .calendar-event-title {
+  color: #18181b;
+}
+.theme-light .calendar-event-meta {
+  color: #52525b;
+}
+.theme-light .calendar-day-title {
+  color: #18181b;
+}
+.theme-light .calendar-status-badge {
+  color: #18181b;
+  border-color: #e2e8f0;
+}

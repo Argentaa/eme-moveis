@@ -1,0 +1,6 @@
+{
+  "name": "eMe Móveis",
+  "description": "Site moderno para eMe Móveis, especializada em móveis de alta qualidade.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,8 @@
+flask>=3.0
+flask-sqlalchemy>=3.1
+flask-cors>=5.0
+pyjwt>=2.8
+bcrypt>=4.1
+psycopg2-binary>=2.9
+gunicorn>=22.0
+pytest>=8.0

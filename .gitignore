@@ -1,0 +1,38 @@
+# Deps / build
+node_modules/
+erp-frontend/node_modules/
+site-frontend/node_modules/
+dist/
+erp-frontend/dist/
+site-frontend/dist/
+
+# Segredos — nunca commitar
+.env
+*.env
+!*.example
+eme-moveis/eme-moveis/gerenciamento-eme/.env
+eme-moveis/eme-moveis/gerenciamento-eme/eme_backend/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+instance/
+*.db
+*.sqlite*
+site.db
+
+# Uploads locais
+site-backend/uploads/
+uploads/
+
+# Dump com dados reais (LGPD) — fora do repo; importe por outro caminho
+erp-backend/data/backup_emebd_final.sql
+eme-moveis/**/backup_emebd_final.sql
+**/backup_emebd_final.sql
+
+# Sistema
+.DS_Store

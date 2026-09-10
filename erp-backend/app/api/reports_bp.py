@@ -1,0 +1,634 @@
+"""GET /api/reports/* (+/export e ?format=pdf|xlsx).
+
+Contratos replicados do FastAPI original:
+- financial/clients/projects/stock -> ReportResponse
+  {title, generated_at, filters_applied, summary[], columns[], rows[]}
+- dre -> {periodo, receitas{itens,total}, despesas{...}, resultado_liquido,
+  margem_liquida, pendentes{receitas,despesas}}
+- crm -> {periodo, negociacoes{...}, conversao{...}, ticket_medio{...},
+  fluxo_caixa[], fontes_lead[]}
+"""
+import io
+from datetime import date, datetime, timezone
+from calendar import monthrange
+
+from flask import Blueprint, jsonify, request, send_file
+from sqlalchemy import extract, func, or_
+
+from app.helpers import iso, num, parse_date
+from app.auth import token_required
+from app.extensions import db
+from app.models.models import (
+    CalendarEvent, Client, FinancialRecord, Project, StockItem, StockMovement,
+)
+
+bp = Blueprint("reports", __name__)
+
+STATUS_LABELS_PROJECT = {
+    "ORCAMENTO": "Orçamento",
+    "PROJETADO": "Projetado",
+    "PRODUCAO": "Produção",
+    "MONTAGEM": "Montagem",
+    "CONCLUIDO": "Concluído",
+}
+
+
+def _fmt_brl(value) -> str:
+    try:
+        v = float(value or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _fmt_date(value) -> str:
+    if value is None:
+        return "-"
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%d/%m/%Y")
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _wants_file():
+    fmt = (request.args.get("format") or request.args.get("export") or "json").lower()
+    return fmt if fmt in ("pdf", "xlsx") else "json"
+
+
+def _send_report(report, prefix):
+    fmt = _wants_file()
+    if fmt == "pdf":
+        return _report_pdf(report, prefix)
+    if fmt == "xlsx":
+        return _report_xlsx(report, prefix)
+    return jsonify(report)
+
+
+def _report_pdf(report, prefix):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(50, 800, report.get("title", prefix))
+    c.setFont("Helvetica", 10)
+    y = 780
+    for s in report.get("summary", []):
+        c.drawString(50, y, f"{s.get('label')}: {s.get('value')}")
+        y -= 16
+    y -= 8
+    cols = report.get("columns", [])
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(50, y, " | ".join(col.get("label", "") for col in cols)[:160])
+    y -= 16
+    c.setFont("Helvetica", 8)
+    for row in report.get("rows", [])[:80]:
+        line = " | ".join(str(row.get(col.get("key"), "")) for col in cols)[:160]
+        c.drawString(50, y, line)
+        y -= 12
+        if y < 40:
+            c.showPage()
+            y = 800
+            c.setFont("Helvetica", 8)
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=f"{prefix}.pdf")
+
+
+def _report_xlsx(report, prefix):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Relatorio"
+    ws.append([report.get("title", prefix)])
+    for s in report.get("summary", []):
+        ws.append([s.get("label"), s.get("value")])
+    ws.append([])
+    cols = report.get("columns", [])
+    ws.append([col.get("label", "") for col in cols])
+    for row in report.get("rows", []):
+        ws.append([row.get(col.get("key"), "") for col in cols])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"{prefix}.xlsx",
+    )
+
+
+# ── Financeiro ────────────────────────────────────────────────
+
+def _build_financial():
+    df = parse_date(request.args.get("date_from"))
+    dt = parse_date(request.args.get("date_to"))
+    ftype = request.args.get("type") or None
+    category = request.args.get("category") or None
+    status = request.args.get("status_filter") or request.args.get("status") or None
+    project_id = request.args.get("project_id") or None
+
+    q = db.session.query(FinancialRecord)
+    if df:
+        q = q.filter(FinancialRecord.date >= df)
+    if dt:
+        q = q.filter(FinancialRecord.date <= dt)
+    if ftype:
+        q = q.filter_by(type=ftype)
+    if category:
+        q = q.filter_by(category=category)
+    if status:
+        q = q.filter_by(status=status)
+    if project_id:
+        q = q.filter_by(project_id=project_id)
+    rows = q.order_by(FinancialRecord.date.desc()).all()
+
+    total_entrada = sum(float(r.amount or 0) for r in rows if r.type == "ENTRADA")
+    total_saida = sum(float(r.amount or 0) for r in rows if r.type == "SAIDA")
+    pend_entrada = sum(float(r.amount or 0) for r in rows if r.type == "ENTRADA" and r.status == "PENDENTE")
+    pend_saida = sum(float(r.amount or 0) for r in rows if r.type == "SAIDA" and r.status == "PENDENTE")
+    saldo = total_entrada - total_saida
+
+    formatted = []
+    for r in rows:
+        proj = db.session.get(Project, r.project_id) if r.project_id else None
+        formatted.append({
+            "date": _fmt_date(r.date),
+            "description": r.description,
+            "type": "Entrada" if r.type == "ENTRADA" else "Saída",
+            "category": r.category,
+            "project_title": proj.title if proj else "-",
+            "amount": _fmt_brl(r.amount),
+            "status": "Pago" if r.status == "PAGO" else "Pendente",
+        })
+    return {
+        "title": "Relatório Financeiro",
+        "generated_at": _now_iso(),
+        "filters_applied": {"date_from": iso(df), "date_to": iso(dt), "type": ftype,
+                            "category": category, "status": status, "project_id": project_id},
+        "summary": [
+            {"label": "Total de Entradas", "value": _fmt_brl(total_entrada), "tone": "positive"},
+            {"label": "Total de Saídas", "value": _fmt_brl(total_saida), "tone": "negative"},
+            {"label": "Saldo do Período", "value": _fmt_brl(saldo),
+             "tone": "positive" if saldo >= 0 else "negative"},
+            {"label": "Pendente a Receber", "value": _fmt_brl(pend_entrada), "tone": "neutral"},
+            {"label": "Pendente a Pagar", "value": _fmt_brl(pend_saida), "tone": "neutral"},
+            {"label": "Quantidade de Lançamentos", "value": str(len(rows)), "tone": "neutral"},
+        ],
+        "columns": [
+            {"key": "date", "label": "Data"},
+            {"key": "description", "label": "Descrição"},
+            {"key": "type", "label": "Tipo"},
+            {"key": "category", "label": "Categoria"},
+            {"key": "project_title", "label": "Projeto"},
+            {"key": "amount", "label": "Valor"},
+            {"key": "status", "label": "Status"},
+        ],
+        "rows": formatted,
+    }
+
+
+# ── Clientes ──────────────────────────────────────────────────
+
+def _build_clients():
+    cf = parse_date(request.args.get("created_from"))
+    ct = parse_date(request.args.get("created_to"))
+    search = (request.args.get("search") or "").strip().lower()
+
+    rows = db.session.query(Client).order_by(Client.created_at.desc()).all()
+    if cf:
+        rows = [c for c in rows if c.created_at and c.created_at.date() >= cf]
+    if ct:
+        rows = [c for c in rows if c.created_at and c.created_at.date() <= ct]
+    if search:
+        rows = [c for c in rows
+                if search in (c.name or "").lower()
+                or search in (c.email or "").lower()
+                or search in (c.cpf_cnpj or "").lower()]
+
+    formatted = []
+    for c in rows:
+        projs = db.session.query(Project).filter_by(client_id=c.id).all()
+        total = sum(float(p.value or 0) for p in projs)
+        formatted.append({
+            "name": c.name, "email": c.email or "", "phone": c.phone or "",
+            "cpf_cnpj": c.cpf_cnpj or "", "address": c.address or "",
+            "created_at": _fmt_date(c.created_at.date() if hasattr(c.created_at, "date") else c.created_at),
+            "project_count": str(len(projs)), "total_project_value": _fmt_brl(total),
+            "_nproj": len(projs), "_total": total,
+        })
+    com_projetos = sum(1 for r in formatted for _ in [0] if False)  # placeholder
+    com_projetos = sum(1 for c in rows
+                       if db.session.query(Project).filter_by(client_id=c.id).count() > 0)
+    valor_total = sum(r["_total"] for r in formatted)
+    for r in formatted:
+        r.pop("_nproj", None)
+        r.pop("_total", None)
+    return {
+        "title": "Relatório de Clientes",
+        "generated_at": _now_iso(),
+        "filters_applied": {"created_from": iso(cf), "created_to": iso(ct),
+                            "search": search or None},
+        "summary": [
+            {"label": "Total de Clientes", "value": str(len(rows)), "tone": "neutral"},
+            {"label": "Clientes com Projetos", "value": str(com_projetos), "tone": "positive"},
+            {"label": "Valor Total em Projetos", "value": _fmt_brl(valor_total), "tone": "positive"},
+        ],
+        "columns": [
+            {"key": "name", "label": "Nome"},
+            {"key": "email", "label": "Email"},
+            {"key": "phone", "label": "Telefone"},
+            {"key": "cpf_cnpj", "label": "CPF/CNPJ"},
+            {"key": "address", "label": "Endereço"},
+            {"key": "created_at", "label": "Cadastrado em"},
+            {"key": "project_count", "label": "Projetos"},
+            {"key": "total_project_value", "label": "Valor em Projetos"},
+        ],
+        "rows": formatted,
+    }
+
+
+# ── Projetos ──────────────────────────────────────────────────
+
+def _build_projects():
+    status = request.args.get("status_filter") or request.args.get("status") or None
+    client_id = request.args.get("client_id") or None
+    dfrom = parse_date(request.args.get("deadline_from"))
+    dto = parse_date(request.args.get("deadline_to"))
+
+    q = db.session.query(Project)
+    if status:
+        q = q.filter_by(status=status)
+    if client_id:
+        q = q.filter_by(client_id=client_id)
+    if dfrom:
+        q = q.filter(Project.deadline >= dfrom)
+    if dto:
+        q = q.filter(Project.deadline <= dto)
+    rows = q.order_by(Project.deadline).all()
+
+    total = sum(float(p.value or 0) for p in rows)
+    concluidos = sum(1 for p in rows if p.status == "CONCLUIDO")
+    em_and = sum(1 for p in rows if p.status != "CONCLUIDO")
+    hoje = date.today()
+    atrasados = sum(1 for p in rows
+                    if p.status != "CONCLUIDO" and p.deadline and p.deadline < hoje)
+    formatted = [{
+        "title": p.title,
+        "client_name": (db.session.get(Client, p.client_id).name
+                        if p.client_id and db.session.get(Client, p.client_id) else "-"),
+        "status": STATUS_LABELS_PROJECT.get(p.status, p.status),
+        "value": _fmt_brl(p.value),
+        "deadline": _fmt_date(p.deadline),
+    } for p in rows]
+    return {
+        "title": "Relatório de Projetos",
+        "generated_at": _now_iso(),
+        "filters_applied": {"status": status, "client_id": client_id,
+                            "deadline_from": iso(dfrom), "deadline_to": iso(dto)},
+        "summary": [
+            {"label": "Total de Projetos", "value": str(len(rows)), "tone": "neutral"},
+            {"label": "Valor Total dos Projetos", "value": _fmt_brl(total), "tone": "positive"},
+            {"label": "Concluídos", "value": str(concluidos), "tone": "positive"},
+            {"label": "Em Andamento", "value": str(em_and), "tone": "neutral"},
+            {"label": "Atrasados (prazo vencido)", "value": str(atrasados),
+             "tone": "negative" if atrasados else "neutral"},
+        ],
+        "columns": [
+            {"key": "title", "label": "Projeto/Ambiente"},
+            {"key": "client_name", "label": "Cliente"},
+            {"key": "status", "label": "Status"},
+            {"key": "value", "label": "Valor"},
+            {"key": "deadline", "label": "Prazo"},
+        ],
+        "rows": formatted,
+    }
+
+
+# ── Estoque ───────────────────────────────────────────────────
+
+def _build_stock():
+    mode = request.args.get("report_mode", "items")
+    if mode == "movements":
+        return _build_stock_movements()
+    return _build_stock_items()
+
+
+def _build_stock_items():
+    category_id = request.args.get("category_id") or None
+    low_only = (request.args.get("low_stock_only", "false")).lower() == "true"
+    q = db.session.query(StockItem)
+    if category_id:
+        q = q.filter_by(category_id=category_id)
+    rows = q.order_by(StockItem.name).all()
+    if low_only:
+        rows = [i for i in rows if float(i.quantity or 0) <= float(i.min_quantity or 0)]
+    total_val = sum(float(i.quantity or 0) * float(i.price or 0) for i in rows)
+    below = sum(1 for i in rows if float(i.quantity or 0) <= float(i.min_quantity or 0))
+    from app.models.models import Category
+    formatted = []
+    for i in rows:
+        cat = db.session.get(Category, i.category_id) if i.category_id else None
+        formatted.append({
+            "name": i.name, "sku": i.sku,
+            "category_name": cat.name if cat else "-",
+            "quantity": f"{float(i.quantity or 0):.2f} {i.unit or ''}".strip(),
+            "min_quantity": f"{float(i.min_quantity or 0):.2f} {i.unit or ''}".strip(),
+            "price": _fmt_brl(i.price),
+            "total_value": _fmt_brl(float(i.quantity or 0) * float(i.price or 0)),
+            "supplier": i.supplier or "",
+            "low_stock": "Sim" if float(i.quantity or 0) <= float(i.min_quantity or 0) else "Não",
+        })
+    return {
+        "title": "Relatório de Estoque — Itens",
+        "generated_at": _now_iso(),
+        "filters_applied": {"report_mode": "items", "category_id": category_id,
+                            "low_stock_only": low_only},
+        "summary": [
+            {"label": "Total de Itens", "value": str(len(rows)), "tone": "neutral"},
+            {"label": "Valor Total em Estoque", "value": _fmt_brl(total_val), "tone": "positive"},
+            {"label": "Itens Abaixo do Mínimo", "value": str(below),
+             "tone": "negative" if below else "neutral"},
+        ],
+        "columns": [
+            {"key": "name", "label": "Item"},
+            {"key": "sku", "label": "SKU"},
+            {"key": "category_name", "label": "Categoria"},
+            {"key": "quantity", "label": "Quantidade"},
+            {"key": "min_quantity", "label": "Mínimo"},
+            {"key": "price", "label": "Preço Unit."},
+            {"key": "total_value", "label": "Valor em Estoque"},
+            {"key": "supplier", "label": "Fornecedor"},
+            {"key": "low_stock", "label": "Abaixo do Mínimo"},
+        ],
+        "rows": formatted,
+    }
+
+
+def _build_stock_movements():
+    mtype = request.args.get("movement_type") or None
+    df = parse_date(request.args.get("date_from"))
+    dt = parse_date(request.args.get("date_to"))
+    category_id = request.args.get("category_id") or None
+
+    q = db.session.query(StockMovement)
+    if mtype:
+        q = q.filter_by(type=mtype)
+    rows = q.order_by(StockMovement.date.desc()).all()
+    if df:
+        rows = [m for m in rows if m.date and m.date.date() >= df]
+    if dt:
+        rows = [m for m in rows if m.date and m.date.date() <= dt]
+    if category_id:
+        rows = [m for m in rows
+                if (db.session.get(StockItem, m.item_id)
+                    and db.session.get(StockItem, m.item_id).category_id == category_id)]
+    tot_in = sum(float(m.quantity or 0) for m in rows if m.type == "ENTRADA")
+    tot_out = sum(float(m.quantity or 0) for m in rows if m.type == "SAIDA")
+    formatted = []
+    for m in rows:
+        item = db.session.get(StockItem, m.item_id)
+        dt_str = m.date.strftime("%d/%m/%Y %H:%M") if hasattr(m.date, "strftime") else str(m.date)
+        formatted.append({
+            "date": dt_str,
+            "item_name": item.name if item else "-",
+            "type": "Entrada" if m.type == "ENTRADA" else "Saída",
+            "quantity": f"{float(m.quantity or 0):.2f}",
+            "reason": m.reason or "",
+            "created_by": m.created_by or "",
+        })
+    return {
+        "title": "Relatório de Estoque — Movimentações",
+        "generated_at": _now_iso(),
+        "filters_applied": {"report_mode": "movements", "movement_type": mtype,
+                            "date_from": iso(df), "date_to": iso(dt)},
+        "summary": [
+            {"label": "Movimentações no Período", "value": str(len(rows)), "tone": "neutral"},
+            {"label": "Total Movimentado (Entradas)", "value": f"{tot_in:.2f}", "tone": "positive"},
+            {"label": "Total Movimentado (Saídas)", "value": f"{tot_out:.2f}", "tone": "negative"},
+        ],
+        "columns": [
+            {"key": "date", "label": "Data"},
+            {"key": "item_name", "label": "Item"},
+            {"key": "type", "label": "Tipo"},
+            {"key": "quantity", "label": "Quantidade"},
+            {"key": "reason", "label": "Motivo"},
+            {"key": "created_by", "label": "Responsável"},
+        ],
+        "rows": formatted,
+    }
+
+
+# ── DRE ───────────────────────────────────────────────────────
+
+def _build_dre():
+    today = date.today()
+    try:
+        m = int(request.args.get("month") or today.month)
+        y = int(request.args.get("year") or today.year)
+    except (TypeError, ValueError):
+        m, y = today.month, today.year
+
+    recs = db.session.query(FinancialRecord).filter(
+        FinancialRecord.type == "ENTRADA", FinancialRecord.status == "PAGO",
+        extract("month", FinancialRecord.date) == m,
+        extract("year", FinancialRecord.date) == y).all()
+    desps = db.session.query(FinancialRecord).filter(
+        FinancialRecord.type == "SAIDA", FinancialRecord.status == "PAGO",
+        extract("month", FinancialRecord.date) == m,
+        extract("year", FinancialRecord.date) == y).all()
+    pend = db.session.query(FinancialRecord).filter(
+        FinancialRecord.status == "PENDENTE",
+        extract("month", FinancialRecord.due_date) == m,
+        extract("year", FinancialRecord.due_date) == y).all()
+
+    by_cat_r = {}
+    for r in recs:
+        by_cat_r[r.category or "Outros"] = by_cat_r.get(r.category or "Outros", 0) + float(r.amount or 0)
+    by_cat_d = {}
+    for r in desps:
+        by_cat_d[r.category or "Outros"] = by_cat_d.get(r.category or "Outros", 0) + float(r.amount or 0)
+    total_r = sum(by_cat_r.values())
+    total_d = sum(by_cat_d.values())
+    resultado = total_r - total_d
+    return {
+        "periodo": {"mes": m, "ano": y},
+        "receitas": {
+            "itens": [{"categoria": k, "valor": v}
+                      for k, v in sorted(by_cat_r.items(), key=lambda kv: kv[1], reverse=True)],
+            "total": total_r,
+        },
+        "despesas": {
+            "itens": [{"categoria": k, "valor": v}
+                      for k, v in sorted(by_cat_d.items(), key=lambda kv: kv[1], reverse=True)],
+            "total": total_d,
+        },
+        "resultado_liquido": resultado,
+        "margem_liquida": round(resultado / total_r * 100, 2) if total_r > 0 else 0,
+        "pendentes": {
+            "receitas": sum(float(r.amount or 0) for r in pend if r.type == "ENTRADA"),
+            "despesas": sum(float(r.amount or 0) for r in pend if r.type == "SAIDA"),
+        },
+    }
+
+
+# ── CRM ───────────────────────────────────────────────────────
+
+def _build_crm():
+    df = parse_date(request.args.get("date_from"))
+    dt = parse_date(request.args.get("date_to"))
+
+    clients = db.session.query(Client).all()
+    if df:
+        clients = [c for c in clients if c.created_at and c.created_at.date() >= df]
+    if dt:
+        clients = [c for c in clients if c.created_at and c.created_at.date() <= dt]
+
+    by_stage_map = {}
+    for c in clients:
+        st = c.funnel_status or "PROSPECCAO"
+        by_stage_map[st] = by_stage_map.get(st, 0) + 1
+    by_stage = [{"funnel_status": k, "total": v} for k, v in by_stage_map.items()]
+
+    lost = [{"name": c.name, "lost_reason": c.lost_reason,
+             "created_at": iso(c.created_at)}
+            for c in clients if c.funnel_status == "PERDIDO"]
+
+    total_closed = sum(1 for c in clients if c.funnel_status == "FECHAMENTO")
+    taxa = round(total_closed / len(clients) * 100, 1) if clients else 0
+
+    concluidos = db.session.query(Project).filter_by(status="CONCLUIDO").all()
+    vals = [float(p.value or 0) for p in concluidos]
+    ticket = {
+        "media": sum(vals) / len(vals) if vals else 0,
+        "maximo": max(vals) if vals else 0,
+        "minimo": min(vals) if vals else 0,
+        "total_projetos": len(vals),
+        "total_faturado": sum(vals),
+    }
+
+    # Fluxo de caixa: ultimos 12 meses a partir de hoje
+    today = date.today()
+    months = []
+    ty, tm = today.year, today.month
+    for _ in range(12):
+        months.append((ty, tm))
+        tm -= 1
+        if tm == 0:
+            tm, ty = 12, ty - 1
+    months.reverse()
+    fluxo = []
+    for yy, mm in months:
+        recs = db.session.query(FinancialRecord).filter(
+            FinancialRecord.type == "ENTRADA", FinancialRecord.status == "PAGO",
+            extract("month", FinancialRecord.date) == mm,
+            extract("year", FinancialRecord.date) == yy).all()
+        ds = db.session.query(FinancialRecord).filter(
+            FinancialRecord.type == "SAIDA", FinancialRecord.status == "PAGO",
+            extract("month", FinancialRecord.date) == mm,
+            extract("year", FinancialRecord.date) == yy).all()
+        r_tot = sum(float(r.amount or 0) for r in recs)
+        d_tot = sum(float(r.amount or 0) for r in ds)
+        fluxo.append({"mes": f"{yy:04d}-{mm:02d}", "receitas": r_tot,
+                      "despesas": d_tot, "resultado": r_tot - d_tot})
+
+    fontes_map = {}
+    for c in clients:
+        f = c.lead_source or "Não informado"
+        fontes_map[f] = fontes_map.get(f, 0) + 1
+    fontes = [{"fonte": k, "total": v}
+              for k, v in sorted(fontes_map.items(), key=lambda kv: kv[1], reverse=True)]
+
+    return {
+        "periodo": {"date_from": iso(df), "date_to": iso(dt)},
+        "negociacoes": {"total": len(clients), "por_etapa": by_stage,
+                        "perdidas": lost, "total_perdidas": len(lost)},
+        "conversao": {"total_clientes": len(clients),
+                      "total_fechamentos": total_closed, "taxa": taxa},
+        "ticket_medio": ticket,
+        "fluxo_caixa": fluxo,
+        "fontes_lead": fontes,
+    }
+
+
+_BUILDERS = {
+    "financial": (_build_financial, "relatorio-financeiro"),
+    "clients": (_build_clients, "relatorio-clientes"),
+    "projects": (_build_projects, "relatorio-projetos"),
+    "stock": (_build_stock, "relatorio-estoque"),
+}
+
+
+def _serve(name):
+    builder, prefix = _BUILDERS[name]
+    return _send_report(builder(), prefix)
+
+
+@bp.get("/api/reports/financial")
+@token_required()
+def r_financial():
+    return _serve("financial")
+
+
+@bp.get("/api/reports/financial/export")
+@token_required()
+def r_financial_export():
+    return _serve("financial")
+
+
+@bp.get("/api/reports/clients")
+@token_required()
+def r_clients():
+    return _serve("clients")
+
+
+@bp.get("/api/reports/clients/export")
+@token_required()
+def r_clients_export():
+    return _serve("clients")
+
+
+@bp.get("/api/reports/projects")
+@token_required()
+def r_projects():
+    return _serve("projects")
+
+
+@bp.get("/api/reports/projects/export")
+@token_required()
+def r_projects_export():
+    return _serve("projects")
+
+
+@bp.get("/api/reports/stock")
+@token_required()
+def r_stock():
+    return _serve("stock")
+
+
+@bp.get("/api/reports/stock/export")
+@token_required()
+def r_stock_export():
+    return _serve("stock")
+
+
+@bp.get("/api/reports/dre")
+@token_required()
+def r_dre():
+    return jsonify(_build_dre())
+
+
+@bp.get("/api/reports/crm")
+@token_required()
+def r_crm():
+    return jsonify(_build_crm())

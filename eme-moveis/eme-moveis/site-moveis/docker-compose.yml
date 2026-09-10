@@ -1,0 +1,40 @@
+services:
+  db:
+    image: mysql:8.4
+    container_name: eme-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_change_me}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-eme_site_institucional}
+      MYSQL_USER: ${MYSQL_USER:-eme_site_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-OkB60DTP2IyewH6ud9dMoUvV}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root_change_me}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  site:
+    build: .
+    container_name: eme-site
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      MYSQL_HOST: db
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-eme_site_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-OkB60DTP2IyewH6ud9dMoUvV}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-eme_site_institucional}
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  uploads_data:

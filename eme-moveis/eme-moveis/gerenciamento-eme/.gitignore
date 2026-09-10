@@ -1,0 +1,5 @@
+# Variáveis de ambiente do docker-compose (contém segredos)
+.env
+
+# Volumes/dados locais gerados pelo Docker
+**/mysql_data/

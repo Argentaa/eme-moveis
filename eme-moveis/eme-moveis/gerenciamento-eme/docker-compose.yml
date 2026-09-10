@@ -1,0 +1,126 @@
+name: eme-moveis
+
+services:
+
+  mysql:
+    image: mysql:8.0.32
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?defina MYSQL_ROOT_PASSWORD no .env}
+      MYSQL_DATABASE: ${DB_NAME:-emebd}
+      MYSQL_USER: ${DB_USER:-eme_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env}
+    # SEM exposição de porta ao host: nem mesmo em 127.0.0.1. Só backend e
+    # create-admin acessam o MySQL, e estão na mesma rede interna do Compose.
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./eme_backend/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: ./eme_backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${DB_USER:-eme_user}
+      DB_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env}
+      DB_NAME: ${DB_NAME:-emebd}
+      SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?defina ALLOWED_ORIGINS no .env, ex 'https://seudominio.duckdns.org'}
+    # Bind em 127.0.0.1: o Caddy fala com este serviço pela rede interna do
+    # Compose (nome "backend", porta 8000), então este mapeamento de porta
+    # não é estritamente necessário para o proxy funcionar. Mantido como
+    # camada extra de segurança e para você poder testar localmente na VM
+    # com "curl http://localhost:8000/docs" sem expor nada à internet.
+    ports:
+      - "127.0.0.1:8000:8000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: ./eme_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      FASTAPI_URL: http://backend:8000
+    # Idem ao backend: o Caddy fala com "frontend:3000" pela rede interna
+    # do Compose. Este bind em 127.0.0.1 é só defesa extra / debug local.
+    ports:
+      - "127.0.0.1:3001:3000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    # Porta 80 NÃO é mapeada aqui: já está em uso por outro container nesta
+    # VM (eme-site). O ERP fica acessível em https://SEUDOMINIO:8443.
+    # O Caddyfile usa o desafio TLS-ALPN (porta 443 apenas) para emitir o
+    # certificado, então a porta 80 livre não é necessária.
+    ports:
+      - "8443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro 
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Job de inicialização: cria o primeiro usuário ADMIN automaticamente.
+  # Roda uma vez e finaliza (não faz parte do "restart: unless-stopped").
+  create-admin:
+    build:
+      context: ./eme_backend
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: ${DB_USER:-eme_user}
+      DB_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env}
+      DB_NAME: ${DB_NAME:-emebd}
+      SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?defina ALLOWED_ORIGINS no .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?defina ADMIN_USERNAME no .env}
+      ADMIN_NAME: ${ADMIN_NAME:-Administrador}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?defina ADMIN_EMAIL no .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?defina ADMIN_PASSWORD no .env}
+    entrypoint: ["python", "create_admin.py"]
+    profiles: ["init"]
+
+volumes:
+  mysql_data:

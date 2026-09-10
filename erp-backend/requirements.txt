@@ -1,0 +1,12 @@
+flask
+flask-sqlalchemy
+flask-cors
+pyjwt
+bcrypt
+psycopg2-binary
+alembic
+gunicorn
+pytest
+reportlab
+python-docx
+openpyxl

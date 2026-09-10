@@ -1,0 +1,52 @@
+"""Flask factory do backend ERP EME Moveis."""
+import os
+
+from flask import Flask, jsonify
+from flask_cors import CORS
+
+from app.config import configs
+from app.extensions import db
+
+
+def create_app(config_name=None):
+    config_name = config_name or os.environ.get("APP_ENV", "dev")
+    app = Flask(__name__)
+    app.config.from_object(configs.get(config_name, configs["dev"]))
+    app.url_map.strict_slashes = False
+
+    origins = [o.strip() for o in str(app.config.get("CORS_ORIGINS", "*")).split(",")]
+    CORS(app, resources={r"/api/*": {"origins": origins}})
+
+    db.init_app(app)
+
+    from app.api.auth_bp import bp as auth_bp
+    from app.api.calendar_bp import bp as calendar_bp
+    from app.api.clients_bp import bp as clients_bp
+    from app.api.financial_bp import bp as financial_bp
+    from app.api.funnel_bp import bp as funnel_bp
+    from app.api.projects_bp import bp as projects_bp
+    from app.api.reports_bp import bp as reports_bp
+    from app.api.stock_bp import bp as stock_bp
+
+    for blueprint in (auth_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp):
+        app.register_blueprint(blueprint)
+
+    @app.get("/api/health")
+    def health():
+        return jsonify({"ok": True, "app": "eme-moveis-erp"})
+
+    @app.get("/")
+    def root():
+        return jsonify({"message": "EME Moveis ERP rodando"})
+
+    with app.app_context():
+        from app import models as _models  # noqa: F401
+        from app.models.models import ensure_default_funnel_columns
+
+        db.create_all()
+        try:
+            ensure_default_funnel_columns()
+        except Exception:
+            pass
+
+    return app

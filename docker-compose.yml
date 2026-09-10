@@ -1,0 +1,104 @@
+# EME Móveis — stack unificada Flask + Postgres (Dokploy-ready).
+# Deploy: conecte o repo no Dokploy (tipo Compose), configure as variáveis
+# no painel (Environment) e dispare o deploy. Nada de segredo commitado.
+name: eme-moveis
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-eme}
+      POSTGRES_USER: ${POSTGRES_USER:-eme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD no painel do Dokploy}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-eme} -d $${POSTGRES_DB:-eme}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  erp-backend:
+    build: ./erp-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: prod
+      PORT: 5000
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-eme}:${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD no painel}@db:5432/${POSTGRES_DB:-eme}
+      SECRET_KEY: ${ERP_SECRET_KEY:?configure ERP_SECRET_KEY no painel (64+ chars hex)}
+      JWT_SECRET_KEY: ${ERP_SECRET_KEY:?configure ERP_SECRET_KEY no painel}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ERP_JWT_MINUTES:-720}
+      CORS_ORIGINS: ${ERP_CORS_ORIGINS:-*}
+      ADMIN_USERNAME: ${ERP_ADMIN_USER:-admin}
+      ADMIN_NAME: ${ERP_ADMIN_NAME:-Administrador}
+      ADMIN_EMAIL: ${ERP_ADMIN_EMAIL:-admin@ememoveis.com.br}
+      ADMIN_PASSWORD: ${ERP_ADMIN_PASSWORD:?configure ERP_ADMIN_PASSWORD no painel}
+    expose:
+      - "5000"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  erp-frontend:
+    build: ./erp-frontend
+    restart: unless-stopped
+    depends_on:
+      - erp-backend
+    expose:
+      - "80"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  site-backend:
+    build: ./site-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 5001
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-eme}:${POSTGRES_PASSWORD:?configure POSTGRES_PASSWORD no painel}@db:5432/${POSTGRES_DB:-eme}
+      SITE_JWT_SECRET: ${SITE_JWT_SECRET:?configure SITE_JWT_SECRET no painel (64+ chars hex)}
+      SITE_ADMIN_USER: ${SITE_ADMIN_USER:-admin}
+      SITE_ADMIN_PASS: ${SITE_ADMIN_PASS:?configure SITE_ADMIN_PASS no painel}
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - site_uploads:/app/uploads
+    expose:
+      - "5001"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  site-frontend:
+    build: ./site-frontend
+    restart: unless-stopped
+    depends_on:
+      - site-backend
+    expose:
+      - "80"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  pgdata:
+  site_uploads:
