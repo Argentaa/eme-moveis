@@ -40,6 +40,10 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 
+    # Diretorio de anexos (uploads) e limite de tamanho (padrao 25 MB)
+    UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(os.getcwd(), "uploads"))
+    MAX_CONTENT_LENGTH = int(os.environ.get("MAX_UPLOAD_MB", "25")) * 1024 * 1024
+
 
 class DevConfig(Config):
     SQLALCHEMY_DATABASE_URI = _database_uri("sqlite:///eme_moveis_dev.db")

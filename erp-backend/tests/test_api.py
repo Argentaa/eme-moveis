@@ -300,3 +300,10 @@ def test_seeds_fontes_e_campanhas_idempotente(client):
         ensure_default_campaigns()
         assert db.session.query(LeadSource).count() == n_src
         assert db.session.query(Campaign).count() == n_camp
+
+
+def test_config_uploads(client):
+    from app.config import Config
+    assert Config.MAX_CONTENT_LENGTH == 25 * 1024 * 1024
+    assert Config.UPLOAD_DIR
+    assert client.application.config["MAX_CONTENT_LENGTH"] == 25 * 1024 * 1024
