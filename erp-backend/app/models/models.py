@@ -72,7 +72,14 @@ class Client(db.Model):
             "estimated_value": num(self.estimated_value),
             "lead_source": self.lead_source,
             "campaign": self.campaign,
+            "negotiation_value": self.negotiation_value,
         }
+
+
+    @property
+    def negotiation_value(self):
+        total = sum(i.subtotal for i in self.items)
+        return total if total > 0 else None
 
 
 class Project(db.Model):
@@ -361,6 +368,47 @@ class Campaign(db.Model):
             "active": bool(self.active),
             "created_at": iso(self.created_at),
         }
+
+
+class Product(db.Model):
+    __tablename__ = "products"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(200), nullable=False, unique=True)
+    description = db.Column(Text, nullable=True, default="")
+    default_price = db.Column(Numeric(14, 2), nullable=True)
+    unit = db.Column(String(20), nullable=True, default="un")
+    active = db.Column(Boolean, nullable=False, default=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {"id": self.id, "name": self.name, "description": self.description or "",
+                "default_price": num(self.default_price), "unit": self.unit or "un",
+                "active": bool(self.active), "created_at": iso(self.created_at)}
+
+
+class NegotiationItem(db.Model):
+    __tablename__ = "negotiation_items"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = db.Column(String(36), ForeignKey("products.id", ondelete="SET NULL"), nullable=True)
+    name = db.Column(String(200), nullable=False)
+    quantity = db.Column(Numeric(14, 3), nullable=False, default=1)
+    unit_price = db.Column(Numeric(14, 2), nullable=False, default=0)
+    recurrence = db.Column(String(30), nullable=False, default="UNICO")  # UNICO | MENSAL | TRIMESTRAL | ANUAL
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    client = db.relationship("Client", backref=db.backref("items", cascade="all, delete-orphan", passive_deletes=False  # ORM garante cascade (SQLite sem FK); Postgres usa FK CASCADE
+))
+
+    @property
+    def subtotal(self):
+        return (num(self.quantity) or 0) * (num(self.unit_price) or 0)
+
+    def to_dict(self):
+        return {"id": self.id, "client_id": self.client_id, "product_id": self.product_id,
+                "name": self.name, "quantity": num(self.quantity), "unit_price": num(self.unit_price),
+                "recurrence": self.recurrence, "subtotal": self.subtotal,
+                "created_at": iso(self.created_at)}
 
 
 class FunnelColumn(db.Model):

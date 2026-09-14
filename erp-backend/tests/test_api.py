@@ -307,3 +307,17 @@ def test_config_uploads(client):
     assert Config.MAX_CONTENT_LENGTH == 25 * 1024 * 1024
     assert Config.UPLOAD_DIR
     assert client.application.config["MAX_CONTENT_LENGTH"] == 25 * 1024 * 1024
+
+
+def test_negotiation_value_soma_itens(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Itens", "cpf_cnpj": "8888"}).get_json()["id"]
+    with client.application.app_context():
+        from app.extensions import db
+        from app.models.models import NegotiationItem
+        db.session.add(NegotiationItem(client_id=cid, name="Cozinha", quantity=1, unit_price=8000))
+        db.session.add(NegotiationItem(client_id=cid, name="Sala", quantity=1, unit_price=4500))
+        db.session.commit()
+    r = client.get("/api/clients", headers=h)
+    row = next(c for c in r.get_json() if c["id"] == cid)
+    assert row["negotiation_value"] == 12500.0
