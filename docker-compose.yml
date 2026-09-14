@@ -42,6 +42,7 @@ services:
       ADMIN_NAME: ${ERP_ADMIN_NAME:-Administrador}
       ADMIN_EMAIL: ${ERP_ADMIN_EMAIL:-admin@ememoveis.com.br}
       ADMIN_PASSWORD: ${ERP_ADMIN_PASSWORD:?configure ERP_ADMIN_PASSWORD no painel}
+      UPLOAD_DIR: /app/uploads
     expose:
       - "5000"
     logging:
@@ -49,6 +50,8 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+    volumes:
+      - erp_uploads:/app/uploads
 
   erp-frontend:
     build: ./erp-frontend
@@ -102,3 +105,4 @@ services:
 volumes:
   pgdata:
   site_uploads:
+  erp_uploads:
