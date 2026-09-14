@@ -242,7 +242,6 @@ def test_client_campaign_e_modelos_novos(client):
     assert r.status_code == 201, r.get_data(as_text=True)
     cid = r.get_json()["id"]
     with client.application.app_context():
-        from app.extensions import db
         from app.models.models import Client as ClientModel
         c = db.session.get(ClientModel, cid)
         c.campaign = "Parceria Construtora"
@@ -251,3 +250,34 @@ def test_client_campaign_e_modelos_novos(client):
     body = client.get(f"/api/clients/{cid}", headers=h).get_json()
     assert body["campaign"] == "Parceria Construtora"
     assert body["lead_source"] == "Indicação de Arquiteto"
+
+
+def test_modelos_novos_serializacao_e_cascata(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Modelos", "cpf_cnpj": "7777"}).get_json()["id"]
+    with client.application.app_context():
+        from app.models.models import Attachment, Campaign, Interaction, LeadSource
+        src = LeadSource(name="Indicacao Arquiteto"); db.session.add(src)
+        camp = Campaign(name="Parceria Construtora"); db.session.add(camp)
+        inter = Interaction(client_id=cid, type="CONVERSA", content="Cliente pediu proposta", automatic=False)
+        db.session.add(inter)
+        att = Attachment(client_id=cid, filename="proposta.pdf", stored_name="abc123.pdf", mime_type="application/pdf", size=1024)
+        db.session.add(att)
+        db.session.commit()
+        assert src.to_dict()["name"] == "Indicacao Arquiteto"
+        assert camp.to_dict()["name"] == "Parceria Construtora"
+        d_inter = inter.to_dict()
+        assert d_inter["client_id"] == cid and d_inter["type"] == "CONVERSA" and d_inter["automatic"] is False
+        d_att = att.to_dict()
+        assert d_att["filename"] == "proposta.pdf" and d_att["size"] == 1024 and d_att["client_id"] == cid
+        from app.models.models import Client as ClientModel
+        c = db.session.get(ClientModel, cid)
+        assert any(i.id == inter.id for i in c.interactions)
+        assert any(a.id == att.id for a in c.attachments)
+    assert client.delete(f"/api/clients/{cid}", headers=h).status_code == 200
+    with client.application.app_context():
+        from app.models.models import Attachment as AttModel, Campaign as CampModel, Interaction as IntModel, LeadSource as SrcModel
+        assert db.session.get(IntModel, inter.id) is None      # cascade do banco
+        assert db.session.get(AttModel, att.id) is None        # cascade do banco
+        assert db.session.get(SrcModel, src.id) is not None    # tabela independente do cliente
+        assert db.session.get(CampModel, camp.id) is not None  # tabela independente do cliente

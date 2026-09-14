@@ -290,12 +290,20 @@ class Interaction(db.Model):
     created_by = db.Column(String(80), nullable=True, default="")
     automatic = db.Column(Boolean, nullable=False, default=False)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
-    client = db.relationship("Client", backref=db.backref("interactions", cascade="all, delete-orphan", passive_deletes=True))
+    # passive_deletes=False: SQLite nao habilita FK por padrao; o ORM garante o cascade em qualquer banco
+    client = db.relationship("Client", backref=db.backref("interactions", cascade="all, delete-orphan", passive_deletes=False))
 
     def to_dict(self):
-        return {"id": self.id, "client_id": self.client_id, "type": self.type,
-                "content": self.content, "created_by": self.created_by or "",
-                "automatic": bool(self.automatic), "created_at": iso(self.created_at)}
+        return {
+            "id": self.id,
+            "client_id": self.client_id,
+            "type": self.type,
+            "content": self.content,
+            "created_by": self.created_by or "",
+            "automatic": bool(self.automatic),
+            "created_at": iso(self.created_at),
+        }
+
 
 class Attachment(db.Model):
     __tablename__ = "attachments"
@@ -307,12 +315,21 @@ class Attachment(db.Model):
     size = db.Column(db.Integer, nullable=False, default=0)
     created_by = db.Column(String(80), nullable=True, default="")
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
-    client = db.relationship("Client", backref=db.backref("attachments", cascade="all, delete-orphan", passive_deletes=True))
+    # passive_deletes=False: SQLite nao habilita FK por padrao; o ORM garante o cascade em qualquer banco
+    client = db.relationship("Client", backref=db.backref("attachments", cascade="all, delete-orphan", passive_deletes=False))
 
     def to_dict(self):
-        return {"id": self.id, "client_id": self.client_id, "filename": self.filename,
-                "mime_type": self.mime_type or "", "size": self.size,
-                "created_by": self.created_by or "", "created_at": iso(self.created_at)}
+        # stored_name (nome interno do arquivo) nao e serializado propositalmente
+        return {
+            "id": self.id,
+            "client_id": self.client_id,
+            "filename": self.filename,
+            "mime_type": self.mime_type or "",
+            "size": self.size,
+            "created_by": self.created_by or "",
+            "created_at": iso(self.created_at),
+        }
+
 
 class LeadSource(db.Model):
     __tablename__ = "lead_sources"
@@ -322,7 +339,13 @@ class LeadSource(db.Model):
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
 
     def to_dict(self):
-        return {"id": self.id, "name": self.name, "active": bool(self.active), "created_at": iso(self.created_at)}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "active": bool(self.active),
+            "created_at": iso(self.created_at),
+        }
+
 
 class Campaign(db.Model):
     __tablename__ = "campaigns"
@@ -332,7 +355,12 @@ class Campaign(db.Model):
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
 
     def to_dict(self):
-        return {"id": self.id, "name": self.name, "active": bool(self.active), "created_at": iso(self.created_at)}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "active": bool(self.active),
+            "created_at": iso(self.created_at),
+        }
 
 
 class FunnelColumn(db.Model):
