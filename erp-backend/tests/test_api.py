@@ -545,3 +545,12 @@ def test_item_validacoes(client):
     assert client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "X", "unit_price": -5}).status_code == 400
     assert client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "X", "product_id": "nao-existe"}).status_code == 404
     assert client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "Y", "quantity": "abc"}).status_code == 400
+
+
+def test_item_nao_finito_400(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente NaN", "cpf_cnpj": "3113"}).get_json()["id"]
+    r1 = client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "X", "unit_price": float("nan")})
+    assert r1.status_code == 400
+    r2 = client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "Y", "quantity": float("inf")})
+    assert r2.status_code == 400

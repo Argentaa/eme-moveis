@@ -1,4 +1,6 @@
 """CRUD /api/clients."""
+import math
+
 from flask import Blueprint, g, jsonify
 from sqlalchemy.exc import IntegrityError
 
@@ -37,8 +39,8 @@ def _item_number(value, default):
         n = float(value)
     except (TypeError, ValueError):
         raise ValueError("numero invalido")
-    if n < 0:
-        raise ValueError("numero negativo")
+    if not math.isfinite(n) or n < 0:
+        raise ValueError("numero invalido")
     return n
 
 
