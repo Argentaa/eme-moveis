@@ -10,7 +10,10 @@ import {
   Image,
   Info,
   ListTodo,
+  Package,
   Paperclip,
+  Pencil,
+  Plus,
   RefreshCw,
   Trash2,
   Upload,
@@ -21,8 +24,10 @@ import {
   calendarService,
   clientService,
   getApiErrorMessage,
+  itemService,
+  productService,
 } from '../services/api';
-import { Attachment, Client, ClientDetail, FunnelStatus } from '../types';
+import { Attachment, Client, ClientDetail, FunnelStatus, NegotiationItem, Product } from '../types';
 
 interface ClientDetailModalProps {
   client: Client;
@@ -109,14 +114,30 @@ const INTERACTION_FORM_TYPES: Array<{ value: string; label: string }> = [
 
 // ── Abas ──────────────────────────────────────────────────────
 const TABS: Array<{
-  id: 'overview' | 'history' | 'tasks' | 'attachments';
+  id: 'overview' | 'history' | 'tasks' | 'attachments' | 'produtos';
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
   { id: 'overview', label: 'Visão Geral', icon: Info },
   { id: 'history', label: 'Histórico', icon: History },
   { id: 'tasks', label: 'Tarefas', icon: ListTodo },
+  { id: 'produtos', label: 'Produtos', icon: Package },
   { id: 'attachments', label: 'Anexos', icon: Paperclip },
+];
+
+// ── Produtos / serviços (negociação) ─────────────────────────
+const RECURRENCE_LABELS: Record<string, string> = {
+  UNICO: 'Único',
+  MENSAL: 'Mensal',
+  TRIMESTRAL: 'Trimestral',
+  ANUAL: 'Anual',
+};
+
+const RECURRENCE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'UNICO', label: 'Único' },
+  { value: 'MENSAL', label: 'Mensal' },
+  { value: 'TRIMESTRAL', label: 'Trimestral' },
+  { value: 'ANUAL', label: 'Anual' },
 ];
 
 // ── Helpers de formatação ─────────────────────────────────────
@@ -186,6 +207,23 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
 
+  // Produtos / serviços
+  const [products, setProducts] = useState<Product[]>([]);
+  const [editingItem, setEditingItem] = useState<NegotiationItem | null>(null);
+  const [selectedProductId, setSelectedProductId] = useState('');
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductPrice, setNewProductPrice] = useState('');
+  const [itemForm, setItemForm] = useState({
+    name: '',
+    quantity: '1',
+    unit_price: '',
+    recurrence: 'UNICO',
+  });
+  const [itemError, setItemError] = useState('');
+  const [savingItem, setSavingItem] = useState(false);
+  const [creatingProductSaving, setCreatingProductSaving] = useState(false);
+
   const [shiftingFunnel, setShiftingFunnel] = useState(false);
 
   const notifyChanged = () => {
@@ -219,6 +257,17 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
         });
     }
   }, [canEdit]);
+
+  useEffect(() => {
+    if (canEdit && activeTab === 'produtos') {
+      productService
+        .list()
+        .then(setProducts)
+        .catch(() => {
+          setProducts([]);
+        });
+    }
+  }, [canEdit, activeTab]);
 
   const currentClient = detail?.client || client;
   const stageIdx = FUNNEL_ORDER.indexOf(currentClient.funnel_status);
@@ -376,6 +425,132 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
     }
   };
 
+  // ── Ações: produtos / serviços ─────────────────────────────
+  const resetItemForm = () => {
+    setItemForm({ name: '', quantity: '1', unit_price: '', recurrence: 'UNICO' });
+    setSelectedProductId('');
+    setEditingItem(null);
+    setCreatingProduct(false);
+    setNewProductName('');
+    setNewProductPrice('');
+    setItemError('');
+  };
+
+  const handleProductSelect = (productId: string) => {
+    setSelectedProductId(productId);
+    const product = products.find(p => p.id === productId);
+    if (product) {
+      setItemForm(prev => ({
+        ...prev,
+        name: product.name,
+        unit_price: product.default_price != null ? String(product.default_price) : prev.unit_price,
+      }));
+    }
+  };
+
+  const handleEditItem = (item: NegotiationItem) => {
+    setEditingItem(item);
+    setSelectedProductId('');
+    setCreatingProduct(false);
+    setItemError('');
+    setItemForm({
+      name: item.name,
+      quantity: String(item.quantity),
+      unit_price: String(item.unit_price),
+      recurrence: item.recurrence,
+    });
+  };
+
+  const handleCreateProduct = async () => {
+    const name = newProductName.trim();
+    if (!name) {
+      setItemError('Informe o nome do novo produto.');
+      return;
+    }
+    const price = newProductPrice === '' ? null : Number(newProductPrice);
+    if (price !== null && (Number.isNaN(price) || price < 0)) {
+      setItemError('O preço padrão deve ser um valor maior ou igual a zero.');
+      return;
+    }
+    setItemError('');
+    setCreatingProductSaving(true);
+    try {
+      const created = await productService.create({ name, default_price: price });
+      const updated = await productService.list();
+      setProducts(updated);
+      setCreatingProduct(false);
+      setNewProductName('');
+      setNewProductPrice('');
+      setSelectedProductId(created.id);
+      setItemForm(prev => ({
+        ...prev,
+        name: created.name,
+        unit_price: created.default_price != null ? String(created.default_price) : prev.unit_price,
+      }));
+    } catch (err) {
+      setItemError(getApiErrorMessage(err, 'Erro ao criar produto.'));
+    } finally {
+      setCreatingProductSaving(false);
+    }
+  };
+
+  const handleItemSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = itemForm.name.trim();
+    if (!name) {
+      setItemError('O nome do produto/serviço é obrigatório.');
+      return;
+    }
+    const quantity = Number(itemForm.quantity);
+    if (!itemForm.quantity || Number.isNaN(quantity) || quantity <= 0) {
+      setItemError('A quantidade deve ser maior que zero.');
+      return;
+    }
+    const unitPrice = Number(itemForm.unit_price);
+    if (itemForm.unit_price === '' || Number.isNaN(unitPrice) || unitPrice < 0) {
+      setItemError('O preço unitário deve ser um valor maior ou igual a zero.');
+      return;
+    }
+    setItemError('');
+    setSavingItem(true);
+    try {
+      if (editingItem) {
+        await itemService.update(editingItem.id, {
+          name,
+          quantity,
+          unit_price: unitPrice,
+          recurrence: itemForm.recurrence,
+        });
+      } else {
+        await itemService.create(client.id, {
+          product_id: selectedProductId || null,
+          name,
+          quantity,
+          unit_price: unitPrice,
+          recurrence: itemForm.recurrence,
+        });
+      }
+      await loadDetail();
+      notifyChanged();
+      resetItemForm();
+    } catch (err) {
+      setItemError(getApiErrorMessage(err, 'Erro ao salvar produto/serviço.'));
+    } finally {
+      setSavingItem(false);
+    }
+  };
+
+  const handleDeleteItem = async (item: NegotiationItem) => {
+    if (!confirm(`Deseja mesmo excluir "${item.name}" da negociação?`)) return;
+    try {
+      await itemService.remove(item.id);
+      await loadDetail();
+      notifyChanged();
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao excluir produto/serviço.'));
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
@@ -442,7 +617,7 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
             {TABS.map(tab => {
               const TabIcon = tab.icon;
               const isActive = activeTab === tab.id;
-              const count = tab.id === 'history' ? interactions.length : tab.id === 'tasks' ? tasks.length : tab.id === 'attachments' ? (detail?.attachments.length || 0) : 0;
+              const count = tab.id === 'history' ? interactions.length : tab.id === 'tasks' ? tasks.length : tab.id === 'attachments' ? (detail?.attachments.length || 0) : tab.id === 'produtos' ? (detail?.items.length || 0) : 0;
               return (
                 <button
                   key={tab.id}
@@ -908,6 +1083,211 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
                         })}
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── ABA 5: Produtos / Serviços ── */}
+              {activeTab === 'produtos' && (
+                <div className="space-y-4">
+                  {canEdit && (
+                    <form onSubmit={handleItemSubmit} className="glass-panel rounded-lg p-4 border border-zinc-900 space-y-3">
+                      <h4 className="text-[11px] uppercase font-mono text-zinc-500 tracking-wider">
+                        {editingItem ? 'Editar Produto/Serviço' : 'Adicionar Produto/Serviço'}
+                      </h4>
+
+                      {!editingItem && (
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-300 font-mono uppercase block">Produto pré-cadastrado</label>
+                          <select
+                            value={creatingProduct ? '__new__' : selectedProductId}
+                            onChange={e => {
+                              if (e.target.value === '__new__') {
+                                setCreatingProduct(true);
+                                setSelectedProductId('');
+                              } else {
+                                setCreatingProduct(false);
+                                handleProductSelect(e.target.value);
+                              }
+                            }}
+                            className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600"
+                          >
+                            <option value="">— Nenhum —</option>
+                            {products.map(product => (
+                              <option key={product.id} value={product.id}>{product.name}</option>
+                            ))}
+                            <option value="__new__">+ Criar novo produto...</option>
+                          </select>
+                          {creatingProduct && (
+                            <div className="mt-2 p-3 bg-zinc-950/60 border border-zinc-800 rounded space-y-2">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <input
+                                  type="text"
+                                  value={newProductName}
+                                  onChange={e => setNewProductName(e.target.value)}
+                                  placeholder="Nome do novo produto *"
+                                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600"
+                                />
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={newProductPrice}
+                                  onChange={e => setNewProductPrice(e.target.value)}
+                                  placeholder="Preço padrão (R$)"
+                                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600 font-mono"
+                                />
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={handleCreateProduct}
+                                  disabled={creatingProductSaving}
+                                  className="px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold transition active:scale-95 disabled:opacity-50 cursor-pointer flex items-center gap-1"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  {creatingProductSaving ? 'Criando...' : 'Confirmar'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCreatingProduct(false);
+                                    setNewProductName('');
+                                    setNewProductPrice('');
+                                    setItemError('');
+                                  }}
+                                  className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded font-semibold transition active:scale-95 cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="sm:col-span-3 space-y-1.5">
+                          <label className="text-[10px] text-zinc-300 font-mono uppercase block">Nome *</label>
+                          <input
+                            type="text"
+                            value={itemForm.name}
+                            onChange={e => setItemForm({ ...itemForm, name: e.target.value })}
+                            placeholder="Ex: Armário planejado 2,40m"
+                            className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-300 font-mono uppercase block">Quantidade *</label>
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={itemForm.quantity}
+                            onChange={e => setItemForm({ ...itemForm, quantity: e.target.value })}
+                            className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600 font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-300 font-mono uppercase block">Preço unitário (R$) *</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={itemForm.unit_price}
+                            onChange={e => setItemForm({ ...itemForm, unit_price: e.target.value })}
+                            placeholder="0,00"
+                            className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600 font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-300 font-mono uppercase block">Recorrência</label>
+                          <select
+                            value={itemForm.recurrence}
+                            onChange={e => setItemForm({ ...itemForm, recurrence: e.target.value })}
+                            className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600"
+                          >
+                            {RECURRENCE_OPTIONS.map(opt => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {itemError && <p className="text-xs text-red-400 font-mono">{itemError}</p>}
+
+                      <div className="flex justify-end gap-2">
+                        {editingItem && (
+                          <button
+                            type="button"
+                            onClick={resetItemForm}
+                            className="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded font-semibold transition active:scale-95 cursor-pointer"
+                          >
+                            Cancelar edição
+                          </button>
+                        )}
+                        <button
+                          type="submit"
+                          disabled={savingItem}
+                          className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold transition active:scale-95 disabled:opacity-50 cursor-pointer"
+                        >
+                          {savingItem ? 'Salvando...' : editingItem ? 'Salvar Alterações' : 'Adicionar'}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  <div className="glass-panel rounded-lg p-4 border border-zinc-900">
+                    <h4 className="text-[11px] uppercase font-mono text-zinc-500 tracking-wider mb-3">
+                      Produtos/Serviços ({detail.items.length})
+                    </h4>
+                    {detail.items.length === 0 ? (
+                      <p className="text-xs text-zinc-500 font-mono">Nenhum produto ou serviço adicionado à negociação.</p>
+                    ) : (
+                      <div className="divide-y divide-zinc-900">
+                        {detail.items.map(item => (
+                          <div key={item.id} className="py-3 flex items-center gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold text-zinc-100 truncate">{item.name}</p>
+                              <p className="text-[11px] text-zinc-500 font-mono">
+                                {item.quantity} x {formatBRL(item.unit_price)}
+                              </p>
+                            </div>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 shrink-0">
+                              {RECURRENCE_LABELS[item.recurrence] || item.recurrence}
+                            </span>
+                            <span className="text-xs font-mono text-emerald-400 font-semibold shrink-0">
+                              {formatBRL(item.subtotal)}
+                            </span>
+                            {canEdit && (
+                              <div className="flex gap-1 shrink-0">
+                                <button
+                                  onClick={() => handleEditItem(item)}
+                                  className="p-1.5 text-zinc-400 hover:text-blue-400 cursor-pointer"
+                                  title="Editar"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteItem(item)}
+                                  className="p-1.5 text-zinc-400 hover:text-red-400 cursor-pointer"
+                                  title="Excluir"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="mt-4 pt-3 border-t border-zinc-800 flex items-center justify-between">
+                      <span className="text-[11px] uppercase font-mono text-zinc-500 tracking-wider">Total da Negociação</span>
+                      <span className="text-lg font-mono font-bold text-emerald-400">
+                        {formatBRL(detail.items.reduce((sum, item) => sum + (item.subtotal || 0), 0))}
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}
