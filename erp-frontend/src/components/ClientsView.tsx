@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { 
   Plus, Search, Edit2, Trash2, Mail, Phone, MapPin, 
-  FileText, ArrowLeft, Send, CheckCircle, RefreshCw,
+  ArrowLeft, Send, RefreshCw,
   Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, FolderPlus, Eye
 } from 'lucide-react';
 import { FunnelStatus } from '../types';
@@ -99,6 +99,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       campaign: '',
     });
     setSubmitError('');
+    setAddingSource(false);
+    setAddingCampaign(false);
+    setNewSourceName('');
+    setNewCampaignName('');
     setIsModalOpen(true);
   };
 
@@ -116,6 +120,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       campaign: client.campaign || '',
     });
     setSubmitError('');
+    setAddingSource(false);
+    setAddingCampaign(false);
+    setNewSourceName('');
+    setNewCampaignName('');
     setIsModalOpen(true);
   };
 
@@ -792,7 +800,13 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 <p className="text-xs text-zinc-400 font-mono">Controle CRM da EME Móveis</p>
               </div>
               <button 
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => {
+                  setIsModalOpen(false);
+                  setAddingSource(false);
+                  setAddingCampaign(false);
+                  setNewSourceName('');
+                  setNewCampaignName('');
+                }}
                 className="text-zinc-500 hover:text-white transition font-mono text-sm uppercase px-2 py-1 rounded hover:bg-zinc-900"
               >
                 Sair
@@ -875,6 +889,9 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                   {FUNNEL_COLUMNS.map(col => (
                     <option key={col.id} value={col.id}>{col.label}</option>
                   ))}
+                  {formData.funnel_status === 'PERDIDO' && (
+                    <option value="PERDIDO">Perdido</option>
+                  )}
                 </select>
               </div>
 
@@ -889,6 +906,13 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       placeholder="Nome da nova campanha"
                       className="flex-1 w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
                     />
+                    <button
+                      type="button"
+                      onClick={() => { setAddingCampaign(false); setNewCampaignName(''); }}
+                      className="px-3 py-2 text-xs bg-zinc-900 text-zinc-400 hover:text-white rounded border border-zinc-800 cursor-pointer font-mono whitespace-nowrap"
+                    >
+                      Cancelar
+                    </button>
                     <button
                       type="button"
                       onClick={handleCreateCampaign}
@@ -945,6 +969,13 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                     />
                     <button
                       type="button"
+                      onClick={() => { setAddingSource(false); setNewSourceName(''); }}
+                      className="px-3 py-2 text-xs bg-zinc-900 text-zinc-400 hover:text-white rounded border border-zinc-800 cursor-pointer font-mono whitespace-nowrap"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
                       onClick={handleCreateSource}
                       className="px-4 py-2 text-xs bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap"
                     >
@@ -975,7 +1006,13 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
               <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800 mt-6 md:mt-8">
                 <button 
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={() => {
+                    setIsModalOpen(false);
+                    setAddingSource(false);
+                    setAddingCampaign(false);
+                    setNewSourceName('');
+                    setNewCampaignName('');
+                  }}
                   className="px-4 py-2 text-xs bg-zinc-900 text-zinc-300 hover:text-white rounded border border-zinc-800 hover:bg-zinc-850 cursor-pointer font-mono"
                 >
                   Cancelar
