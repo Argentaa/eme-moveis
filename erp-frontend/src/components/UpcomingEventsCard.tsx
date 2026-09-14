@@ -63,7 +63,7 @@ export default function UpcomingEventsCard() {
 
   if (loading) return null;
 
-  const EventItem = ({ ev }: { ev: any }) => (
+  const EventItem = ({ ev }: { ev: any; key?: React.Key }) => (
     <div className="flex items-start gap-2.5 py-2">
       <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 mt-0.5 ${EVENT_TYPE_COLORS[ev.type] || EVENT_TYPE_COLORS.PERSONALIZADO}`}>
         {EVENT_TYPE_LABELS[ev.type] || 'Evento'}
