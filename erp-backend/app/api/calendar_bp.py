@@ -58,6 +58,9 @@ def week_events():
 @token_required()
 def list_events():
     q = db.session.query(CalendarEvent)
+    client_id = request.args.get("client_id") or None
+    if client_id:
+        q = q.filter_by(client_id=client_id)
     try:
         month = int(request.args.get("month") or 0)
         year = int(request.args.get("year") or 0)

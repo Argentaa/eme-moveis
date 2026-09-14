@@ -429,3 +429,14 @@ def test_interaction_cliente_inexistente_404(client):
     h = _login(client)
     r = client.post("/api/clients/id-inexistente/interactions", headers=h, json={"type": "CONVERSA", "content": "x"})
     assert r.status_code == 404
+
+
+def test_calendar_filtro_por_cliente(client):
+    h = _login(client)
+    ca = client.post("/api/clients", headers=h, json={"name": "CA", "cpf_cnpj": "3331"}).get_json()["id"]
+    cb = client.post("/api/clients", headers=h, json={"name": "CB", "cpf_cnpj": "3332"}).get_json()["id"]
+    ev_a = client.post("/api/calendar", headers=h, json={"title": "Tarefa A", "start_date": "2026-09-18", "client_id": ca}).get_json()
+    client.post("/api/calendar", headers=h, json={"title": "Tarefa B", "start_date": "2026-09-18", "client_id": cb})
+    rows = client.get("/api/calendar", headers=h, query_string={"client_id": ca}).get_json()
+    assert len(rows) == 1
+    assert rows[0]["id"] == ev_a["id"]
