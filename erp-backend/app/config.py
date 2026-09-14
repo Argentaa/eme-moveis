@@ -42,7 +42,7 @@ class Config:
 
     # Diretorio de anexos (uploads) e limite de tamanho (padrao 25 MB)
     UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(os.getcwd(), "uploads"))
-    MAX_CONTENT_LENGTH = int(os.environ.get("MAX_UPLOAD_MB", "25")) * 1024 * 1024
+    MAX_CONTENT_LENGTH = _int_env("MAX_UPLOAD_MB", default=25) * 1024 * 1024
 
 
 class DevConfig(Config):
