@@ -5,14 +5,37 @@ from sqlalchemy.exc import IntegrityError
 from app.helpers import body_json
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import Client
+from app.models.models import (
+    Attachment,
+    CalendarEvent,
+    Campaign,
+    Client,
+    Interaction,
+    LeadSource,
+    NegotiationItem,
+)
 
 bp = Blueprint("clients", __name__)
 
 CLIENT_FIELDS = (
     "name", "email", "phone", "cpf_cnpj", "address",
-    "funnel_status", "lost_reason", "estimated_value", "lead_source",
+    "funnel_status", "lost_reason", "estimated_value", "lead_source", "campaign",
 )
+
+
+def _upsert_option(model, name):
+    """Insere uma opcao (fonte/campanha) caso ainda nao exista."""
+    name = (name or "").strip()
+    if not name:
+        return
+    existing = db.session.query(model).filter_by(name=name).first()
+    if not existing:
+        db.session.add(model(name=name))
+
+
+def _log_interaction(client_id, itype, content):
+    """Registra interacao automatica de sistema para o cliente."""
+    db.session.add(Interaction(client_id=client_id, type=itype, content=content, automatic=True))
 
 
 @bp.get("/api/clients")
@@ -36,6 +59,8 @@ def create_client():
         client.cpf_cnpj = None
     if not client.funnel_status:
         client.funnel_status = "PROSPECCAO"
+    _upsert_option(LeadSource, client.lead_source)
+    _upsert_option(Campaign, client.campaign)
     db.session.add(client)
     try:
         db.session.commit()
@@ -54,6 +79,31 @@ def get_client(client_id):
     return jsonify(client.to_dict())
 
 
+@bp.get("/api/clients/<client_id>/detail")
+@token_required()
+def get_client_detail(client_id):
+    """Detalhe agregado do cliente: projetos, eventos, interacoes, anexos e itens."""
+    client = db.session.get(Client, client_id)
+    if not client:
+        return jsonify({"detail": "Cliente nao encontrado"}), 404
+    events = (db.session.query(CalendarEvent).filter_by(client_id=client_id)
+              .order_by(CalendarEvent.start_date, CalendarEvent.start_time).all())
+    interactions = (db.session.query(Interaction).filter_by(client_id=client_id)
+                    .order_by(Interaction.created_at.desc()).all())
+    attachments = (db.session.query(Attachment).filter_by(client_id=client_id)
+                   .order_by(Attachment.created_at.desc()).all())
+    items = (db.session.query(NegotiationItem).filter_by(client_id=client_id)
+             .order_by(NegotiationItem.created_at).all())
+    return jsonify({
+        "client": client.to_dict(),
+        "projects": [p.to_dict() for p in client.projects],
+        "events": [e.to_dict() for e in events],
+        "interactions": [i.to_dict() for i in interactions],
+        "attachments": [a.to_dict() for a in attachments],
+        "items": [it.to_dict() for it in items],
+    })
+
+
 @bp.put("/api/clients/<client_id>")
 @token_required()
 def update_client(client_id):
@@ -61,9 +111,26 @@ def update_client(client_id):
     if not client:
         return jsonify({"detail": "Cliente nao encontrado"}), 404
     data = body_json()
+    old_funnel = client.funnel_status
+    old_value = client.estimated_value
+    old_source = client.lead_source
+    old_campaign = client.campaign
     for f in CLIENT_FIELDS:
         if f in data:
             setattr(client, f, data[f])
+    _upsert_option(LeadSource, client.lead_source)
+    _upsert_option(Campaign, client.campaign)
+    if client.funnel_status != old_funnel:
+        content = "Etapa do funil: " + str(old_funnel) + " -> " + str(client.funnel_status)
+        if client.funnel_status == "PERDIDO" and client.lost_reason:
+            content += " — Motivo: " + client.lost_reason
+        _log_interaction(client_id, "SISTEMA", content)
+    if client.estimated_value != old_value:
+        _log_interaction(client_id, "ORCAMENTO", "Valor estimado: " + str(old_value) + " -> " + str(client.estimated_value))
+    if client.lead_source != old_source:
+        _log_interaction(client_id, "OBSERVACAO", "Fonte do lead: " + str(old_source) + " -> " + str(client.lead_source))
+    if client.campaign != old_campaign:
+        _log_interaction(client_id, "OBSERVACAO", "Campanha: " + str(old_campaign) + " -> " + str(client.campaign))
     try:
         db.session.commit()
     except IntegrityError:

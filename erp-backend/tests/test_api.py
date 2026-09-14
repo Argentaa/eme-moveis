@@ -349,3 +349,49 @@ def test_campaigns_crud(client):
     assert client.delete("/api/campaigns/" + camp_id, headers=h).status_code == 200
     names2 = [c["name"] for c in client.get("/api/campaigns", headers=h).get_json()]
     assert "Campanha Natal" not in names2
+
+
+def test_update_funil_gera_interacao_automatica(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Log", "cpf_cnpj": "6666"}).get_json()["id"]
+    r = client.put("/api/clients/" + cid, headers=h, json={"funnel_status": "ORCAMENTO"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    # Desvio: GET /api/clients/{id}/interactions e endpoint da Task B3 (ainda nao existe);
+    # leitura via ORM direto mantem as mesmas assertivas.
+    with client.application.app_context():
+        from app.extensions import db
+        from app.models.models import Interaction
+        inter = [i.to_dict() for i in db.session.query(Interaction).filter_by(client_id=cid).all()]
+    assert len(inter) == 1
+    assert inter[0]["automatic"] is True
+    assert "ORCAMENTO" in inter[0]["content"]
+
+
+def test_lead_source_nova_vira_opcao(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Fonte", "cpf_cnpj": "5555"}).get_json()["id"]
+    r = client.put("/api/clients/" + cid, headers=h, json={"lead_source": "Feira do Móvel"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    names = [s["name"] for s in client.get("/api/lead-sources", headers=h).get_json()]
+    assert "Feira do Móvel" in names
+
+
+def test_client_detail_agregado(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Detail", "cpf_cnpj": "4444"}).get_json()["id"]
+    with client.application.app_context():
+        from app.extensions import db
+        from app.models.models import Attachment, CalendarEvent, Interaction, NegotiationItem, Project
+        db.session.add(Project(client_id=cid, title="Cozinha", status="ORCAMENTO", value=10000))
+        db.session.add(CalendarEvent(client_id=cid, title="Ligação follow-up", start_date=__import__("datetime").date(2026, 9, 18)))
+        db.session.add(Interaction(client_id=cid, type="CONVERSA", content="Cliente pediu proposta", automatic=False))
+        db.session.add(Attachment(client_id=cid, filename="planta.pdf", stored_name="x1.pdf", size=10))
+        db.session.add(NegotiationItem(client_id=cid, name="Cozinha", quantity=1, unit_price=8000))
+        db.session.commit()
+    d = client.get("/api/clients/" + cid + "/detail", headers=h).get_json()
+    assert d["client"]["id"] == cid
+    assert len(d["projects"]) == 1 and d["projects"][0]["title"] == "Cozinha"
+    assert len(d["events"]) == 1 and "follow-up" in d["events"][0]["title"]
+    assert len(d["interactions"]) == 1
+    assert len(d["attachments"]) == 1
+    assert len(d["items"]) == 1 and d["items"][0]["subtotal"] == 8000.0
