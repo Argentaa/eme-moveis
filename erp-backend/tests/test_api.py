@@ -234,3 +234,20 @@ def test_project_steps_e_financial_shapes(client):
 
     r = client.get("/api/projects/overdue", headers=h)
     assert r.status_code == 200 and isinstance(r.get_json(), list)
+
+
+def test_client_campaign_e_modelos_novos(client):
+    h = _login(client)
+    r = client.post("/api/clients", headers=h, json={"name": "Cliente Camp", "cpf_cnpj": "9999"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    cid = r.get_json()["id"]
+    with client.application.app_context():
+        from app.extensions import db
+        from app.models.models import Client as ClientModel
+        c = db.session.get(ClientModel, cid)
+        c.campaign = "Parceria Construtora"
+        c.lead_source = "Indicação de Arquiteto"
+        db.session.commit()
+    body = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert body["campaign"] == "Parceria Construtora"
+    assert body["lead_source"] == "Indicação de Arquiteto"

@@ -56,6 +56,7 @@ class Client(db.Model):
     lost_reason = db.Column(Text, nullable=True)
     estimated_value = db.Column(Numeric(14, 2), nullable=True)
     lead_source = db.Column(String(120), nullable=True)
+    campaign = db.Column(String(120), nullable=True)
 
     def to_dict(self):
         return {
@@ -70,6 +71,7 @@ class Client(db.Model):
             "lost_reason": self.lost_reason,
             "estimated_value": num(self.estimated_value),
             "lead_source": self.lead_source,
+            "campaign": self.campaign,
         }
 
 
@@ -277,6 +279,60 @@ class Notification(db.Model):
             "project_id": self.project_id,
             "created_at": iso(self.created_at),
         }
+
+
+class Interaction(db.Model):
+    __tablename__ = "interactions"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    type = db.Column(String(30), nullable=False, default="OBSERVACAO")  # CONVERSA | PROPOSTA | ORCAMENTO | ALTERACAO_PROJETO | OBSERVACAO | SISTEMA
+    content = db.Column(Text, nullable=False)
+    created_by = db.Column(String(80), nullable=True, default="")
+    automatic = db.Column(Boolean, nullable=False, default=False)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    client = db.relationship("Client", backref=db.backref("interactions", cascade="all, delete-orphan", passive_deletes=True))
+
+    def to_dict(self):
+        return {"id": self.id, "client_id": self.client_id, "type": self.type,
+                "content": self.content, "created_by": self.created_by or "",
+                "automatic": bool(self.automatic), "created_at": iso(self.created_at)}
+
+class Attachment(db.Model):
+    __tablename__ = "attachments"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename = db.Column(String(255), nullable=False)
+    stored_name = db.Column(String(80), nullable=False, unique=True)
+    mime_type = db.Column(String(120), nullable=True, default="")
+    size = db.Column(db.Integer, nullable=False, default=0)
+    created_by = db.Column(String(80), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    client = db.relationship("Client", backref=db.backref("attachments", cascade="all, delete-orphan", passive_deletes=True))
+
+    def to_dict(self):
+        return {"id": self.id, "client_id": self.client_id, "filename": self.filename,
+                "mime_type": self.mime_type or "", "size": self.size,
+                "created_by": self.created_by or "", "created_at": iso(self.created_at)}
+
+class LeadSource(db.Model):
+    __tablename__ = "lead_sources"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(120), nullable=False, unique=True)
+    active = db.Column(Boolean, nullable=False, default=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {"id": self.id, "name": self.name, "active": bool(self.active), "created_at": iso(self.created_at)}
+
+class Campaign(db.Model):
+    __tablename__ = "campaigns"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(120), nullable=False, unique=True)
+    active = db.Column(Boolean, nullable=False, default=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {"id": self.id, "name": self.name, "active": bool(self.active), "created_at": iso(self.created_at)}
 
 
 class FunnelColumn(db.Model):
