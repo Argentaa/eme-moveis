@@ -19,6 +19,9 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   MONTAGEM: 'Montagem',
   ENTREGA: 'Entrega',
   ASSISTENCIA_TECNICA: 'Assistência Técnica',
+  LIGACAO: 'Ligação',
+  VISITA: 'Visita',
+  WHATSAPP: 'WhatsApp',
   PERSONALIZADO: 'Evento Personalizado',
 };
 
@@ -38,6 +41,9 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
   MONTAGEM: 'border-l-2 border-red-500 bg-red-500/25 text-red-900',
   ENTREGA: 'border-l-2 border-emerald-500 bg-emerald-500/25 text-emerald-900',
   ASSISTENCIA_TECNICA: 'border-l-2 border-cyan-500 bg-cyan-500/25 text-cyan-900',
+  LIGACAO: 'border-l-2 border-sky-500 bg-sky-500/25 text-sky-900',
+  VISITA: 'border-l-2 border-teal-500 bg-teal-500/25 text-teal-900',
+  WHATSAPP: 'border-l-2 border-green-500 bg-green-500/25 text-green-900',
   PERSONALIZADO: 'border-l-2 border-zinc-400 bg-zinc-400/25 text-zinc-800',
 };
 
@@ -49,6 +55,9 @@ const EVENT_TYPE_DOT: Record<string, string> = {
   MONTAGEM: 'bg-red-500',
   ENTREGA: 'bg-emerald-500',
   ASSISTENCIA_TECNICA: 'bg-cyan-500',
+  LIGACAO: 'bg-sky-500',
+  VISITA: 'bg-teal-500',
+  WHATSAPP: 'bg-green-500',
   PERSONALIZADO: 'bg-zinc-400',
 };
 
