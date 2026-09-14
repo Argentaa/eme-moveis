@@ -28,6 +28,8 @@ export interface Client {
   lost_reason?: string | null;
   estimated_value?: number | null;
   lead_source?: string | null;
+  campaign?: string | null;
+  negotiation_value?: number | null;
 }
 
 export type ProjectStatus = 'ORCAMENTO' | 'PROJETADO' | 'PRODUCAO' | 'MONTAGEM' | 'CONCLUIDO';
@@ -118,4 +120,66 @@ export interface ReportResult {
   summary: ReportSummaryItem[];
   columns: ReportColumn[];
   rows: Record<string, string>[];
+}
+
+// ── CRM ─────────────────────────────────────────────────────────
+
+export type Recurrence = 'UNICO' | 'MENSAL' | 'TRIMESTRAL' | 'ANUAL';
+
+export interface Interaction {
+  id: string;
+  client_id: string;
+  type: 'CONVERSA' | 'PROPOSTA' | 'ORCAMENTO' | 'ALTERACAO_PROJETO' | 'OBSERVACAO' | 'SISTEMA';
+  content: string;
+  created_by: string;
+  automatic: boolean;
+  created_at: string;
+}
+
+export interface Attachment {
+  id: string;
+  client_id: string;
+  filename: string;
+  mime_type: string;
+  size: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface LeadOption {
+  id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+}
+
+export interface Product {
+  id: string;
+  name: string;
+  description: string;
+  default_price: number | null;
+  unit: string;
+  active: boolean;
+  created_at: string;
+}
+
+export interface NegotiationItem {
+  id: string;
+  client_id: string;
+  product_id?: string | null;
+  name: string;
+  quantity: number;
+  unit_price: number;
+  recurrence: Recurrence;
+  subtotal: number;
+  created_at: string;
+}
+
+export interface ClientDetail {
+  client: Client;
+  projects: Project[];
+  events: any[];
+  interactions: Interaction[];
+  attachments: Attachment[];
+  items: NegotiationItem[];
 }

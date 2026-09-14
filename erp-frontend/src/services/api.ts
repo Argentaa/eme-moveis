@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -120,6 +120,158 @@ export const clientService = {
 
   async updateFunnel(id: string, funnel_status: string): Promise<any> {
     const response = await api.put(`/api/clients/${id}`, { funnel_status });
+    return response.data;
+  },
+
+  async getDetail(id: string): Promise<ClientDetail> {
+    const response = await api.get(`/api/clients/${id}/detail`);
+    return response.data;
+  },
+
+  async getInteractions(id: string): Promise<Interaction[]> {
+    const response = await api.get(`/api/clients/${id}/interactions`);
+    return response.data;
+  },
+
+  async createInteraction(id: string, data: { type: string; content: string }): Promise<Interaction> {
+    const response = await api.post(`/api/clients/${id}/interactions`, data);
+    return response.data;
+  },
+
+  async deleteInteraction(interactionId: string): Promise<any> {
+    const response = await api.delete(`/api/interactions/${interactionId}`);
+    return response.data;
+  },
+};
+
+// Attachment Services
+export const attachmentService = {
+  async list(clientId: string): Promise<Attachment[]> {
+    const response = await api.get(`/api/clients/${clientId}/attachments`);
+    return response.data;
+  },
+
+  async upload(clientId: string, file: File): Promise<Attachment> {
+    const formData = new FormData();
+    formData.append('file', file);
+    // Não setamos Content-Type manualmente: o axios define o boundary do multipart.
+    const response = await api.post(`/api/clients/${clientId}/attachments`, formData);
+    return response.data;
+  },
+
+  async download(attachmentId: string): Promise<void> {
+    try {
+      const response = await api.get(`/api/attachments/${attachmentId}/download`, {
+        responseType: 'blob',
+      });
+
+      const blob = new Blob([response.data]);
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = ''; // Nome real vem do servidor (Content-Disposition: download_name).
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      // Quando responseType é 'blob', o corpo de erro do backend também vem
+      // como Blob. Convertemos de volta para JSON para que getApiErrorMessage
+      // consiga ler a mensagem normalmente.
+      if (axios.isAxiosError(err) && err.response?.data instanceof Blob) {
+        try {
+          const text = await err.response.data.text();
+          err.response.data = JSON.parse(text);
+        } catch {
+          // Se não for JSON, mantemos o erro original.
+        }
+      }
+      throw err;
+    }
+  },
+
+  async remove(attachmentId: string): Promise<any> {
+    const response = await api.delete(`/api/attachments/${attachmentId}`);
+    return response.data;
+  },
+};
+
+// Lead Option Services
+export const leadOptionService = {
+  async getSources(): Promise<LeadOption[]> {
+    const response = await api.get('/api/lead-sources');
+    return response.data;
+  },
+
+  async createSource(name: string): Promise<LeadOption> {
+    const response = await api.post('/api/lead-sources', { name });
+    return response.data;
+  },
+
+  async removeSource(id: string): Promise<any> {
+    const response = await api.delete(`/api/lead-sources/${id}`);
+    return response.data;
+  },
+
+  async getCampaigns(): Promise<LeadOption[]> {
+    const response = await api.get('/api/campaigns');
+    return response.data;
+  },
+
+  async createCampaign(name: string): Promise<LeadOption> {
+    const response = await api.post('/api/campaigns', { name });
+    return response.data;
+  },
+
+  async removeCampaign(id: string): Promise<any> {
+    const response = await api.delete(`/api/campaigns/${id}`);
+    return response.data;
+  },
+};
+
+// Product Services
+export const productService = {
+  async list(): Promise<Product[]> {
+    const response = await api.get('/api/products');
+    return response.data;
+  },
+
+  async create(data: { name: string; default_price?: number | null; unit?: string }): Promise<Product> {
+    const response = await api.post('/api/products', data);
+    return response.data;
+  },
+
+  async remove(id: string): Promise<any> {
+    const response = await api.delete(`/api/products/${id}`);
+    return response.data;
+  },
+};
+
+// Negotiation Item Services
+export const itemService = {
+  async list(clientId: string): Promise<NegotiationItem[]> {
+    const response = await api.get(`/api/clients/${clientId}/items`);
+    return response.data;
+  },
+
+  async create(
+    clientId: string,
+    data: { product_id?: string | null; name?: string; quantity?: number; unit_price?: number; recurrence?: Recurrence }
+  ): Promise<NegotiationItem> {
+    const response = await api.post(`/api/clients/${clientId}/items`, data);
+    return response.data;
+  },
+
+  async update(
+    id: string,
+    data: Partial<Omit<NegotiationItem, 'id' | 'client_id' | 'subtotal' | 'created_at'>>
+  ): Promise<NegotiationItem> {
+    const response = await api.put(`/api/items/${id}`, data);
+    return response.data;
+  },
+
+  async remove(id: string): Promise<any> {
+    const response = await api.delete(`/api/items/${id}`);
     return response.data;
   },
 };
@@ -395,10 +547,11 @@ export const recurringService = {
 
 // Calendar Services
 export const calendarService = {
-  async getAll(month?: number, year?: number): Promise<any[]> {
-    const params: Record<string, number> = {};
+  async getAll(month?: number, year?: number, clientId?: string): Promise<any[]> {
+    const params: Record<string, number | string> = {};
     if (month) params.month = month;
     if (year) params.year = year;
+    if (clientId) params.client_id = clientId;
     const response = await api.get('/api/calendar', { params });
     return response.data;
   },
