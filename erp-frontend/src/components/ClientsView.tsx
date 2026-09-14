@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { 
   Plus, Search, Edit2, Trash2, Mail, Phone, MapPin, 
   FileText, ArrowLeft, Send, CheckCircle, RefreshCw,
-  Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, FolderPlus
+  Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, FolderPlus, Eye
 } from 'lucide-react';
 import { FunnelStatus } from '../types';
-import { clientService, projectService, funnelService, getApiErrorMessage } from '../services/api';
-import { Client, Project } from '../types';
+import { clientService, projectService, funnelService, calendarService, leadOptionService, getApiErrorMessage } from '../services/api';
+import { Client, Project, LeadOption } from '../types';
+import ClientDetailModal from './ClientDetailModal';
 
 interface ClientsViewProps {
   userRole: string;
@@ -34,6 +35,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   // Modais Control
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [detailClient, setDetailClient] = useState<Client | null>(null);
+  const [events, setEvents] = useState<any[]>([]);
+
+  // Lead Options (fonte e campanha)
+  const [campaigns, setCampaigns] = useState<LeadOption[]>([]);
+  const [sources, setSources] = useState<LeadOption[]>([]);
+  const [addingCampaign, setAddingCampaign] = useState(false);
+  const [newCampaignName, setNewCampaignName] = useState('');
+  const [addingSource, setAddingSource] = useState(false);
+  const [newSourceName, setNewSourceName] = useState('');
   
   // Form States
   const [formData, setFormData] = useState({
@@ -45,18 +56,21 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     funnel_status: 'PROSPECCAO' as FunnelStatus,
     estimated_value: '',
     lead_source: '',
+    campaign: '',
   });
   const [submitError, setSubmitError] = useState('');
 
   const loadClients = async () => {
     setLoading(true);
     try {
-      const [data, projs] = await Promise.all([
+      const [data, projs, evts] = await Promise.all([
         clientService.getAll(),
         projectService.getAll().catch(() => []),
+        calendarService.getAll().catch(() => []),
       ]);
       setClients(data);
       setProjects(projs);
+      setEvents(evts);
     } catch (err) {
       console.error('Erro ao carregar clientes:', err);
     } finally {
@@ -67,6 +81,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   useEffect(() => {
     loadClients();
     loadFunnelColumns();
+    leadOptionService.getSources().then(setSources).catch(() => setSources([]));
+    leadOptionService.getCampaigns().then(setCampaigns).catch(() => setCampaigns([]));
   }, []);
 
   const handleOpenCreateModal = () => {
@@ -77,8 +93,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       phone: '',
       cpf_cnpj: '',
       address: '',
+      funnel_status: 'PROSPECCAO' as FunnelStatus,
       estimated_value: '',
       lead_source: '',
+      campaign: '',
     });
     setSubmitError('');
     setIsModalOpen(true);
@@ -92,8 +110,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       phone: client.phone,
       cpf_cnpj: client.cpf_cnpj,
       address: client.address,
+      funnel_status: client.funnel_status,
       estimated_value: client.estimated_value ? String(client.estimated_value) : '',
       lead_source: client.lead_source || '',
+      campaign: client.campaign || '',
     });
     setSubmitError('');
     setIsModalOpen(true);
@@ -163,6 +183,36 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
+  const handleCreateCampaign = async () => {
+    const name = newCampaignName.trim();
+    if (!name) return;
+    try {
+      await leadOptionService.createCampaign(name);
+      const list = await leadOptionService.getCampaigns();
+      setCampaigns(list);
+      setFormData(prev => ({ ...prev, campaign: name }));
+      setAddingCampaign(false);
+      setNewCampaignName('');
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao criar campanha.'));
+    }
+  };
+
+  const handleCreateSource = async () => {
+    const name = newSourceName.trim();
+    if (!name) return;
+    try {
+      await leadOptionService.createSource(name);
+      const list = await leadOptionService.getSources();
+      setSources(list);
+      setFormData(prev => ({ ...prev, lead_source: name }));
+      setAddingSource(false);
+      setNewSourceName('');
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao criar fonte do lead.'));
+    }
+  };
+
   const loadFunnelColumns = async () => {
     try {
       const cols = await funnelService.getAll();
@@ -225,6 +275,19 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     const fromDB = funnelColumns.find(c => c.column_key === def.id);
     return fromDB ? { ...def, label: fromDB.label, desc: fromDB.description || def.desc } : def;
   });
+
+  // Opções de campanha e fonte — inclui o valor atual do cliente quando ausente da lista
+  const campaignOptions: LeadOption[] = campaigns.some(c => c.name === formData.campaign)
+    ? campaigns
+    : formData.campaign
+      ? [{ id: '__campanha_atual__', name: formData.campaign, active: true, created_at: '' }, ...campaigns]
+      : campaigns;
+
+  const sourceOptions: LeadOption[] = sources.some(s => s.name === formData.lead_source)
+    ? sources
+    : formData.lead_source
+      ? [{ id: '__fonte_atual__', name: formData.lead_source, active: true, created_at: '' }, ...sources]
+      : sources;
 
   const handleShiftFunnel = async (client: Client, direction: 'LEFT' | 'RIGHT') => {
     const cols = FUNNEL_COLUMNS.map(c => c.id);
@@ -396,8 +459,9 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       // Prioriza valor real do projeto; cai para estimado se não houver projeto
                       const displayValue = clientTotal > 0 ? clientTotal : (client.estimated_value || 0);
                       const isEstimated = clientTotal === 0 && displayValue > 0;
+                      const pendingTasks = events.filter(e => e.client_id === client.id && e.status !== 'CONCLUIDO' && e.status !== 'CANCELADO').length;
                       return (
-                      <div key={client.id} className="p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg">
+                      <div key={client.id} onClick={() => setDetailClient(client)} className="p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg cursor-pointer">
                         <h4 className="text-sm font-semibold text-zinc-100 group-hover:text-white">{client.name}</h4>
                         {client.email && <p className="text-[11px] text-zinc-500 mt-0.5 truncate">✉ {client.email}</p>}
                         {client.phone && <p className="text-[11px] text-zinc-500 truncate">📞 {client.phone}</p>}
@@ -406,10 +470,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             {isEstimated ? '~ ' : ''}{displayValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
                           </p>
                         )}
+                        {pendingTasks > 0 && (
+                          <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-mono text-zinc-400 bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded">
+                            <ListTodo className="w-3 h-3" />
+                            {pendingTasks}
+                          </span>
+                        )}
                       <div className="mt-3 flex justify-between items-center border-t border-zinc-900 pt-2.5">
                         <div className="flex gap-1">
                           <button
-                            onClick={() => handleShiftFunnel(client, 'LEFT')}
+                            onClick={(e) => { e.stopPropagation(); handleShiftFunnel(client, 'LEFT'); }}
                             disabled={client.funnel_status === 'PROSPECCAO'}
                             className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 cursor-pointer"
                             title="Recuar etapa"
@@ -417,7 +487,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             <ArrowLeft className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => handleShiftFunnel(client, 'RIGHT')}
+                            onClick={(e) => { e.stopPropagation(); handleShiftFunnel(client, 'RIGHT'); }}
                             disabled={client.funnel_status === 'FECHAMENTO'}
                             className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 cursor-pointer"
                             title="Avançar etapa"
@@ -428,7 +498,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                         {['ADMIN', 'GERENTE', 'PROJETISTA'].includes(userRole) && (
                           <div className="flex gap-1">
                             <button
-                              onClick={() => handleOpenEditModal(client)}
+                              onClick={(e) => { e.stopPropagation(); handleOpenEditModal(client); }}
                               className="p-1 text-zinc-500 hover:text-blue-400 cursor-pointer"
                               title="Editar"
                             >
@@ -436,7 +506,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             </button>
                             {client.funnel_status !== 'PERDIDO' && (
                               <button
-                                onClick={() => { setLostModalClient(client); setLostReason(''); }}
+                                onClick={(e) => { e.stopPropagation(); setLostModalClient(client); setLostReason(''); }}
                                 className="p-1 text-zinc-500 hover:text-amber-400 cursor-pointer"
                                 title="Marcar como negócio perdido"
                               >
@@ -445,7 +515,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             )}
                             {client.funnel_status === 'FECHAMENTO' && ['ADMIN', 'GERENTE'].includes(userRole) && (
                               <button
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setConvertModalClient(client);
                                   setConvertTitle(`Projeto ${client.name}`);
                                   setConvertValue(client.estimated_value ? String(client.estimated_value) : '');
@@ -459,7 +530,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             )}
                             {userRole === 'ADMIN' && (
                               <button
-                                onClick={() => handleDelete(client.id, client.name)}
+                                onClick={(e) => { e.stopPropagation(); handleDelete(client.id, client.name); }}
                                 className="p-1 text-zinc-500 hover:text-red-400 cursor-pointer"
                                 title="Excluir cliente"
                               >
@@ -533,6 +604,15 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                           title="Editar Cadastro"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {['ADMIN', 'GERENTE', 'PROJETISTA'].includes(userRole) && (
+                        <button 
+                          onClick={() => setDetailClient(client)}
+                          className="p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 transition shadow inline-flex justify-center items-center cursor-pointer"
+                          title="Ver Detalhes"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
                         </button>
                       )}
                       {userRole === 'ADMIN' && (
@@ -786,6 +866,59 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
               </div>
 
               <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Etapa do Funil de Vendas</label>
+                <select
+                  value={formData.funnel_status}
+                  onChange={(e) => setFormData({ ...formData, funnel_status: e.target.value as FunnelStatus })}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                >
+                  {FUNNEL_COLUMNS.map(col => (
+                    <option key={col.id} value={col.id}>{col.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Campanha</label>
+                {addingCampaign ? (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newCampaignName}
+                      onChange={(e) => setNewCampaignName(e.target.value)}
+                      placeholder="Nome da nova campanha"
+                      className="flex-1 w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCreateCampaign}
+                      className="px-4 py-2 text-xs bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap"
+                    >
+                      Confirmar
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    value={formData.campaign}
+                    onChange={(e) => {
+                      if (e.target.value === '__nova_campanha__') {
+                        setAddingCampaign(true);
+                      } else {
+                        setFormData({ ...formData, campaign: e.target.value });
+                      }
+                    }}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                  >
+                    <option value="">Não informado</option>
+                    {campaignOptions.map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                    <option value="__nova_campanha__">+ Nova campanha...</option>
+                  </select>
+                )}
+              </div>
+
+              <div className="space-y-2">
                 <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Valor Estimado (R$)</label>
                 <input
                   type="number"
@@ -801,21 +934,42 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
               <div className="space-y-2">
                 <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Fonte do Lead</label>
-                <select
-                  value={formData.lead_source}
-                  onChange={(e) => setFormData({ ...formData, lead_source: e.target.value })}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
-                >
-                  <option value="">Não informado</option>
-                  <option value="Indicação">Indicação</option>
-                  <option value="Instagram">Instagram</option>
-                  <option value="Facebook">Facebook</option>
-                  <option value="Google">Google</option>
-                  <option value="WhatsApp">WhatsApp</option>
-                  <option value="Site">Site</option>
-                  <option value="Visita presencial">Visita presencial</option>
-                  <option value="Outro">Outro</option>
-                </select>
+                {addingSource ? (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newSourceName}
+                      onChange={(e) => setNewSourceName(e.target.value)}
+                      placeholder="Nome da nova fonte"
+                      className="flex-1 w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCreateSource}
+                      className="px-4 py-2 text-xs bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap"
+                    >
+                      Confirmar
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    value={formData.lead_source}
+                    onChange={(e) => {
+                      if (e.target.value === '__nova_fonte__') {
+                        setAddingSource(true);
+                      } else {
+                        setFormData({ ...formData, lead_source: e.target.value });
+                      }
+                    }}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                  >
+                    <option value="">Não informado</option>
+                    {sourceOptions.map(s => (
+                      <option key={s.id} value={s.name}>{s.name}</option>
+                    ))}
+                    <option value="__nova_fonte__">+ Nova fonte...</option>
+                  </select>
+                )}
               </div>
 
               <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800 mt-6 md:mt-8">
@@ -836,6 +990,19 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Modal Detalhes do Cliente */}
+      {detailClient && (
+        <ClientDetailModal
+          client={detailClient}
+          userRole={userRole}
+          onClose={() => setDetailClient(null)}
+          onChanged={() => {
+            setDetailClient(null);
+            loadClients();
+          }}
+        />
       )}
 
     </div>
