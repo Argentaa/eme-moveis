@@ -281,3 +281,22 @@ def test_modelos_novos_serializacao_e_cascata(client):
         assert db.session.get(AttModel, att.id) is None        # cascade do banco
         assert db.session.get(SrcModel, src.id) is not None    # tabela independente do cliente
         assert db.session.get(CampModel, camp.id) is not None  # tabela independente do cliente
+
+
+def test_seeds_fontes_e_campanhas_idempotente(client):
+    with client.application.app_context():
+        from app.extensions import db
+        from app.models.models import (
+            Campaign, LeadSource,
+            ensure_default_campaigns, ensure_default_lead_sources,
+        )
+        ensure_default_lead_sources()
+        ensure_default_campaigns()
+        n_src = db.session.query(LeadSource).count()
+        n_camp = db.session.query(Campaign).count()
+        assert n_src >= 11
+        assert n_camp >= 5
+        ensure_default_lead_sources()
+        ensure_default_campaigns()
+        assert db.session.query(LeadSource).count() == n_src
+        assert db.session.query(Campaign).count() == n_camp

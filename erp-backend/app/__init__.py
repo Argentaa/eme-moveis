@@ -49,4 +49,14 @@ def create_app(config_name=None):
         except Exception:
             pass
 
+        from app.models.models import ensure_default_campaigns, ensure_default_lead_sources
+        try:
+            ensure_default_lead_sources()
+        except Exception:
+            pass
+        try:
+            ensure_default_campaigns()
+        except Exception:
+            pass
+
     return app

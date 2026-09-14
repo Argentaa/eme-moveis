@@ -438,3 +438,24 @@ def ensure_default_funnel_columns():
         if not exists:
             db.session.add(FunnelColumn(column_key=key, label=label, type=ctype))
     db.session.commit()
+
+
+DEFAULT_LEAD_SOURCES = [
+    "Indicação de Arquiteto", "Parceria com Construtora", "Imobiliária", "Indicação",
+    "Instagram", "Facebook", "Google", "WhatsApp", "Site", "Visita presencial", "Outro",
+]
+DEFAULT_CAMPAIGNS = ["Parceria com Construtora", "Indicação", "Instagram", "Site", "Outra"]
+
+
+def ensure_default_lead_sources():
+    for name in DEFAULT_LEAD_SOURCES:
+        if not db.session.query(LeadSource).filter_by(name=name).first():
+            db.session.add(LeadSource(name=name))
+    db.session.commit()
+
+
+def ensure_default_campaigns():
+    for name in DEFAULT_CAMPAIGNS:
+        if not db.session.query(Campaign).filter_by(name=name).first():
+            db.session.add(Campaign(name=name))
+    db.session.commit()
