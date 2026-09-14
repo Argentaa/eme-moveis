@@ -356,12 +356,7 @@ def test_update_funil_gera_interacao_automatica(client):
     cid = client.post("/api/clients", headers=h, json={"name": "Cliente Log", "cpf_cnpj": "6666"}).get_json()["id"]
     r = client.put("/api/clients/" + cid, headers=h, json={"funnel_status": "ORCAMENTO"})
     assert r.status_code == 200, r.get_data(as_text=True)
-    # Desvio: GET /api/clients/{id}/interactions e endpoint da Task B3 (ainda nao existe);
-    # leitura via ORM direto mantem as mesmas assertivas.
-    with client.application.app_context():
-        from app.extensions import db
-        from app.models.models import Interaction
-        inter = [i.to_dict() for i in db.session.query(Interaction).filter_by(client_id=cid).all()]
+    inter = client.get("/api/clients/" + cid + "/interactions", headers=h).get_json()
     assert len(inter) == 1
     assert inter[0]["automatic"] is True
     assert "ORCAMENTO" in inter[0]["content"]
@@ -395,3 +390,36 @@ def test_client_detail_agregado(client):
     assert len(d["interactions"]) == 1
     assert len(d["attachments"]) == 1
     assert len(d["items"]) == 1 and d["items"][0]["subtotal"] == 8000.0
+
+
+def test_interactions_manual_crud(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Interacoes", "cpf_cnpj": "5544"}).get_json()["id"]
+    r = client.post("/api/clients/" + cid + "/interactions", headers=h, json={"type": "CONVERSA", "content": "Cliente ligou pedindo prazo"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["automatic"] is False
+    assert body["created_by"] == "admin"
+    iid = body["id"]
+    r2 = client.post("/api/clients/" + cid + "/interactions", headers=h, json={"type": "FOO", "content": "tipo desconhecido"})
+    assert r2.status_code == 201
+    assert r2.get_json()["type"] == "OBSERVACAO"
+    r3 = client.post("/api/clients/" + cid + "/interactions", headers=h, json={"type": "CONVERSA", "content": "   "})
+    assert r3.status_code == 400
+    lst = client.get("/api/clients/" + cid + "/interactions", headers=h).get_json()
+    assert len(lst) >= 2
+    assert client.delete("/api/interactions/" + iid, headers=h).status_code == 200
+    lst2 = client.get("/api/clients/" + cid + "/interactions", headers=h).get_json()
+    assert all(i["id"] != iid for i in lst2)
+
+
+def test_log_valor_estimado_e_upsert_vazio(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Valor", "cpf_cnpj": "5545"}).get_json()["id"]
+    r = client.put("/api/clients/" + cid, headers=h, json={"estimated_value": 5000})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    inter = client.get("/api/clients/" + cid + "/interactions", headers=h).get_json()
+    assert any(i["type"] == "ORCAMENTO" and "não informado" in i["content"] for i in inter)
+    client.put("/api/clients/" + cid, headers=h, json={"lead_source": ""})
+    names = [s["name"] for s in client.get("/api/lead-sources", headers=h).get_json()]
+    assert all(n != "" for n in names)
