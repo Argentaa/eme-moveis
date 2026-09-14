@@ -129,6 +129,8 @@ def list_interactions(client_id):
 @token_required()
 def create_interaction(client_id):
     """Cria uma interacao manual no historico do cliente."""
+    if not db.session.get(Client, client_id):
+        return jsonify({"detail": "Cliente nao encontrado"}), 404
     data = body_json()
     content = (data.get("content") or "").strip()
     if not content:

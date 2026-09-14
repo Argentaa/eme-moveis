@@ -423,3 +423,9 @@ def test_log_valor_estimado_e_upsert_vazio(client):
     client.put("/api/clients/" + cid, headers=h, json={"lead_source": ""})
     names = [s["name"] for s in client.get("/api/lead-sources", headers=h).get_json()]
     assert all(n != "" for n in names)
+
+
+def test_interaction_cliente_inexistente_404(client):
+    h = _login(client)
+    r = client.post("/api/clients/id-inexistente/interactions", headers=h, json={"type": "CONVERSA", "content": "x"})
+    assert r.status_code == 404
