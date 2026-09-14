@@ -440,3 +440,42 @@ def test_calendar_filtro_por_cliente(client):
     rows = client.get("/api/calendar", headers=h, query_string={"client_id": ca}).get_json()
     assert len(rows) == 1
     assert rows[0]["id"] == ev_a["id"]
+
+
+def test_attachment_upload_download_delete(client, tmp_path):
+    with client.application.app_context():
+        client.application.config["UPLOAD_DIR"] = str(tmp_path)
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Anexo", "cpf_cnpj": "2223"}).get_json()["id"]
+    import io
+    data = {"file": (io.BytesIO(b"%PDF-1.4 fake pdf"), "proposta.pdf")}
+    r = client.post("/api/clients/" + cid + "/attachments", headers=h, data=data, content_type="multipart/form-data")
+    assert r.status_code == 201, r.get_data(as_text=True)
+    att = r.get_json()
+    assert att["filename"] == "proposta.pdf"
+    aid = att["id"]
+    lst = client.get("/api/clients/" + cid + "/attachments", headers=h).get_json()
+    assert len(lst) == 1
+    d = client.get("/api/attachments/" + aid + "/download", headers=h)
+    assert d.status_code == 200
+    assert b"%PDF-1.4" in d.data
+    assert "proposta.pdf" in d.headers.get("Content-Disposition", "")
+    assert client.delete("/api/attachments/" + aid, headers=h).status_code == 200
+    assert client.get("/api/attachments/" + aid + "/download", headers=h).status_code == 404
+
+
+def test_attachment_cliente_inexistente_404(client, tmp_path):
+    with client.application.app_context():
+        client.application.config["UPLOAD_DIR"] = str(tmp_path)
+    h = _login(client)
+    import io
+    r = client.post("/api/clients/id-x/attachments", headers=h, data={"file": (io.BytesIO(b"x"), "a.txt")}, content_type="multipart/form-data")
+    assert r.status_code == 404
+
+
+def test_attachment_sem_token_401(client, tmp_path):
+    with client.application.app_context():
+        client.application.config["UPLOAD_DIR"] = str(tmp_path)
+    import io
+    r = client.post("/api/clients/id-x/attachments", data={"file": (io.BytesIO(b"x"), "a.txt")}, content_type="multipart/form-data")
+    assert r.status_code == 401
