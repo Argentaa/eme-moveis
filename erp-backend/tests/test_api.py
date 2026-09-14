@@ -507,3 +507,41 @@ def test_products_crud(client):
     assert client.delete("/api/products/" + pid, headers=h).status_code == 200
     names2 = [p["name"] for p in client.get("/api/products", headers=h).get_json()]
     assert "Closet" not in names2
+
+
+def test_items_crud_e_valor(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Items API", "cpf_cnpj": "3111"}).get_json()["id"]
+    prod = client.post("/api/products", headers=h, json={"name": "Cozinha", "default_price": 8000}).get_json()
+    r1 = client.post("/api/clients/" + cid + "/items", headers=h, json={"product_id": prod["id"], "quantity": 1, "unit_price": 8000})
+    assert r1.status_code == 201, r1.get_data(as_text=True)
+    r2 = client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "Closet", "quantity": 2, "unit_price": 1000})
+    assert r2.status_code == 201
+    assert r2.get_json()["product_id"] is not None
+    cnames = [p["name"] for p in client.get("/api/products", headers=h).get_json()]
+    assert "Closet" in cnames
+    row = next(c for c in client.get("/api/clients", headers=h).get_json() if c["id"] == cid)
+    assert row["negotiation_value"] == 8000 + 2000
+    iid = r2.get_json()["id"]
+    r3 = client.put("/api/items/" + iid, headers=h, json={"unit_price": 1500})
+    assert r3.status_code == 200
+    row2 = next(c for c in client.get("/api/clients", headers=h).get_json() if c["id"] == cid)
+    assert row2["negotiation_value"] == 8000 + 3000
+    assert client.delete("/api/items/" + r1.get_json()["id"], headers=h).status_code == 200
+    row3 = next(c for c in client.get("/api/clients", headers=h).get_json() if c["id"] == cid)
+    assert row3["negotiation_value"] == 3000.0
+
+
+def test_item_cliente_inexistente_404(client):
+    h = _login(client)
+    r = client.post("/api/clients/id-x/items", headers=h, json={"name": "X", "quantity": 1, "unit_price": 1})
+    assert r.status_code == 404
+
+
+def test_item_validacoes(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Val", "cpf_cnpj": "3112"}).get_json()["id"]
+    assert client.post("/api/clients/" + cid + "/items", headers=h, json={"name": " ", "unit_price": 1}).status_code == 400
+    assert client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "X", "unit_price": -5}).status_code == 400
+    assert client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "X", "product_id": "nao-existe"}).status_code == 404
+    assert client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "Y", "quantity": "abc"}).status_code == 400

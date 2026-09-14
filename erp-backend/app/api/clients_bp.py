@@ -13,6 +13,7 @@ from app.models.models import (
     Interaction,
     LeadSource,
     NegotiationItem,
+    Product,
     Project,
 )
 
@@ -24,6 +25,21 @@ CLIENT_FIELDS = (
 )
 
 INTERACTION_TYPES = ("CONVERSA", "PROPOSTA", "ORCAMENTO", "OBSERVACAO")
+
+ITEM_RECURRENCES = ("UNICO", "MENSAL", "TRIMESTRAL", "ANUAL")
+
+
+def _item_number(value, default):
+    """Converte valor numerico de item; default quando ausente, erro se invalido/negativo."""
+    if value is None:
+        return default
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("numero invalido")
+    if n < 0:
+        raise ValueError("numero negativo")
+    return n
 
 
 def _fmt_log(value):
@@ -154,6 +170,91 @@ def delete_interaction(interaction_id):
     if not row:
         return jsonify({"detail": "Interacao nao encontrada"}), 404
     db.session.delete(row)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@bp.get("/api/clients/<client_id>/items")
+@token_required()
+def list_items(client_id):
+    """Lista os itens da negociacao de um cliente."""
+    rows = (db.session.query(NegotiationItem).filter_by(client_id=client_id)
+            .order_by(NegotiationItem.created_at).all())
+    return jsonify([it.to_dict() for it in rows])
+
+
+@bp.post("/api/clients/<client_id>/items")
+@token_required()
+def create_item(client_id):
+    """Cria um item de negociacao para o cliente (vincula ou cria o produto)."""
+    if not db.session.get(Client, client_id):
+        return jsonify({"detail": "Cliente nao encontrado"}), 404
+    data = body_json()
+    name = (data.get("name") or "").strip()
+    product_id = data.get("product_id")
+    if product_id:
+        prod = db.session.get(Product, product_id)
+        if not prod:
+            return jsonify({"detail": "Produto nao encontrado"}), 404
+        if not name:
+            name = prod.name
+    if not name:
+        return jsonify({"detail": "name e obrigatorio"}), 400
+    try:
+        qty = _item_number(data.get("quantity"), 1)
+        price = _item_number(data.get("unit_price"), 0)
+    except ValueError:
+        return jsonify({"detail": "numero invalido"}), 400
+    rec = (data.get("recurrence") or "UNICO").upper()
+    if rec not in ITEM_RECURRENCES:
+        rec = "UNICO"
+    if not product_id:
+        prod = db.session.query(Product).filter_by(name=name).first()
+        if not prod:
+            prod = Product(name=name, default_price=price)
+            db.session.add(prod)
+            db.session.flush()
+        product_id = prod.id
+    item = NegotiationItem(client_id=client_id, product_id=product_id, name=name,
+                           quantity=qty, unit_price=price, recurrence=rec)
+    db.session.add(item)
+    db.session.commit()
+    return jsonify(item.to_dict()), 201
+
+
+@bp.put("/api/items/<item_id>")
+@token_required()
+def update_item(item_id):
+    """Atualiza um item de negociacao existente."""
+    item = db.session.get(NegotiationItem, item_id)
+    if not item:
+        return jsonify({"detail": "Item nao encontrado"}), 404
+    data = body_json()
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"detail": "name e obrigatorio"}), 400
+        item.name = name
+    try:
+        item.quantity = _item_number(data.get("quantity"), item.quantity)
+        item.unit_price = _item_number(data.get("unit_price"), item.unit_price)
+    except ValueError:
+        return jsonify({"detail": "numero invalido"}), 400
+    if "recurrence" in data:
+        rec = (data.get("recurrence") or "UNICO").upper()
+        item.recurrence = rec if rec in ITEM_RECURRENCES else "UNICO"
+    db.session.commit()
+    return jsonify(item.to_dict())
+
+
+@bp.delete("/api/items/<item_id>")
+@token_required()
+def delete_item(item_id):
+    """Remove um item de negociacao."""
+    item = db.session.get(NegotiationItem, item_id)
+    if not item:
+        return jsonify({"detail": "Item nao encontrado"}), 404
+    db.session.delete(item)
     db.session.commit()
     return jsonify({"ok": True})
 
