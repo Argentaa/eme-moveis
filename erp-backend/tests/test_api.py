@@ -321,3 +321,31 @@ def test_negotiation_value_soma_itens(client):
     r = client.get("/api/clients", headers=h)
     row = next(c for c in r.get_json() if c["id"] == cid)
     assert row["negotiation_value"] == 12500.0
+
+
+def test_lead_sources_crud(client):
+    h = _login(client)
+    r = client.post("/api/lead-sources", headers=h, json={"name": "Feira do Móvel"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    src_id = r.get_json()["id"]
+    r2 = client.post("/api/lead-sources", headers=h, json={"name": "Feira do Móvel"})
+    assert r2.status_code == 200
+    names = [s["name"] for s in client.get("/api/lead-sources", headers=h).get_json()]
+    assert "Feira do Móvel" in names
+    assert client.delete("/api/lead-sources/" + src_id, headers=h).status_code == 200
+    names2 = [s["name"] for s in client.get("/api/lead-sources", headers=h).get_json()]
+    assert "Feira do Móvel" not in names2
+
+
+def test_campaigns_crud(client):
+    h = _login(client)
+    r = client.post("/api/campaigns", headers=h, json={"name": "Campanha Natal"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    camp_id = r.get_json()["id"]
+    r2 = client.post("/api/campaigns", headers=h, json={"name": "Campanha Natal"})
+    assert r2.status_code == 200
+    names = [c["name"] for c in client.get("/api/campaigns", headers=h).get_json()]
+    assert "Campanha Natal" in names
+    assert client.delete("/api/campaigns/" + camp_id, headers=h).status_code == 200
+    names2 = [c["name"] for c in client.get("/api/campaigns", headers=h).get_json()]
+    assert "Campanha Natal" not in names2
