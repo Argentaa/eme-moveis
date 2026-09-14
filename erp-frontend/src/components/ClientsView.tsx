@@ -314,6 +314,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
+  const clientDisplayValue = (c: Client, projects: Project[]) => {
+    const real = projects
+      .filter(p => p.client_id === c.id && p.status !== 'CONCLUIDO')
+      .reduce((s, p) => s + (p.value || 0), 0);
+    return {
+      value: c.negotiation_value ?? (real > 0 ? real : (c.estimated_value || 0)),
+      isEstimated: c.negotiation_value == null && real === 0 && (c.estimated_value || 0) > 0,
+    };
+  };
+
   return (
     <div className="space-y-6">
       
@@ -401,11 +411,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
           })()}
           {FUNNEL_COLUMNS.map(col => {
             const colClients = filteredClients.filter(c => c.funnel_status === col.id);
-            const colTotal = colClients.reduce((acc, c) => {
-              const clientProjects = projects.filter(p => p.client_id === c.id && p.status !== 'CONCLUIDO');
-              const realValue = clientProjects.reduce((s, p) => s + p.value, 0);
-              return acc + (realValue > 0 ? realValue : (c.estimated_value || 0));
-            }, 0);
+            const colTotal = colClients.reduce((acc, c) => acc + clientDisplayValue(c, projects).value, 0);
             return (
               <div key={col.id} className={`glass-panel rounded-xl flex flex-col min-h-[500px] overflow-hidden border-t-2 ${col.color}`}>
                 <div className="p-4 bg-zinc-950/60 border-b border-zinc-900">
@@ -462,11 +468,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 </div>
                 <div className="p-3 space-y-3 flex-1 overflow-y-auto max-h-[450px]">
                   {colClients.map(client => {
-                      const clientProjects = projects.filter(p => p.client_id === client.id && p.status !== 'CONCLUIDO');
-                      const clientTotal = clientProjects.reduce((s, p) => s + p.value, 0);
-                      // Prioriza valor real do projeto; cai para estimado se não houver projeto
-                      const displayValue = clientTotal > 0 ? clientTotal : (client.estimated_value || 0);
-                      const isEstimated = clientTotal === 0 && displayValue > 0;
+                      const { value: displayValue, isEstimated } = clientDisplayValue(client, projects);
                       const pendingTasks = events.filter(e => e.client_id === client.id && e.status !== 'CONCLUIDO' && e.status !== 'CANCELADO').length;
                       return (
                       <div key={client.id} onClick={() => setDetailClient(client)} className="p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg cursor-pointer">
@@ -527,7 +529,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                                   e.stopPropagation();
                                   setConvertModalClient(client);
                                   setConvertTitle(`Projeto ${client.name}`);
-                                  setConvertValue(client.estimated_value ? String(client.estimated_value) : '');
+                                  const dv = clientDisplayValue(client, projects).value;
+                                  setConvertValue(dv > 0 ? String(dv) : '');
                                   setConvertError('');
                                 }}
                                 className="p-1 text-zinc-500 hover:text-emerald-400 cursor-pointer"
