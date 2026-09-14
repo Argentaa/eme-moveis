@@ -27,10 +27,11 @@ def create_app(config_name=None):
     from app.api.funnel_bp import bp as funnel_bp
     from app.api.lead_options_bp import bp as lead_options_bp
     from app.api.projects_bp import bp as projects_bp
+    from app.api.products_bp import bp as products_bp
     from app.api.reports_bp import bp as reports_bp
     from app.api.stock_bp import bp as stock_bp
 
-    for blueprint in (auth_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp, lead_options_bp, attachments_bp):
+    for blueprint in (auth_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp, lead_options_bp, attachments_bp, products_bp):
         app.register_blueprint(blueprint)
 
     @app.get("/api/health")

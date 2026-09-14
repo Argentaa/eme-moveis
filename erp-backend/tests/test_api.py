@@ -492,3 +492,18 @@ def test_attachment_filename_longo_truncado(client, tmp_path):
     assert r.status_code == 201, r.get_data(as_text=True)
     assert len(r.get_json()["filename"]) <= 255
     assert r.get_json()["filename"].endswith(".pdf")
+
+
+def test_products_crud(client):
+    h = _login(client)
+    r = client.post("/api/products", headers=h, json={"name": "Closet", "default_price": 3500})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    pid = r.get_json()["id"]
+    r2 = client.post("/api/products", headers=h, json={"name": "Closet", "default_price": 3600})
+    assert r2.status_code == 200
+    assert r2.get_json()["default_price"] == 3600
+    names = [p["name"] for p in client.get("/api/products", headers=h).get_json()]
+    assert "Closet" in names
+    assert client.delete("/api/products/" + pid, headers=h).status_code == 200
+    names2 = [p["name"] for p in client.get("/api/products", headers=h).get_json()]
+    assert "Closet" not in names2
