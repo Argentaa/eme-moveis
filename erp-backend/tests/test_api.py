@@ -479,3 +479,16 @@ def test_attachment_sem_token_401(client, tmp_path):
     import io
     r = client.post("/api/clients/id-x/attachments", data={"file": (io.BytesIO(b"x"), "a.txt")}, content_type="multipart/form-data")
     assert r.status_code == 401
+
+
+def test_attachment_filename_longo_truncado(client, tmp_path):
+    with client.application.app_context():
+        client.application.config["UPLOAD_DIR"] = str(tmp_path)
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Nome Longo", "cpf_cnpj": "2224"}).get_json()["id"]
+    import io
+    long_name = "a" * 300 + ".pdf"
+    r = client.post("/api/clients/" + cid + "/attachments", headers=h, data={"file": (io.BytesIO(b"%PDF"), long_name)}, content_type="multipart/form-data")
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert len(r.get_json()["filename"]) <= 255
+    assert r.get_json()["filename"].endswith(".pdf")

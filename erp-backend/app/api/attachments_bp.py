@@ -39,6 +39,9 @@ def upload_attachment(client_id):
     if not file or not file.filename:
         return jsonify({"detail": "Arquivo obrigatorio (campo 'file')"}), 400
     original = secure_filename(file.filename) or "arquivo"
+    if len(original) > 255:
+        stem, ext = os.path.splitext(original)
+        original = (stem[:255 - len(ext)] + ext)[:255]
     ext = os.path.splitext(original)[1].lower()
     stored = uuid.uuid4().hex + ext
     path = os.path.join(_upload_dir(), stored)
