@@ -175,18 +175,7 @@ export const attachmentService = {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      // Quando responseType é 'blob', o corpo de erro do backend também vem
-      // como Blob. Convertemos de volta para JSON para que getApiErrorMessage
-      // consiga ler a mensagem normalmente.
-      if (axios.isAxiosError(err) && err.response?.data instanceof Blob) {
-        try {
-          const text = await err.response.data.text();
-          err.response.data = JSON.parse(text);
-        } catch {
-          // Se não for JSON, mantemos o erro original.
-        }
-      }
-      throw err;
+      await parseBlobError(err);
     }
   },
 
@@ -262,10 +251,7 @@ export const itemService = {
     return response.data;
   },
 
-  async update(
-    id: string,
-    data: Partial<Omit<NegotiationItem, 'id' | 'client_id' | 'subtotal' | 'created_at'>>
-  ): Promise<NegotiationItem> {
+  async update(id: string, data: Partial<Pick<NegotiationItem, 'name' | 'quantity' | 'unit_price' | 'recurrence'>>): Promise<NegotiationItem> {
     const response = await api.put(`/api/items/${id}`, data);
     return response.data;
   },
