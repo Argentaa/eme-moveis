@@ -397,8 +397,8 @@ class NegotiationItem(db.Model):
     recurrence = db.Column(String(30), nullable=False, default="UNICO")  # UNICO | MENSAL | TRIMESTRAL | ANUAL
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
 
-    client = db.relationship("Client", backref=db.backref("items", cascade="all, delete-orphan", passive_deletes=False  # ORM garante cascade (SQLite sem FK); Postgres usa FK CASCADE
-))
+    # ORM garante cascade (SQLite sem FK); Postgres usa FK CASCADE
+    client = db.relationship("Client", backref=db.backref("items", cascade="all, delete-orphan", passive_deletes=False))
 
     @property
     def subtotal(self):
