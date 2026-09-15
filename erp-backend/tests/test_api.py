@@ -1276,3 +1276,68 @@ def test_supplier_filtros_e_compat(client):
     assert body.get("category") == ""
     assert body.get("payment_terms") == ""
     assert body.get("avg_delivery_days") is None
+
+
+def test_ticket_model(client):
+    _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        from app.models.models import Client, ServiceTicket
+
+        c = Client(name="Cliente Teste")
+        db.session.add(c)
+        db.session.commit()
+        ticket = ServiceTicket(
+            number="CH-TESTE-0001",
+            client_id=c.id,
+            description="Porta desalinhou",
+            status="ABERTO",
+            cost=150.5,
+            in_warranty=True,
+        )
+        db.session.add(ticket)
+        db.session.commit()
+        d = ticket.to_dict()
+        assert d["number"] == "CH-TESTE-0001"
+        assert d["client_id"] == c.id
+        assert d["client_name"] == "Cliente Teste"
+        assert d["status"] == "ABERTO"
+        assert d["cost"] == 150.5
+        assert d["in_warranty"] is True
+        assert d["opened_at"] is not None
+        assert d["scheduled_at"] is None
+        assert d["resolved_at"] is None
+        assert d["description"] == "Porta desalinhou"
+
+
+def test_ticket_photo_cascade(client):
+    _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        from app.models.models import Client, ServiceTicket, TicketPhoto
+
+        c = Client(name="Cliente Foto")
+        db.session.add(c)
+        db.session.commit()
+        ticket = ServiceTicket(
+            number="CH-TESTE-0002",
+            client_id=c.id,
+            description="Teste foto",
+            status="ABERTO",
+        )
+        db.session.add(ticket)
+        db.session.commit()
+        photo = TicketPhoto(
+            ticket_id=ticket.id,
+            filename="foto.jpg",
+            stored_name="abc.jpg",
+            mime_type="image/jpeg",
+            size=1024,
+        )
+        db.session.add(photo)
+        db.session.commit()
+        assert len(ticket.photos) == 1
+        tid = ticket.id
+        db.session.delete(ticket)
+        db.session.commit()
+        assert db.session.query(TicketPhoto).filter_by(ticket_id=tid).count() == 0

@@ -635,6 +635,81 @@ class ChangelogEntry(db.Model):
                 "created_by": self.created_by or "", "created_at": iso(self.created_at)}
 
 
+class ServiceTicket(db.Model):
+    __tablename__ = "service_tickets"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    number = db.Column(String(20), nullable=False, unique=True)
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
+    description = db.Column(Text, nullable=False)
+    status = db.Column(String(20), nullable=False, default="ABERTO")
+    cost = db.Column(Numeric(14, 2), nullable=True, default=0)
+    cause = db.Column(Text, nullable=True, default="")
+    solution = db.Column(Text, nullable=True, default="")
+    in_warranty = db.Column(Boolean, nullable=True)
+    assigned_user_id = db.Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    opened_at = db.Column(DateTime, nullable=False, default=utcnow)
+    scheduled_at = db.Column(Date, nullable=True)
+    resolved_at = db.Column(DateTime, nullable=True)
+    closed_at = db.Column(DateTime, nullable=True)
+    calendar_event_id = db.Column(String(36), ForeignKey("calendar_events.id", ondelete="SET NULL"), nullable=True)
+    notes = db.Column(Text, nullable=True, default="")
+    created_by = db.Column(String(80), nullable=True, default="")
+    client = db.relationship("Client", backref=db.backref("service_tickets", cascade="all, delete-orphan", passive_deletes=False))
+    project = db.relationship("Project")
+    assigned_user = db.relationship("User")
+    photos = db.relationship("TicketPhoto", cascade="all, delete-orphan", passive_deletes=False, order_by="TicketPhoto.created_at.desc()", overlaps="ticket_photos,ticket")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "number": self.number,
+            "client_id": self.client_id,
+            "client_name": self.client.name if self.client else None,
+            "project_id": self.project_id,
+            "project_title": self.project.title if self.project else None,
+            "description": self.description,
+            "status": self.status,
+            "cost": num(self.cost),
+            "cause": self.cause or "",
+            "solution": self.solution or "",
+            "in_warranty": self.in_warranty,
+            "assigned_user_id": self.assigned_user_id,
+            "assigned_user_name": self.assigned_user.name if self.assigned_user else None,
+            "opened_at": iso(self.opened_at),
+            "scheduled_at": iso(self.scheduled_at),
+            "resolved_at": iso(self.resolved_at),
+            "closed_at": iso(self.closed_at),
+            "calendar_event_id": self.calendar_event_id,
+            "notes": self.notes or "",
+            "created_by": self.created_by or "",
+        }
+
+
+class TicketPhoto(db.Model):
+    __tablename__ = "ticket_photos"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    ticket_id = db.Column(String(36), ForeignKey("service_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename = db.Column(String(255), nullable=False)
+    stored_name = db.Column(String(80), nullable=False, unique=True)
+    mime_type = db.Column(String(120), nullable=True, default="")
+    size = db.Column(Integer, nullable=False, default=0)
+    created_by = db.Column(String(80), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    ticket = db.relationship("ServiceTicket", backref=db.backref("ticket_photos", overlaps="photos,ticket"), overlaps="photos,ticket_photos")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "ticket_id": self.ticket_id,
+            "filename": self.filename,
+            "mime_type": self.mime_type or "",
+            "size": self.size,
+            "created_by": self.created_by or "",
+            "created_at": iso(self.created_at),
+        }
+
+
 DEFAULT_FUNNEL_COLUMNS = [
     # CRM (keys em MAIUSCULO = formato do dump original MySQL)
     ("PROSPECCAO", "Prospecção", "CRM"),
