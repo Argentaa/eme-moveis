@@ -561,11 +561,86 @@ def _build_crm():
     }
 
 
+# ── Origem dos Leads ──────────────────────────────────────────
+
+def _build_lead_sources():
+    df = parse_date(request.args.get("date_from"))
+    dt = parse_date(request.args.get("date_to"))
+    group_by = (request.args.get("group_by") or "source").lower()
+    if group_by not in ("source", "campaign"):
+        group_by = "source"
+    clients = db.session.query(Client).all()
+    if df:
+        clients = [c for c in clients if c.created_at and c.created_at.date() >= df]
+    if dt:
+        clients = [c for c in clients if c.created_at and c.created_at.date() <= dt]
+    groups = {}
+    for c in clients:
+        key = (c.lead_source or "Não informado") if group_by == "source" else (c.campaign or "Sem campanha")
+        g = groups.setdefault(key, {"leads": 0, "ativos": 0, "fechados": 0, "perdidos": 0, "valor_estimado": 0.0, "valor_projetos": 0.0})
+        g["leads"] += 1
+        if c.funnel_status != "PERDIDO":
+            g["ativos"] += 1
+        if c.funnel_status == "FECHAMENTO":
+            g["fechados"] += 1
+        if c.funnel_status == "PERDIDO":
+            g["perdidos"] += 1
+        g["valor_estimado"] += float(c.negotiation_value or 0) or float(c.estimated_value or 0)
+        for p in c.projects:
+            if p.status != "CONCLUIDO":
+                g["valor_projetos"] += float(p.value or 0)
+    ordered = sorted(groups.items(), key=lambda kv: kv[1]["leads"], reverse=True)
+    total_leads = sum(g["leads"] for _, g in ordered)
+    total_fechados = sum(g["fechados"] for _, g in ordered)
+    total_estimado = sum(g["valor_estimado"] for _, g in ordered)
+    total_projetos = sum(g["valor_projetos"] for _, g in ordered)
+    group_label = "Fonte" if group_by == "source" else "Campanha"
+    columns = [
+        {"key": "group", "label": group_label},
+        {"key": "leads", "label": "Leads"},
+        {"key": "ativos", "label": "Ativos"},
+        {"key": "fechados", "label": "Fechados"},
+        {"key": "perdidos", "label": "Perdidos"},
+        {"key": "taxa", "label": "Conversão"},
+        {"key": "valor_estimado", "label": "Valor Estimado"},
+        {"key": "valor_projetos", "label": "Valor em Projetos"},
+    ]
+    rows = []
+    for name, g in ordered:
+        taxa = (g["fechados"] / g["leads"] * 100) if g["leads"] else 0.0
+        rows.append({
+            "group": name,
+            "leads": str(g["leads"]),
+            "ativos": str(g["ativos"]),
+            "fechados": str(g["fechados"]),
+            "perdidos": str(g["perdidos"]),
+            "taxa": (("%.1f" % taxa).replace(".", ",")) + "%",
+            "valor_estimado": _fmt_brl(g["valor_estimado"]),
+            "valor_projetos": _fmt_brl(g["valor_projetos"]),
+        })
+    taxa_geral = (total_fechados / total_leads * 100) if total_leads else 0.0
+    return {
+        "title": "Relatório de Origem dos Leads",
+        "generated_at": _now_iso(),
+        "filters_applied": {"date_from": iso(df), "date_to": iso(dt), "group_by": group_by},
+        "summary": [
+            {"label": "Total de Leads", "value": str(total_leads), "tone": "neutral"},
+            {"label": "Leads Fechados", "value": str(total_fechados), "tone": "positive"},
+            {"label": "Taxa de Conversão", "value": (("%.1f" % taxa_geral).replace(".", ",")) + "%", "tone": "positive" if taxa_geral >= 50 else "neutral"},
+            {"label": "Valor Estimado Total", "value": _fmt_brl(total_estimado), "tone": "neutral"},
+            {"label": "Valor em Projetos", "value": _fmt_brl(total_projetos), "tone": "positive"},
+        ],
+        "columns": columns,
+        "rows": rows,
+    }
+
+
 _BUILDERS = {
     "financial": (_build_financial, "relatorio-financeiro"),
     "clients": (_build_clients, "relatorio-clientes"),
     "projects": (_build_projects, "relatorio-projetos"),
     "stock": (_build_stock, "relatorio-estoque"),
+    "lead-sources": (_build_lead_sources, "relatorio-leads-fontes"),
 }
 
 
@@ -632,3 +707,15 @@ def r_dre():
 @token_required()
 def r_crm():
     return jsonify(_build_crm())
+
+
+@bp.get("/api/reports/lead-sources")
+@token_required()
+def r_lead_sources():
+    return _serve("lead-sources")
+
+
+@bp.get("/api/reports/lead-sources/export")
+@token_required()
+def r_lead_sources_export():
+    return _serve("lead-sources")

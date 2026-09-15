@@ -554,3 +554,25 @@ def test_item_nao_finito_400(client):
     assert r1.status_code == 400
     r2 = client.post("/api/clients/" + cid + "/items", headers=h, json={"name": "Y", "quantity": float("inf")})
     assert r2.status_code == 400
+
+
+def test_lead_sources_report(client):
+    h = _login(client)
+    client.post("/api/clients", headers=h, json={"name": "Cliente F1A", "cpf_cnpj": "7101", "lead_source": "Fonte X", "funnel_status": "FECHAMENTO", "estimated_value": 5000})
+    client.post("/api/clients", headers=h, json={"name": "Cliente F1B", "cpf_cnpj": "7102", "lead_source": "Fonte X"})
+    client.post("/api/clients", headers=h, json={"name": "Cliente F2", "cpf_cnpj": "7103", "lead_source": "Fonte Y", "campaign": "Camp Z"})
+    r = client.get("/api/reports/lead-sources", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["title"] == "Relatório de Origem dos Leads"
+    assert body["summary"][0]["value"] == "3"
+    rx = next(row for row in body["rows"] if row["group"] == "Fonte X")
+    assert rx["leads"] == "2" and rx["fechados"] == "1"
+    assert rx["taxa"] == "50,0%"
+    ry = next(row for row in body["rows"] if row["group"] == "Fonte Y")
+    assert ry["leads"] == "1" and ry["perdidos"] == "0" and ry["taxa"] == "0,0%"
+    assert "R$" in rx["valor_estimado"]
+    r2 = client.get("/api/reports/lead-sources", headers=h, query_string={"group_by": "campaign"})
+    rows2 = r2.get_json()["rows"]
+    assert any(row["group"] == "Camp Z" for row in rows2)
+    assert any(row["group"] == "Sem campanha" for row in rows2)
