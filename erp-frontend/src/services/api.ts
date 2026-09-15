@@ -154,8 +154,13 @@ export const attachmentService = {
   async upload(clientId: string, file: File): Promise<Attachment> {
     const formData = new FormData();
     formData.append('file', file);
-    // Não setamos Content-Type manualmente: o axios define o boundary do multipart.
-    const response = await api.post(`/api/clients/${clientId}/attachments`, formData);
+    // A instância axios tem Content-Type 'application/json' por padrão, e o
+    // axios converte FormData em JSON quando o content-type é JSON (o arquivo
+    // se perde: vira {"file":{}}). Para multipart o header DEVE ser sobrescrito
+    // nesta requisição; o browser então define o boundary sozinho.
+    const response = await api.post(`/api/clients/${clientId}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
     return response.data;
   },
 

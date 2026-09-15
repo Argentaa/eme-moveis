@@ -150,6 +150,14 @@ html[data-theme="light"] body {
   background-color: #f3f4f6 !important;
 }
 
+/* Headers de modal com gradiente escuro: o remap de bg-* cobre apenas
+   background-color; gradient stops (from-zinc-900/to-zinc-950) ficariam
+   escuros no modo claro. Forca fundo branco como os demais paineis. */
+.theme-light [class*="bg-gradient-to-r"][class*="from-zinc-900"] {
+  background-image: none !important;
+  background-color: #ffffff !important;
+}
+
 /* ── Agenda / CalendarView — overrides modo claro ─────────────── */
 .theme-light .calendar-event {
   background-color: #f8fafc;
