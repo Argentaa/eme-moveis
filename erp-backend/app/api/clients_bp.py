@@ -12,6 +12,7 @@ from app.models.models import (
     CalendarEvent,
     Campaign,
     Client,
+    Funnel,
     Interaction,
     LeadSource,
     NegotiationItem,
@@ -24,6 +25,7 @@ bp = Blueprint("clients", __name__)
 CLIENT_FIELDS = (
     "name", "email", "phone", "cpf_cnpj", "address",
     "funnel_status", "lost_reason", "estimated_value", "lead_source", "campaign",
+    "funnel_id",
 )
 
 INTERACTION_TYPES = ("CONVERSA", "PROPOSTA", "ORCAMENTO", "OBSERVACAO")
@@ -66,6 +68,18 @@ def _log_interaction(client_id, itype, content):
     db.session.add(Interaction(client_id=client_id, type=itype, content=content, automatic=True))
 
 
+def _resolve_funnel_id_for_create(data):
+    raw = data.get("funnel_id") if "funnel_id" in data else None
+    if "funnel_id" not in data or raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+        funnel = db.session.query(Funnel).filter_by(kind="CRM", is_default=True).first()
+        return funnel.id if funnel else None
+    fid = str(raw).strip()
+    funnel = db.session.get(Funnel, fid)
+    if not funnel or funnel.kind != "CRM" or not funnel.active:
+        return "invalid"
+    return fid
+
+
 @bp.get("/api/clients")
 @token_required()
 def list_clients():
@@ -81,12 +95,18 @@ def create_client():
         return jsonify({"detail": "name e obrigatorio"}), 400
     client = Client()
     for f in CLIENT_FIELDS:
+        if f == "funnel_id":
+            continue
         if f in data:
             setattr(client, f, data[f] if data[f] != "" or f in ("email", "phone", "address") else None)
     if not client.cpf_cnpj:
         client.cpf_cnpj = None
     if not client.funnel_status:
         client.funnel_status = "PROSPECCAO"
+    funnel_resolved = _resolve_funnel_id_for_create(data)
+    if funnel_resolved == "invalid":
+        return jsonify({"detail": "funnel_id invalido"}), 400
+    client.funnel_id = funnel_resolved
     _upsert_option(LeadSource, client.lead_source)
     _upsert_option(Campaign, client.campaign)
     db.session.add(client)
@@ -273,8 +293,21 @@ def update_client(client_id):
     old_source = client.lead_source
     old_campaign = client.campaign
     for f in CLIENT_FIELDS:
+        if f == "funnel_id":
+            continue
         if f in data:
             setattr(client, f, data[f])
+    if "funnel_id" in data:
+        raw = data.get("funnel_id")
+        if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+            funnel = db.session.query(Funnel).filter_by(kind="CRM", is_default=True).first()
+            client.funnel_id = funnel.id if funnel else None
+        else:
+            fid = str(raw).strip()
+            funnel = db.session.get(Funnel, fid)
+            if not funnel or funnel.kind != "CRM" or not funnel.active:
+                return jsonify({"detail": "funnel_id invalido"}), 400
+            client.funnel_id = fid
     _upsert_option(LeadSource, client.lead_source)
     _upsert_option(Campaign, client.campaign)
     if client.funnel_status != old_funnel:

@@ -739,3 +739,73 @@ def test_dre_table_report(client):
     assert s1["income"] == "R$ 6.000,00" and s1["outcome"] == "R$ 3.000,00" and s1["result"] == "R$ 3.000,00"
     assert s2["income"] == "R$ 4.000,00" and s2["outcome"] == "R$ 1.000,00" and s2["result"] == "R$ 3.000,00"
     assert s2["accumulated"] == "R$ 6.000,00"
+
+
+def test_funnels_crud(client):
+    h = _login(client)
+    r = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"})
+    assert r.status_code == 200
+    funnels = r.get_json()
+    assert len(funnels) == 1
+    assert funnels[0]["name"] == "Funil de Vendas" and funnels[0]["is_default"] is True
+    assert len(funnels[0]["columns"]) >= 5
+    r2 = client.post("/api/funnels", headers=h, json={"name": "Funil Comercial", "kind": "CRM"})
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+    fid = r2.get_json()["id"]
+    assert len(r2.get_json()["columns"]) >= 5  # clonou etapas do padrao
+    r3 = client.put("/api/funnels/" + fid, headers=h, json={"name": "Funil Comercial B2B"})
+    assert r3.status_code == 200 and r3.get_json()["name"] == "Funil Comercial B2B"
+    assert client.delete("/api/funnels/" + fid, headers=h).status_code == 200
+    assert client.delete("/api/funnels/" + fid, headers=h).status_code == 404
+    assert client.delete("/api/funnels/" + funnels[0]["id"], headers=h).status_code == 400
+
+
+def test_funnels_delete_in_use(client):
+    h = _login(client)
+    f = client.post("/api/funnels", headers=h, json={"name": "Funil X", "kind": "CRM"}).get_json()
+    c = client.post("/api/clients", headers=h, json={"name": "Cliente Funil", "cpf_cnpj": "9001", "funnel_id": f["id"]})
+    assert c.status_code == 201, c.get_data(as_text=True)
+    assert client.delete("/api/funnels/" + f["id"], headers=h).status_code == 400
+
+
+def test_funnel_columns_dynamic(client):
+    h = _login(client)
+    f = client.post("/api/funnels", headers=h, json={"name": "Funil Etapas", "kind": "CRM"}).get_json()
+    fid = f["id"]
+    r = client.post("/api/funnels/" + fid + "/columns", headers=h, json={"label": "Pós-venda"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["column_key"] == "POS_VENDA"
+    r2 = client.put("/api/funnels/" + fid + "/columns/POS_VENDA", headers=h, json={"label": "Pós-Venda VIP", "position": 1})
+    assert r2.status_code == 200 and r2.get_json()["label"] == "Pós-Venda VIP" and r2.get_json()["position"] == 1
+    assert client.delete("/api/funnels/" + fid + "/columns/POS_VENDA", headers=h).status_code == 200
+    assert client.delete("/api/funnels/" + fid + "/columns/POS_VENDA", headers=h).status_code == 404
+
+
+def test_funnel_column_delete_in_use(client):
+    h = _login(client)
+    f = client.post("/api/funnels", headers=h, json={"name": "Funil Y", "kind": "CRM"}).get_json()
+    fid = f["id"]
+    client.post("/api/clients", headers=h, json={"name": "Cliente Etapa", "cpf_cnpj": "9002", "funnel_id": fid})
+    assert client.delete("/api/funnels/" + fid + "/columns/PROSPECCAO", headers=h).status_code == 400
+
+
+def test_client_funnel_assignment(client):
+    h = _login(client)
+    r = client.post("/api/clients", headers=h, json={"name": "Cliente Padrao", "cpf_cnpj": "9003"})
+    assert r.status_code == 201
+    default = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"}).get_json()[0]
+    assert r.get_json()["funnel_id"] == default["id"]
+    bad = client.post("/api/clients", headers=h, json={"name": "Cliente Ruim", "cpf_cnpj": "9004", "funnel_id": "nao-existe"})
+    assert bad.status_code == 400
+
+
+def test_funnel_columns_legacy_compat(client):
+    h = _login(client)
+    r = client.get("/api/funnel-columns", headers=h, query_string={"type": "CRM"})
+    assert r.status_code == 200
+    cols = r.get_json()
+    assert any(c["column_key"] == "PROSPECCAO" for c in cols)
+    r2 = client.put("/api/funnel-columns/ORCAMENTO", headers=h, json={"label": "Orçamento 2"})
+    assert r2.status_code == 200
+    r3 = client.get("/api/funnel-columns", headers=h, query_string={"type": "CRM"}).get_json()
+    assert next(c for c in r3 if c["column_key"] == "ORCAMENTO")["label"] == "Orçamento 2"

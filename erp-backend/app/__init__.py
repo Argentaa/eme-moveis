@@ -47,9 +47,13 @@ def create_app(config_name=None):
 
     with app.app_context():
         from app import models as _models  # noqa: F401
-        from app.models.models import ensure_default_funnel_columns
+        from app.models.models import ensure_default_funnel_columns, ensure_default_funnels
 
         db.create_all()
+        try:
+            ensure_default_funnels()
+        except Exception:
+            pass
         try:
             ensure_default_funnel_columns()
         except Exception:

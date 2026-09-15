@@ -57,6 +57,7 @@ class Client(db.Model):
     estimated_value = db.Column(Numeric(14, 2), nullable=True)
     lead_source = db.Column(String(120), nullable=True)
     campaign = db.Column(String(120), nullable=True)
+    funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True, index=True)
 
     def to_dict(self):
         return {
@@ -73,8 +74,8 @@ class Client(db.Model):
             "lead_source": self.lead_source,
             "campaign": self.campaign,
             "negotiation_value": self.negotiation_value,
+            "funnel_id": self.funnel_id,
         }
-
 
     @property
     def negotiation_value(self):
@@ -117,6 +118,7 @@ class Project(db.Model):
     deadline = db.Column(Date, nullable=True)
     steps = db.Column(JSON, nullable=True, default=list)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True, index=True)
 
     client = db.relationship("Client", backref=db.backref("projects", cascade="all, delete-orphan", passive_deletes=True))
 
@@ -132,6 +134,7 @@ class Project(db.Model):
             "deadline": iso(self.deadline),
             "steps": self.steps or [],
             "created_at": iso(self.created_at),
+            "funnel_id": self.funnel_id,
         }
 
 
@@ -458,6 +461,31 @@ class NegotiationItem(db.Model):
                 "created_at": iso(self.created_at)}
 
 
+class Funnel(db.Model):
+    __tablename__ = "funnels"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(120), nullable=False)
+    kind = db.Column(String(20), nullable=False, default="CRM")
+    is_default = db.Column(Boolean, nullable=False, default=False)
+    active = db.Column(Boolean, nullable=False, default=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    columns = db.relationship("FunnelColumn", backref="funnel", cascade="all, delete-orphan", passive_deletes=True, order_by="FunnelColumn.position")
+
+    def to_dict(self, include_columns=True):
+        d = {
+            "id": self.id,
+            "name": self.name,
+            "kind": self.kind,
+            "is_default": bool(self.is_default),
+            "active": bool(self.active),
+            "created_at": iso(self.created_at),
+        }
+        if include_columns:
+            cols = sorted(self.columns, key=lambda x: (x.position, x.label))
+            d["columns"] = [c.to_dict() for c in cols]
+        return d
+
+
 class FunnelColumn(db.Model):
     __tablename__ = "funnel_columns"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -466,8 +494,10 @@ class FunnelColumn(db.Model):
     description = db.Column(Text, nullable=True)
     updated_at = db.Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
     type = db.Column(String(20), nullable=False, default="CRM")
+    funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="CASCADE"), nullable=True, index=True)
+    position = db.Column(Integer, nullable=False, default=0)
 
-    __table_args__ = (UniqueConstraint("column_key", "type", name="uq_funnel_key_type"),)
+    __table_args__ = (UniqueConstraint("funnel_id", "column_key", name="uq_funnel_column_key"),)
 
     def to_dict(self):
         return {
@@ -477,6 +507,8 @@ class FunnelColumn(db.Model):
             "description": self.description,
             "updated_at": iso(self.updated_at),
             "type": self.type,
+            "funnel_id": self.funnel_id,
+            "position": self.position,
         }
 
 
@@ -563,11 +595,34 @@ DEFAULT_FUNNEL_COLUMNS = [
 ]
 
 
-def ensure_default_funnel_columns():
-    for key, label, ctype in DEFAULT_FUNNEL_COLUMNS:
-        exists = db.session.query(FunnelColumn).filter_by(column_key=key, type=ctype).first()
+DEFAULT_FUNNELS = [("Funil de Vendas", "CRM"), ("Funil de Produção", "PROJECTS")]
+
+
+def ensure_default_funnels():
+    for name, kind in DEFAULT_FUNNELS:
+        exists = db.session.query(Funnel).filter_by(kind=kind, is_default=True).first()
         if not exists:
-            db.session.add(FunnelColumn(column_key=key, label=label, type=ctype))
+            db.session.add(Funnel(name=name, kind=kind, is_default=True, active=True))
+    db.session.commit()
+
+
+def ensure_default_funnel_columns():
+    counters = {}
+    for key, label, ctype in DEFAULT_FUNNEL_COLUMNS:
+        pos = counters.get(ctype, 0)
+        counters[ctype] = pos + 1
+        funil = db.session.query(Funnel).filter_by(kind=ctype, is_default=True).first()
+        if not funil:
+            continue
+        col = db.session.query(FunnelColumn).filter_by(funnel_id=funil.id, column_key=key).first()
+        if col:
+            continue
+        legado = db.session.query(FunnelColumn).filter_by(column_key=key, type=ctype).filter(FunnelColumn.funnel_id.is_(None)).first()
+        if legado:
+            legado.funnel_id = funil.id
+            legado.position = pos
+        else:
+            db.session.add(FunnelColumn(column_key=key, label=label, type=ctype, funnel_id=funil.id, position=pos))
     db.session.commit()
 
 

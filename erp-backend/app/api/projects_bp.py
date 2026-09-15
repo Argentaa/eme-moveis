@@ -6,20 +6,46 @@ from flask import Blueprint, jsonify
 from app.helpers import body_json, parse_date
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import Project
+from app.models.models import Funnel, Project
 
 bp = Blueprint("projects", __name__)
 
-PROJECT_FIELDS = ("title", "client_id", "description", "status", "value", "deadline", "steps")
+PROJECT_FIELDS = ("title", "client_id", "description", "status", "value", "deadline", "steps", "funnel_id")
 
 
 def _apply(data, project, partial=True):
     for f in PROJECT_FIELDS:
+        if f == "funnel_id":
+            continue
         if f in data:
             v = data[f]
             if f == "deadline":
                 v = parse_date(v)
             setattr(project, f, v)
+    if "funnel_id" in data:
+        raw = data.get("funnel_id")
+        if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+            funnel = db.session.query(Funnel).filter_by(kind="PROJECTS", is_default=True).first()
+            project.funnel_id = funnel.id if funnel else None
+        else:
+            fid = str(raw).strip()
+            funnel = db.session.get(Funnel, fid)
+            if not funnel or funnel.kind != "PROJECTS" or not funnel.active:
+                return "invalid"
+            project.funnel_id = fid
+    return None
+
+
+def _resolve_funnel_for_create(data):
+    raw = data.get("funnel_id") if "funnel_id" in data else None
+    if "funnel_id" not in data or raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+        funnel = db.session.query(Funnel).filter_by(kind="PROJECTS", is_default=True).first()
+        return funnel.id if funnel else None
+    fid = str(raw).strip()
+    funnel = db.session.get(Funnel, fid)
+    if not funnel or funnel.kind != "PROJECTS" or not funnel.active:
+        return "invalid"
+    return fid
 
 
 @bp.get("/api/projects/overdue")
@@ -64,6 +90,9 @@ def create_project():
         return jsonify({"detail": "title e obrigatorio"}), 400
     if not data.get("client_id"):
         return jsonify({"detail": "client_id e obrigatorio"}), 400
+    funnel_resolved = _resolve_funnel_for_create(data)
+    if funnel_resolved == "invalid":
+        return jsonify({"detail": "funnel_id invalido"}), 400
     project = Project(
         title=data["title"].strip(),
         client_id=data["client_id"],
@@ -72,6 +101,7 @@ def create_project():
         value=data.get("value") or 0,
         deadline=parse_date(data.get("deadline")),
         steps=data.get("steps") or [],
+        funnel_id=funnel_resolved,
     )
     db.session.add(project)
     db.session.commit()
@@ -93,7 +123,10 @@ def update_project(project_id):
     project = db.session.get(Project, project_id)
     if not project:
         return jsonify({"detail": "Projeto nao encontrado"}), 404
-    _apply(body_json(), project)
+    data = body_json()
+    res = _apply(data, project)
+    if res == "invalid":
+        return jsonify({"detail": "funnel_id invalido"}), 400
     db.session.commit()
     return jsonify(project.to_dict())
 
