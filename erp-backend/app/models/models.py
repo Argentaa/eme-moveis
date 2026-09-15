@@ -510,6 +510,26 @@ class RecurringFinancial(db.Model):
         }
 
 
+class BudgetGoal(db.Model):
+    __tablename__ = "budget_goals"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    year = db.Column(Integer, nullable=False)
+    month = db.Column(Integer, nullable=True)
+    category = db.Column(String(120), nullable=False)
+    target_value = db.Column(Numeric(14, 2), nullable=False, default=0)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "year": self.year,
+            "month": self.month,
+            "category": self.category,
+            "target_value": num(self.target_value),
+            "created_at": iso(self.created_at),
+        }
+
+
 class ChangelogEntry(db.Model):
     __tablename__ = "changelog_entries"
     id = db.Column(String(36), primary_key=True, default=new_uuid)

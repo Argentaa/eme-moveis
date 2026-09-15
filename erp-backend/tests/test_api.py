@@ -598,6 +598,53 @@ def test_changelog_crud(client):
     assert client.post("/api/changelog", json={"title": "sem token"}).status_code == 401
 
 
+def test_budget_goals_crud(client):
+    h = _login(client)
+    r = client.post("/api/budget/goals", headers=h, json={"year": 2026, "month": 9, "category": "VENDAS", "target_value": 50000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    gid = r.get_json()["id"]
+    r2 = client.post("/api/budget/goals", headers=h, json={"year": 2026, "category": "MATERIAL", "target_value": 12000})
+    assert r2.status_code == 201
+    lst = client.get("/api/budget/goals", headers=h, query_string={"year": 2026}).get_json()
+    assert len(lst) == 2
+    lst9 = client.get("/api/budget/goals", headers=h, query_string={"year": 2026, "month": 9}).get_json()
+    assert len(lst9) == 1 and lst9[0]["category"] == "VENDAS"
+    r3 = client.put("/api/budget/goals/" + gid, headers=h, json={"target_value": 60000})
+    assert r3.status_code == 200 and r3.get_json()["target_value"] == 60000
+    assert client.delete("/api/budget/goals/" + gid, headers=h).status_code == 200
+    assert client.delete("/api/budget/goals/" + gid, headers=h).status_code == 404
+    assert client.post("/api/budget/goals", headers=h, json={"year": "abc", "category": "X", "target_value": 1}).status_code == 400
+    assert client.post("/api/budget/goals", headers=h, json={"year": 2026, "month": 13, "category": "X", "target_value": 1}).status_code == 400
+    assert client.post("/api/budget/goals", headers=h, json={"year": 2026, "category": "  ", "target_value": 1}).status_code == 400
+
+
+def test_budget_analysis(client):
+    h = _login(client)
+    client.post("/api/budget/goals", headers=h, json={"year": 2026, "category": "VENDAS", "target_value": 10000})
+    client.post("/api/budget/goals", headers=h, json={"year": 2026, "category": "MATERIAL", "target_value": 4000})
+    for p in [
+        {"description": "Venda 1", "type": "ENTRADA", "category": "VENDAS", "amount": 3000, "date": "2026-03-10", "status": "PAGO"},
+        {"description": "Venda 2", "type": "ENTRADA", "category": "VENDAS", "amount": 2000, "date": "2026-04-10", "status": "PAGO"},
+        {"description": "Venda pendente", "type": "ENTRADA", "category": "VENDAS", "amount": 5000, "date": "2026-05-10", "status": "PENDENTE"},
+        {"description": "MDF", "type": "SAIDA", "category": "MATERIAL", "amount": 1000, "date": "2026-03-15", "status": "PAGO"},
+    ]:
+        assert client.post("/api/financial", headers=h, json=p).status_code == 201
+    r = client.get("/api/budget/analysis", headers=h, query_string={"year": 2026})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert len(body["rows"]) == 2
+    v = next(row for row in body["rows"] if row["category"] == "VENDAS")
+    m = next(row for row in body["rows"] if row["category"] == "MATERIAL")
+    assert v["budget"] == "R$ 10.000,00" and v["actual"] == "R$ 5.000,00"
+    assert v["difference"] == "R$ 5.000,00" and v["percentage"] == "50,0%"
+    assert m["budget"] == "R$ 4.000,00" and m["actual"] == "R$ 1.000,00" and m["percentage"] == "25,0%"
+    assert body["summary"][0]["label"] == "Orçado Total" and body["summary"][0]["value"] == "R$ 14.000,00"
+    r2 = client.get("/api/budget/analysis", headers=h, query_string={"year": 2026, "month": 3})
+    rows2 = r2.get_json()["rows"]
+    v2 = next(row for row in rows2 if row["category"] == "VENDAS")
+    assert v2["actual"] == "R$ 3.000,00" and v2["percentage"] == "30,0%"
+
+
 def test_financial_new_fields(client):
     h = _login(client)
     payload = {"description": "NF-e 123", "type": "SAIDA", "category": "MATERIAL", "amount": 1500, "date": "2026-09-01", "status": "PENDENTE", "doc_number": "NF 456", "issue_date": "2026-08-30", "doc_type": "BOLETO", "bank": "Banco X", "account_plan": "3.1.01", "item_description": "MDF 15mm", "installments": 3, "is_recurring": True}
