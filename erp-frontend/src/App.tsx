@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Building2, Layers, Users, Landmark, Package, Shield, FileBarChart, CalendarDays, Sparkles,
-  Power, Menu, X, User, ArrowRight, HelpCircle, Eye, EyeOff, Moon, Sun
+  Power, Menu, X, User, ArrowRight, HelpCircle, Eye, EyeOff, Moon, Sun, ShoppingCart
 } from 'lucide-react';
 
 // Assets
@@ -19,12 +19,13 @@ import ClientsView from './components/ClientsView';
 import ProjectsView from './components/ProjectsView';
 import FinancialView from './components/FinancialView';
 import StockView from './components/StockView';
+import PurchasesView from './components/PurchasesView';
 import UsersView from './components/UsersView';
 import ReportsView from './components/ReportsView';
 import CalendarView from './components/CalendarView';
 import NovidadesView from './components/NovidadesView';
 
-type TabId = 'dashboard' | 'clients' | 'projects' | 'financial' | 'stock' | 'users' | 'reports' | 'calendar' | 'novidades';
+type TabId = 'dashboard' | 'clients' | 'projects' | 'financial' | 'stock' | 'purchases' | 'users' | 'reports' | 'calendar' | 'novidades';
 type ThemeMode = 'dark' | 'light';
 
 interface TabItem {
@@ -40,6 +41,7 @@ const TABS: TabItem[] = [
   { id: 'projects', label: 'Projetos (Kanban)', icon: Building2, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
   { id: 'financial', label: 'Financeiro Caixa', icon: Landmark, roles: ['ADMIN', 'GERENTE'] },
   { id: 'stock', label: 'Estoque', icon: Package, roles: ['ADMIN', 'GERENTE', 'ESTOQUE', 'PROJETISTA'] },
+  { id: 'purchases', label: 'Compras', icon: ShoppingCart, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
   { id: 'reports', label: 'Relatórios', icon: FileBarChart, roles: ['ADMIN', 'GERENTE'] },
   { id: 'calendar', label: 'Agenda', icon: CalendarDays, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
   { id: 'novidades', label: 'Novidades', icon: Sparkles, roles: ['ADMIN', 'GERENTE', 'ESTOQUE', 'PROJETISTA'] },
@@ -360,6 +362,7 @@ export default function App() {
               {activeTab === 'projects' && <ProjectsView userRole={currentUser.role} />}
               {activeTab === 'financial' && <FinancialView userRole={currentUser.role} />}
               {activeTab === 'stock' && <StockView userRole={currentUser.role} />}
+              {activeTab === 'purchases' && <PurchasesView userRole={currentUser.role} />}
               {activeTab === 'reports' && <ReportsView userRole={currentUser.role} />}
               {activeTab === 'calendar' && <CalendarView userRole={currentUser.role} />}
               {activeTab === 'novidades' && <NovidadesView userRole={currentUser.role} />}

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -511,6 +511,39 @@ export const supplierService = {
 
   async remove(id: string): Promise<any> {
     const response = await api.delete(`/api/suppliers/${id}`);
+    return response.data;
+  },
+};
+
+// Purchase Services
+export const purchaseService = {
+  async list(params?: { status?: string; supplier_id?: string }): Promise<PurchaseOrder[]> {
+    const response = await api.get('/api/purchases', { params });
+    return response.data;
+  },
+
+  async get(id: string): Promise<PurchaseOrder> {
+    const response = await api.get(`/api/purchases/${id}`);
+    return response.data;
+  },
+
+  async create(data: any): Promise<PurchaseOrder> {
+    const response = await api.post('/api/purchases', data);
+    return response.data;
+  },
+
+  async update(id: string, data: any): Promise<PurchaseOrder> {
+    const response = await api.put(`/api/purchases/${id}`, data);
+    return response.data;
+  },
+
+  async remove(id: string): Promise<any> {
+    const response = await api.delete(`/api/purchases/${id}`);
+    return response.data;
+  },
+
+  async receive(id: string): Promise<PurchaseOrder> {
+    const response = await api.post(`/api/purchases/${id}/receive`);
     return response.data;
   },
 };

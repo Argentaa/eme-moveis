@@ -90,6 +90,38 @@ export interface Supplier {
   phone: string;
   email: string;
   created_at: string;
+  address: string;
+  category: string;
+  payment_terms: string;
+  avg_delivery_days: number | null;
+}
+
+export interface PurchaseItem {
+  id: string;
+  order_id: string;
+  stock_item_id: string | null;
+  material_name: string;
+  quantity: number;
+  unit_price: number;
+  received_qty: number;
+  position: number;
+  total: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  number: string;
+  status: string;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  request_date: string;
+  expected_date: string | null;
+  received_at: string | null;
+  notes: string;
+  created_by: string;
+  created_at: string;
+  items: PurchaseItem[];
+  total: number;
 }
 
 export interface BudgetGoal {
