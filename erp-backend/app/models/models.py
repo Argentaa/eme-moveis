@@ -689,6 +689,9 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Migrações de banco automáticas no deploy",
      "O sistema aplica as atualizações do banco de dados sozinho ao iniciar — novas versões entram no ar sem passos manuais.",
      "MELHORIA", "2026-09-15"),
+    ("Múltiplos funis de vendas",
+     "Crie quantos funis precisar (ex.: por segmento ou equipe) com etapas próprias — adicionar, renomear, reordenar e excluir etapas direto na tela; cada cliente participa de um funil específico.",
+     "NOVIDADE", "2026-09-15"),
 ]
 
 
