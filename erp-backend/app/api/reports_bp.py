@@ -20,7 +20,7 @@ from app.helpers import iso, num, parse_date
 from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
-    CalendarEvent, Client, FinancialRecord, Project, StockItem, StockMovement,
+    CalendarEvent, Client, FinancialRecord, Project, ServiceTicket, StockItem, StockMovement,
 )
 
 bp = Blueprint("reports", __name__)
@@ -757,6 +757,146 @@ def _build_lead_sources():
     }
 
 
+# ── Pós-venda (Tickets) ───────────────────────────────────────
+
+def _build_tickets():
+    from collections import Counter
+
+    VALID_TICKET_STATUSES = ["ABERTO", "EM_ANALISE", "AGENDADO", "EM_ATENDIMENTO", "RESOLVIDO", "ENCERRADO"]
+
+    status_filter = (request.args.get("status") or "").strip().upper() or None
+    client_id = (request.args.get("client_id") or "").strip() or None
+    df = parse_date(request.args.get("date_from"))
+    dt = parse_date(request.args.get("date_to"))
+    in_warranty_raw = request.args.get("in_warranty")
+    in_warranty = None
+    if in_warranty_raw is not None and str(in_warranty_raw).strip() != "":
+        low = str(in_warranty_raw).strip().lower()
+        if low in ("true", "1", "sim", "yes"):
+            in_warranty = True
+        elif low in ("false", "0", "nao", "não", "no"):
+            in_warranty = False
+        else:
+            in_warranty = None
+
+    rows = db.session.query(ServiceTicket).all()
+    # aplica filtros em python (similar a _build_lead_sources)
+    if status_filter:
+        rows = [t for t in rows if (t.status or "").upper() == status_filter]
+    if client_id:
+        rows = [t for t in rows if t.client_id == client_id]
+    if df:
+        rows = [t for t in rows if t.opened_at and t.opened_at.date() >= df]
+    if dt:
+        rows = [t for t in rows if t.opened_at and t.opened_at.date() <= dt]
+    if in_warranty is not None:
+        rows = [t for t in rows if t.in_warranty is in_warranty]
+
+    total = len(rows)
+    por_status = Counter((t.status or "").upper() for t in rows)
+    custo_total = sum(float(t.cost or 0) for t in rows)
+    custo_medio = (custo_total / total) if total else 0
+    dentro_garantia = sum(1 for t in rows if t.in_warranty is True)
+    fora_garantia = sum(1 for t in rows if t.in_warranty is False)
+
+    # tempo medio de resolucao
+    tempos = []
+    for t in rows:
+        if t.resolved_at and t.opened_at:
+            try:
+                delta = t.resolved_at - t.opened_at
+                dias = delta.total_seconds() / 86400
+                tempos.append(dias)
+            except Exception:
+                continue
+    tempo_medio = (sum(tempos) / len(tempos)) if tempos else None
+
+    # causa mais frequente por status
+    causa_by_status = {}
+    for st in VALID_TICKET_STATUSES:
+        filtered = [t for t in rows if (t.status or "").upper() == st]
+        if not filtered:
+            continue
+        c_counter = Counter(((t.cause or "").strip() or "Não informado") for t in filtered)
+        # pega mais comum que nao seja vazio, mas se todos forem "Não informado" mantém
+        most, _ = c_counter.most_common(1)[0]
+        causa_by_status[st] = most
+
+    # causa geral top (para referencia)
+    causa_counts = Counter(((t.cause or "").strip() or "Não informado") for t in rows)
+
+    # monta summary
+    em_atendimento_qtd = por_status.get("AGENDADO", 0) + por_status.get("EM_ATENDIMENTO", 0)
+    summary = [
+        {"label": "Total de Chamados", "value": str(total), "tone": "neutral"},
+        {"label": "Abertos", "value": str(por_status.get("ABERTO", 0)), "tone": "neutral"},
+        {"label": "Em Atendimento", "value": str(em_atendimento_qtd), "tone": "neutral"},
+        {"label": "Resolvidos", "value": str(por_status.get("RESOLVIDO", 0)), "tone": "positive"},
+        {"label": "Encerrados", "value": str(por_status.get("ENCERRADO", 0)), "tone": "neutral"},
+        {"label": "Custo Total", "value": _fmt_brl(custo_total), "tone": "negative" if custo_total > 0 else "neutral"},
+        {"label": "Custo Médio", "value": _fmt_brl(custo_medio), "tone": "neutral"},
+        {"label": "Dentro da Garantia", "value": str(dentro_garantia), "tone": "positive"},
+        {"label": "Fora da Garantia", "value": str(fora_garantia), "tone": "negative"},
+        {"label": "Tempo Médio de Resolução", "value": f"{tempo_medio:.1f} dias" if tempo_medio is not None else "-", "tone": "neutral"},
+    ]
+
+    columns = [
+        {"key": "status", "label": "Status"},
+        {"key": "count", "label": "Qtd"},
+        {"key": "percentual", "label": "Percentual"},
+        {"key": "custo", "label": "Custo"},
+        {"key": "causa", "label": "Causa Mais Frequente"},
+    ]
+
+    rows_out = []
+    for st in VALID_TICKET_STATUSES:
+        cnt = por_status.get(st, 0)
+        if cnt == 0 and total > 0:
+            # só inclui status com ocorrências quando há dados; se total==0 inclui vazio?
+            continue
+        if total == 0:
+            # sem dados: cria linhas vazias? melhor não criar nenhuma
+            continue
+        pct = (cnt / total * 100) if total else 0
+        custo_status = sum(float(t.cost or 0) for t in rows if (t.status or "").upper() == st)
+        causa = causa_by_status.get(st, "-")
+        rows_out.append({
+            "status": st,
+            "count": str(cnt),
+            "percentual": f"{pct:.1f}%".replace(".", ","),
+            "custo": _fmt_brl(custo_status),
+            "causa": causa,
+        })
+
+    # Se não houver agregação (ex: filtro status específico), mas ainda houver rows,
+    # garantir que causa Dobradiça/descricao apareça: já coberto por causa_by_status.
+    # Fallback: se rows_out vazio mas total>0 (status filtrado desconhecido), criar linhas por ticket
+    if not rows_out and total > 0:
+        for t in rows:
+            rows_out.append({
+                "status": t.status or "-",
+                "count": "1",
+                "percentual": "100,0%",
+                "custo": _fmt_brl(t.cost),
+                "causa": (t.cause or "").strip() or t.description or "-",
+            })
+
+    return {
+        "title": "Relatório de Pós-venda - Chamados",
+        "generated_at": _now_iso(),
+        "filters_applied": {
+            "status": status_filter,
+            "client_id": client_id,
+            "date_from": iso(df),
+            "date_to": iso(dt),
+            "in_warranty": in_warranty,
+        },
+        "summary": summary,
+        "columns": columns,
+        "rows": rows_out,
+    }
+
+
 _BUILDERS = {
     "financial": (_build_financial, "relatorio-financeiro"),
     "cash-flow": (_build_cash_flow, "fluxo-caixa-mensal"),
@@ -765,6 +905,7 @@ _BUILDERS = {
     "projects": (_build_projects, "relatorio-projetos"),
     "stock": (_build_stock, "relatorio-estoque"),
     "lead-sources": (_build_lead_sources, "relatorio-leads-fontes"),
+    "tickets": (_build_tickets, "relatorio-tickets"),
 }
 
 
@@ -855,3 +996,15 @@ def r_cash_flow():
 @token_required()
 def r_cash_flow_export():
     return _serve("cash-flow")
+
+
+@bp.get("/api/reports/tickets")
+@token_required()
+def r_tickets():
+    return _serve("tickets")
+
+
+@bp.get("/api/reports/tickets/export")
+@token_required()
+def r_tickets_export():
+    return _serve("tickets")

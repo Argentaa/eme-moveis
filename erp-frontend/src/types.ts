@@ -182,7 +182,7 @@ export interface StockMovement {
 
 // ── Relatórios ──────────────────────────────────────────────────
 
-export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow';
+export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'tickets';
 
 export interface ReportColumn {
   key: string;

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   FileBarChart, Landmark, Users, Building2, Package, Filter, RefreshCw,
-  FileText, FileSpreadsheet, Search, Loader2, Target
+  FileText, FileSpreadsheet, Search, Loader2, Target, Wrench
 } from 'lucide-react';
 import { reportService, clientService, projectService, stockService, getApiErrorMessage } from '../services/api';
 import { ReportArea, ReportResult, Client, Project, Category } from '../types';
@@ -18,6 +18,15 @@ const PROJECT_STATUSES = [
   { value: 'CONCLUIDO', label: 'Concluído' },
 ];
 
+const TICKET_STATUSES = [
+  { value: 'ABERTO', label: 'Aberto' },
+  { value: 'EM_ANALISE', label: 'Em Análise' },
+  { value: 'AGENDADO', label: 'Agendado' },
+  { value: 'EM_ATENDIMENTO', label: 'Em Atendimento' },
+  { value: 'RESOLVIDO', label: 'Resolvido' },
+  { value: 'ENCERRADO', label: 'Encerrado' },
+];
+
 const AREAS: { id: ReportArea; label: string; icon: React.ComponentType<any>; description: string }[] = [
   { id: 'financial', label: 'Financeiro', icon: Landmark, description: 'Entradas, saídas e fluxo de caixa' },
   { id: 'clients', label: 'Clientes', icon: Users, description: 'Cadastro e histórico de clientes' },
@@ -26,6 +35,7 @@ const AREAS: { id: ReportArea; label: string; icon: React.ComponentType<any>; de
   { id: 'dre', label: 'DRE', icon: Landmark, description: 'Demonstrativo de Resultado do Exercício' },
   { id: 'crm', label: 'CRM', icon: Users, description: 'Negociações, conversão, ticket médio e fluxo de caixa' },
   { id: 'lead-sources', label: 'Origem dos Leads', icon: Target, description: 'Leads por fonte ou campanha com conversão e valores' },
+  { id: 'tickets', label: 'Pós-venda', icon: Wrench, description: 'Chamados, causas, garantia e custos' },
 ];
 
 const TONE_CLASSES: Record<string, string> = {
@@ -776,6 +786,36 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
                 </FilterField>
               </div>
             )}
+          </div>
+        )}
+
+        {activeArea === 'tickets' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <FilterField label="Status">
+              <select value={(filters.status as string) || ''} onChange={e => updateFilter('status', e.target.value)} className={inputClass}>
+                <option value="">Todos</option>
+                {TICKET_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+            </FilterField>
+            <FilterField label="Cliente">
+              <select value={(filters.client_id as string) || ''} onChange={e => updateFilter('client_id', e.target.value)} className={inputClass}>
+                <option value="">Todos</option>
+                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </FilterField>
+            <FilterField label="De (abertura)">
+              <input type="date" value={(filters.date_from as string) || ''} onChange={e => updateFilter('date_from', e.target.value)} className={inputClass} />
+            </FilterField>
+            <FilterField label="Até (abertura)">
+              <input type="date" value={(filters.date_to as string) || ''} onChange={e => updateFilter('date_to', e.target.value)} className={inputClass} />
+            </FilterField>
+            <FilterField label="Garantia">
+              <select value={(filters.in_warranty as string) || ''} onChange={e => updateFilter('in_warranty', e.target.value)} className={inputClass}>
+                <option value="">Todos</option>
+                <option value="true">Dentro da Garantia</option>
+                <option value="false">Fora da Garantia</option>
+              </select>
+            </FilterField>
           </div>
         )}
 

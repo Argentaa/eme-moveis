@@ -1536,3 +1536,86 @@ def test_ticket_validations(client):
     assert r5.status_code == 400, r5.get_data(as_text=True)
     # GET inexistente
     assert client.get("/api/tickets/id-inexistente-xyz", headers=h).status_code == 404
+
+
+def test_report_tickets(client):
+    h = _login(client)
+    # cria Client via API
+    r_client = client.post("/api/clients", headers=h, json={"name": "Cliente Report Tickets", "cpf_cnpj": "00000000003"})
+    assert r_client.status_code == 201, r_client.get_data(as_text=True)
+    cid = r_client.get_json()["id"]
+
+    # ticket1 ABERTO com cost 100 in_warranty True cause Dobradiça description Porta desalinhou
+    r1 = client.post("/api/tickets", headers=h, json={"client_id": cid, "description": "Porta desalinhou", "cost": 100, "in_warranty": True, "cause": "Dobradiça", "status": "ABERTO"})
+    assert r1.status_code == 201, r1.get_data(as_text=True)
+    t1 = r1.get_json()
+    assert t1["status"] == "ABERTO"
+
+    # ticket2 RESOLVIDO com cost 250 in_warranty False cause Puxador (ao criar ja RESOLVIDO deve preencher resolved_at auto)
+    r2 = client.post("/api/tickets", headers=h, json={"client_id": cid, "description": "Gaveta emperrada", "cost": 250, "in_warranty": False, "cause": "Puxador", "status": "RESOLVIDO"})
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+    t2 = r2.get_json()
+    assert t2["status"] == "RESOLVIDO"
+    assert t2["resolved_at"] is not None
+
+    # ticket extra ENCERRADO
+    r3 = client.post("/api/tickets", headers=h, json={"client_id": cid, "description": "Reparo finalizado", "cost": 0, "cause": "Outro", "status": "ENCERRADO"})
+    assert r3.status_code == 201, r3.get_data(as_text=True)
+    assert r3.get_json()["status"] == "ENCERRADO"
+
+    # GET /api/reports/tickets
+    r_rep = client.get("/api/reports/tickets", headers=h)
+    assert r_rep.status_code == 200, r_rep.get_data(as_text=True)
+    body = r_rep.get_json()
+    title = body.get("title", "")
+    assert "Tickets" in title or "Pos-venda" in title or "Pós-venda" in title, f"title unexpected: {title}"
+
+    summary = body.get("summary", [])
+    def find(label_substr):
+        for s in summary:
+            if label_substr.lower() in s.get("label", "").lower():
+                return s
+        return None
+    total_item = find("Total de Chamados")
+    assert total_item is not None, f"summary sem Total de Chamados: {summary}"
+    assert total_item["value"] == "3"
+    abertos_item = find("Abertos")
+    assert abertos_item is not None
+    assert abertos_item["value"] == "1"
+    resolvidos_item = find("Resolvidos")
+    assert resolvidos_item is not None
+    encerrados_item = find("Encerrados")
+    assert encerrados_item is not None
+    # Custo Total igual 350
+    custo_total_item = find("Custo Total")
+    assert custo_total_item is not None
+    val = custo_total_item["value"]
+    # aceita R$ 350,00 ou 350
+    assert "350" in val, f"Custo Total: {val}"
+    custo_medio_item = find("Custo Medio") or find("Custo Médio")
+    assert custo_medio_item is not None
+    dentro_item = find("Dentro")
+    assert dentro_item is not None
+    assert dentro_item["value"] == "1"
+    fora_item = find("Fora")
+    assert fora_item is not None
+    assert fora_item["value"] == "1"
+    tempo_item = find("Tempo Medio") or find("Tempo Médio")
+    assert tempo_item is not None
+    columns = body.get("columns", [])
+    assert len(columns) > 0
+    keys = [c.get("key") for c in columns]
+    assert any(k in keys for k in ["status", "count", "causa", "custo", "description", "group"]), f"columns keys: {keys}"
+    rows = body.get("rows", [])
+    assert len(rows) > 0, "rows vazio"
+    rows_str = str(rows)
+    assert "Porta desalinhou" in rows_str or "Dobradiça" in rows_str, f"rows nao contem descricao/causa esperada: {rows}"
+    # export (verifica que nao 404) — formato via ?format=json deve retornar json
+    r_json = client.get("/api/reports/tickets?format=json", headers=h)
+    assert r_json.status_code == 200, r_json.get_data(as_text=True)
+    assert r_json.is_json
+    for fmt in ["pdf", "xlsx"]:
+        r_exp = client.get(f"/api/reports/tickets/export?format={fmt}", headers=h)
+        assert r_exp.status_code == 200, f"export {fmt} failed: {r_exp.get_data(as_text=True)[:200]}"
+        r_exp2 = client.get(f"/api/reports/tickets?format={fmt}", headers=h)
+        assert r_exp2.status_code == 200
