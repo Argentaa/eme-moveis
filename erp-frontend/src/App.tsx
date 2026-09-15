@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Building2, Layers, Users, Landmark, Package, Shield, FileBarChart, CalendarDays,
+  Building2, Layers, Users, Landmark, Package, Shield, FileBarChart, CalendarDays, Sparkles,
   Power, Menu, X, User, ArrowRight, HelpCircle, Eye, EyeOff, Moon, Sun
 } from 'lucide-react';
 
@@ -22,8 +22,9 @@ import StockView from './components/StockView';
 import UsersView from './components/UsersView';
 import ReportsView from './components/ReportsView';
 import CalendarView from './components/CalendarView';
+import NovidadesView from './components/NovidadesView';
 
-type TabId = 'dashboard' | 'clients' | 'projects' | 'financial' | 'stock' | 'users' | 'reports' | 'calendar';
+type TabId = 'dashboard' | 'clients' | 'projects' | 'financial' | 'stock' | 'users' | 'reports' | 'calendar' | 'novidades';
 type ThemeMode = 'dark' | 'light';
 
 interface TabItem {
@@ -41,6 +42,7 @@ const TABS: TabItem[] = [
   { id: 'stock', label: 'Estoque', icon: Package, roles: ['ADMIN', 'GERENTE', 'ESTOQUE', 'PROJETISTA'] },
   { id: 'reports', label: 'Relatórios', icon: FileBarChart, roles: ['ADMIN', 'GERENTE'] },
   { id: 'calendar', label: 'Agenda', icon: CalendarDays, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
+  { id: 'novidades', label: 'Novidades', icon: Sparkles, roles: ['ADMIN', 'GERENTE', 'ESTOQUE', 'PROJETISTA'] },
   { id: 'users', label: 'Acessos & Ti', icon: Shield, roles: ['ADMIN'] },
 ];
 
@@ -360,6 +362,7 @@ export default function App() {
               {activeTab === 'stock' && <StockView userRole={currentUser.role} />}
               {activeTab === 'reports' && <ReportsView userRole={currentUser.role} />}
               {activeTab === 'calendar' && <CalendarView userRole={currentUser.role} />}
+              {activeTab === 'novidades' && <NovidadesView userRole={currentUser.role} />}
               {activeTab === 'users' && <UsersView currentUser={currentUser} />}
             </motion.div>
           </AnimatePresence>

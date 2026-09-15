@@ -183,3 +183,13 @@ export interface ClientDetail {
   attachments: Attachment[];
   items: NegotiationItem[];
 }
+
+export interface ChangelogEntry {
+  id: string;
+  title: string;
+  content: string;
+  category: 'GERAL' | 'NOVIDADE' | 'MELHORIA' | 'CORRECAO';
+  entry_date: string;
+  created_by: string;
+  created_at: string;
+}

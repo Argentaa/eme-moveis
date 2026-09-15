@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -591,6 +591,29 @@ export const calendarService = {
 
   async generateAlerts(): Promise<any> {
     const response = await api.post('/api/calendar/notifications/generate-alerts');
+    return response.data;
+  },
+};
+
+// Changelog Services
+export const changelogService = {
+  async list(): Promise<ChangelogEntry[]> {
+    const response = await api.get('/api/changelog');
+    return response.data;
+  },
+
+  async create(data: { title: string; content?: string; category?: string; entry_date?: string }): Promise<ChangelogEntry> {
+    const response = await api.post('/api/changelog', data);
+    return response.data;
+  },
+
+  async update(id: string, data: { title?: string; content?: string; category?: string; entry_date?: string }): Promise<ChangelogEntry> {
+    const response = await api.put(`/api/changelog/${id}`, data);
+    return response.data;
+  },
+
+  async remove(id: string): Promise<any> {
+    const response = await api.delete(`/api/changelog/${id}`);
     return response.data;
   },
 };
