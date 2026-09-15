@@ -197,5 +197,10 @@ def generate_alerts():
             db.session.add(Notification(title=f"Estoque baixo: {item.name}", message=f"O item {item.name} atingiu o estoque minimo.", type="ESTOQUE_BAIXO"))
             created += 1
             break
+    from app.models.models import ServiceTicket
+    pending = db.session.query(ServiceTicket).filter(ServiceTicket.status != 'ENCERRADO').count()
+    if pending > 0 and not exists('CHAMADO_PENDENTE'):
+        db.session.add(Notification(title=f'{pending} chamados pendentes', message=f'Existem {pending} chamados de assistência pendentes.', type='CHAMADO_PENDENTE'))
+        created += 1
     db.session.commit()
     return jsonify({"ok": True, "generated": created})

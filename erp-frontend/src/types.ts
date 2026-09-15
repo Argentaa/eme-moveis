@@ -295,3 +295,38 @@ export interface Funnel {
   created_at: string;
   columns: FunnelColumn[];
 }
+
+export interface TicketPhoto {
+  id: string;
+  ticket_id: string;
+  filename: string;
+  mime_type: string;
+  size: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ServiceTicket {
+  id: string;
+  number: string;
+  client_id: string;
+  client_name: string | null;
+  project_id: string | null;
+  project_title: string | null;
+  description: string;
+  status: string;
+  cost: number | null;
+  cause: string;
+  solution: string;
+  in_warranty: boolean | null;
+  assigned_user_id: string | null;
+  assigned_user_name: string | null;
+  opened_at: string;
+  scheduled_at: string | null;
+  resolved_at: string | null;
+  closed_at: string | null;
+  calendar_event_id: string | null;
+  notes: string;
+  created_by: string;
+  photos: TicketPhoto[];
+}

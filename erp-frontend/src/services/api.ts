@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -489,6 +489,46 @@ export const reportService = {
     if (dateTo) params.date_to = dateTo;
     const response = await api.get('/api/reports/crm', { params });
     return response.data;
+  },
+};
+
+// Ticket Services
+export const ticketService = {
+  async list(params?: { status?: string; client_id?: string }): Promise<ServiceTicket[]> {
+    const response = await api.get('/api/tickets', { params });
+    return response.data;
+  },
+  async get(id: string): Promise<ServiceTicket> {
+    const response = await api.get('/api/tickets/' + id);
+    return response.data;
+  },
+  async create(data: any): Promise<ServiceTicket> {
+    const response = await api.post('/api/tickets', data);
+    return response.data;
+  },
+  async update(id: string, data: any): Promise<ServiceTicket> {
+    const response = await api.put('/api/tickets/' + id, data);
+    return response.data;
+  },
+  async remove(id: string): Promise<any> {
+    const response = await api.delete('/api/tickets/' + id);
+    return response.data;
+  },
+  async uploadPhoto(ticketId: string, file: File): Promise<any> {
+    const fd = new FormData();
+    fd.append('file', file);
+    const response = await api.post('/api/tickets/' + ticketId + '/photos', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+  async deletePhoto(photoId: string): Promise<any> {
+    const response = await api.delete('/api/tickets/photos/' + photoId);
+    return response.data;
+  },
+  async downloadPhoto(photoId: string): Promise<any> {
+    const response = await api.get('/api/tickets/photos/' + photoId + '/download', { responseType: 'blob' });
+    return response;
   },
 };
 

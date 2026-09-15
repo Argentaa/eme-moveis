@@ -592,7 +592,15 @@ def test_changelog_crud(client):
     client.post("/api/changelog", headers=h, json={"title": "Correção de anexos", "content": "Filename truncado", "category": "CORRECAO", "entry_date": "2026-09-14"})
     lst = client.get("/api/changelog", headers=h).get_json()
     assert len(lst) == len(base) + 2
-    assert lst[0]["title"] == "Novo: Fonte do Lead"  # ordena por entry_date desc
+    # ordena por entry_date desc; seed pode conter datas futuras, então verifica ordem relativa dos novos
+    idx_fonte = next((i for i, e in enumerate(lst) if e["title"] == "Novo: Fonte do Lead"), None)
+    idx_anexos = next((i for i, e in enumerate(lst) if e["title"] == "Correção de anexos"), None)
+    assert idx_fonte is not None and idx_anexos is not None
+    assert idx_fonte < idx_anexos  # 2026-09-15 vem antes de 2026-09-14
+    # verifica que lista está ordenada por entry_date desc (não crescente)
+    from datetime import date as _date
+    dates = [e["entry_date"] for e in lst]
+    assert dates == sorted(dates, reverse=True)
     r2 = client.put("/api/changelog/" + eid, headers=h, json={"title": "Novo: Fonte + Campanha"})
     assert r2.status_code == 200 and r2.get_json()["title"] == "Novo: Fonte + Campanha"
     assert client.delete("/api/changelog/" + eid, headers=h).status_code == 200

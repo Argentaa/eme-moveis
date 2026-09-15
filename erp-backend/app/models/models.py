@@ -830,6 +830,12 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Fornecedores com categoria, condições e prazo médio",
      "Cadastro com endereço, categoria (MDF, Ferragens...), condições de pagamento e prazo médio de entrega — filtros por categoria e busca por nome.",
      "MELHORIA", "2026-09-15"),
+    ("Pós-venda: chamados de assistência técnica",
+     "Abertura de chamados com número automático CH-AAAA-0001, status completo (Aberto → Em análise → Agendado → Em atendimento → Resolvido → Encerrado), fotos, garantia, custo, causa e solução. Ao agendar, cria evento na Agenda automaticamente.",
+     "NOVIDADE", "2026-09-16"),
+    ("Relatório de pós-venda com indicadores",
+     "Chamados por status, custo total e médio, dentro vs fora da garantia e tempo médio de resolução, com filtros e exportação em PDF/Excel.",
+     "NOVIDADE", "2026-09-16"),
 ]
 
 
