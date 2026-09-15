@@ -576,3 +576,20 @@ def test_lead_sources_report(client):
     rows2 = r2.get_json()["rows"]
     assert any(row["group"] == "Camp Z" for row in rows2)
     assert any(row["group"] == "Sem campanha" for row in rows2)
+
+
+def test_changelog_crud(client):
+    h = _login(client)
+    r1 = client.post("/api/changelog", headers=h, json={"title": "Novo: Fonte do Lead", "content": "Select de fonte agora é personalizável", "category": "MELHORIA", "entry_date": "2026-09-15"})
+    assert r1.status_code == 201, r1.get_data(as_text=True)
+    eid = r1.get_json()["id"]
+    client.post("/api/changelog", headers=h, json={"title": "Correção de anexos", "content": "Filename truncado", "category": "CORRECAO", "entry_date": "2026-09-14"})
+    lst = client.get("/api/changelog", headers=h).get_json()
+    assert len(lst) == 2
+    assert lst[0]["title"] == "Novo: Fonte do Lead"  # ordena por entry_date desc
+    r2 = client.put("/api/changelog/" + eid, headers=h, json={"title": "Novo: Fonte + Campanha"})
+    assert r2.status_code == 200 and r2.get_json()["title"] == "Novo: Fonte + Campanha"
+    assert client.delete("/api/changelog/" + eid, headers=h).status_code == 200
+    assert client.delete("/api/changelog/" + eid, headers=h).status_code == 404
+    assert client.post("/api/changelog", headers=h, json={"title": "   "}).status_code == 400
+    assert client.post("/api/changelog", json={"title": "sem token"}).status_code == 401

@@ -463,6 +463,22 @@ class RecurringFinancial(db.Model):
         }
 
 
+class ChangelogEntry(db.Model):
+    __tablename__ = "changelog_entries"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    title = db.Column(String(200), nullable=False)
+    content = db.Column(Text, nullable=False, default="")
+    category = db.Column(String(40), nullable=False, default="GERAL")  # GERAL | NOVIDADE | MELHORIA | CORRECAO
+    entry_date = db.Column(Date, nullable=False, default=lambda: utcnow().date())
+    created_by = db.Column(String(80), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {"id": self.id, "title": self.title, "content": self.content or "",
+                "category": self.category, "entry_date": iso(self.entry_date),
+                "created_by": self.created_by or "", "created_at": iso(self.created_at)}
+
+
 DEFAULT_FUNNEL_COLUMNS = [
     # CRM (keys em MAIUSCULO = formato do dump original MySQL)
     ("PROSPECCAO", "Prospecção", "CRM"),
