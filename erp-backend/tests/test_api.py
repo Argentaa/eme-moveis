@@ -583,12 +583,15 @@ def test_lead_sources_report(client):
 
 def test_changelog_crud(client):
     h = _login(client)
+    base = client.get("/api/changelog", headers=h).get_json()
+    assert len(base) >= 10  # seed de novidades vem populado com o changelog das entregas
+    assert any("Novidades" in e["title"] for e in base)
     r1 = client.post("/api/changelog", headers=h, json={"title": "Novo: Fonte do Lead", "content": "Select de fonte agora é personalizável", "category": "MELHORIA", "entry_date": "2026-09-15"})
     assert r1.status_code == 201, r1.get_data(as_text=True)
     eid = r1.get_json()["id"]
     client.post("/api/changelog", headers=h, json={"title": "Correção de anexos", "content": "Filename truncado", "category": "CORRECAO", "entry_date": "2026-09-14"})
     lst = client.get("/api/changelog", headers=h).get_json()
-    assert len(lst) == 2
+    assert len(lst) == len(base) + 2
     assert lst[0]["title"] == "Novo: Fonte do Lead"  # ordena por entry_date desc
     r2 = client.put("/api/changelog/" + eid, headers=h, json={"title": "Novo: Fonte + Campanha"})
     assert r2.status_code == 200 and r2.get_json()["title"] == "Novo: Fonte + Campanha"

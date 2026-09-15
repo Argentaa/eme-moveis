@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, Numeric, String, Text, Time
 from sqlalchemy import ForeignKey, UniqueConstraint
 
-from app.helpers import iso, num
+from app.helpers import iso, num, parse_date
 from app.extensions import db
 
 
@@ -589,4 +589,60 @@ def ensure_default_campaigns():
     for name in DEFAULT_CAMPAIGNS:
         if not db.session.query(Campaign).filter_by(name=name).first():
             db.session.add(Campaign(name=name))
+    db.session.commit()
+
+
+# Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
+# entrega — titulo eh a chave de idempotencia (nao duplica no boot).
+DEFAULT_CHANGELOG_ENTRIES = [
+    ("CRM: detalhamento completo do cliente",
+     "Clicar em um card abre o modal do cliente com 5 abas: Visão Geral, Histórico, Tarefas, Anexos e Produtos.",
+     "NOVIDADE", "2026-09-15"),
+    ("Histórico de interações do cliente",
+     "Conversas, propostas e mudanças de etapa ou valor ficam registradas na linha do tempo do cliente — automático quando algo muda e manual quando quiser anotar.",
+     "NOVIDADE", "2026-09-15"),
+    ("Tarefas e lembretes por cliente",
+     "Agende retornos com assunto, responsável, tipo (Ligação, Reunião, Visita, WhatsApp) e data/hora — aparecem na Agenda e no Painel Geral para evitar esquecimentos.",
+     "NOVIDADE", "2026-09-15"),
+    ("Anexos do cliente",
+     "Plantas, contratos e propostas em PDF anexados direto no card do cliente, com download seguro. Os arquivos persistem entre atualizações.",
+     "NOVIDADE", "2026-09-15"),
+    ("Produtos/serviços por negociação",
+     "Adicione ambientes e itens (quantidade × valor): o total da negociação é calculado automaticamente e alimenta o card e as colunas do Kanban.",
+     "NOVIDADE", "2026-09-15"),
+    ("Fontes de lead e campanhas personalizáveis",
+     "Cadastre de onde o cliente veio (Indicação de Arquiteto, Parceria com Construtora, Imobiliária, Instagram...) e vincule campanhas — opções novas podem ser criadas na hora.",
+     "NOVIDADE", "2026-09-15"),
+    ("Relatório de Origem dos Leads",
+     "Leads por fonte ou campanha com taxa de conversão e valores, exportável em PDF e Excel.",
+     "NOVIDADE", "2026-09-15"),
+    ("Registro de Novidades",
+     "Esta página: o histórico de atualizações do sistema em cards, por categoria (Novidade, Melhoria, Correção).",
+     "NOVIDADE", "2026-09-15"),
+    ("Fluxo de caixa mensal e DRE em tabela",
+     "Visão financeira com entradas e saídas mês a mês, saldo acumulado e gráfico; DRE com análise mensal, trimestral, semestral e anual — ambos exportáveis.",
+     "NOVIDADE", "2026-09-15"),
+    ("Planejamento orçamentário",
+     "Metas por categoria e ano/mês com comparação orçado × realizado e percentual de atingimento.",
+     "NOVIDADE", "2026-09-15"),
+    ("Campos contábeis nos lançamentos",
+     "Número e data do documento, tipo (Boleto, Cheque, Débito Automático, Dinheiro, Fatura, PIX), banco, plano de contas, descrição detalhada, nº de parcelas e despesa recorrente.",
+     "MELHORIA", "2026-09-15"),
+    ("Cadastro de fornecedores",
+     "Fornecedores cadastráveis e vinculáveis aos lançamentos, com criação rápida direto no formulário.",
+     "MELHORIA", "2026-09-15"),
+    ("Migrações de banco automáticas no deploy",
+     "O sistema aplica as atualizações do banco de dados sozinho ao iniciar — novas versões entram no ar sem passos manuais.",
+     "MELHORIA", "2026-09-15"),
+]
+
+
+def ensure_default_changelog():
+    for title, content, category, entry_date in DEFAULT_CHANGELOG_ENTRIES:
+        exists = db.session.query(ChangelogEntry).filter_by(title=title).first()
+        if not exists:
+            db.session.add(ChangelogEntry(
+                title=title, content=content, category=category,
+                entry_date=parse_date(entry_date), created_by="Donna",
+            ))
     db.session.commit()
