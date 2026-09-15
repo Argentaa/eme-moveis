@@ -749,6 +749,12 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Múltiplos funis de vendas",
      "Crie quantos funis precisar (ex.: por segmento ou equipe) com etapas próprias — adicionar, renomear, reordenar e excluir etapas direto na tela; cada cliente participa de um funil específico.",
      "NOVIDADE", "2026-09-15"),
+    ("Compras: solicitação, pedido e recebimento com entrada automática no estoque",
+     "Solicitações com status (Solicitada → Cotando → Aprovada → Comprada → Recebida), itens com vínculo ao estoque e número automático PC-AAAA-0001. Ao marcar como Recebida, o estoque é atualizado e o movimento fica no histórico.",
+     "NOVIDADE", "2026-09-15"),
+    ("Fornecedores com categoria, condições e prazo médio",
+     "Cadastro com endereço, categoria (MDF, Ferragens...), condições de pagamento e prazo médio de entrega — filtros por categoria e busca por nome.",
+     "MELHORIA", "2026-09-15"),
 ]
 
 
