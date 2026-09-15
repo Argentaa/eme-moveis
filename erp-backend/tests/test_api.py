@@ -202,7 +202,10 @@ def test_reports_e_funnel(client):
         assert "rows" in r.get_json()
     r = client.get("/api/reports/dre", headers=h)
     assert r.status_code == 200
-    assert "resultado_liquido" in r.get_json()
+    assert "rows" in r.get_json()
+    r = client.get("/api/reports/cash-flow", headers=h)
+    assert r.status_code == 200
+    assert "rows" in r.get_json()
     r = client.get("/api/reports/crm", headers=h)
     assert r.status_code == 200
     assert "negociacoes" in r.get_json()
@@ -641,3 +644,48 @@ def test_financial_with_supplier(client):
     row = r.get_json()
     assert row["supplier_id"] == sid
     assert row["supplier_name"] == "Fornecedor F1"
+
+
+def test_cash_flow_report(client):
+    h = _login(client)
+    base = [
+        {"description": "Venda A", "type": "ENTRADA", "amount": 1000, "date": "2026-01-15", "status": "PAGO"},
+        {"description": "Venda B", "type": "ENTRADA", "amount": 2500, "date": "2026-01-20", "status": "PENDENTE"},
+        {"description": "Aluguel", "type": "SAIDA", "amount": 300, "date": "2026-01-05", "status": "PAGO"},
+        {"description": "Material", "type": "SAIDA", "amount": 200, "date": "2026-02-10", "status": "PAGO"},
+        {"description": "Fora do ano", "type": "ENTRADA", "amount": 999, "date": "2025-12-31", "status": "PAGO"},
+    ]
+    for p in base:
+        assert client.post("/api/financial", headers=h, json=p).status_code == 201
+    r = client.get("/api/reports/cash-flow", headers=h, query_string={"year": 2026})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["title"] == "Fluxo de Caixa Mensal"
+    jan = next(row for row in body["rows"] if row["month"] == "1 - Janeiro")
+    fev = next(row for row in body["rows"] if row["month"] == "2 - Fevereiro")
+    assert jan["income"] == "R$ 1.000,00" and jan["outcome"] == "R$ 300,00" and jan["balance"] == "R$ 700,00"
+    assert jan["accumulated"] == "R$ 700,00"
+    assert fev["income"] == "R$ 0,00" and fev["outcome"] == "R$ 200,00" and fev["accumulated"] == "R$ 500,00"
+    assert sum(1 for row in body["rows"] if "R$ 0,00" in row["income"]) == 11  # 12 meses, so janeiro tem entrada PAGO
+
+
+def test_dre_table_report(client):
+    h = _login(client)
+    items = [
+        {"description": "Venda C", "type": "ENTRADA", "amount": 6000, "date": "2026-03-10", "status": "PAGO"},
+        {"description": "Venda D", "type": "ENTRADA", "amount": 4000, "date": "2026-07-10", "status": "PAGO"},
+        {"description": "Pendente X", "type": "ENTRADA", "amount": 5000, "date": "2026-05-10", "status": "PENDENTE"},
+        {"description": "Custo", "type": "SAIDA", "amount": 3000, "date": "2026-03-20", "status": "PAGO"},
+        {"description": "Custo 2", "type": "SAIDA", "amount": 1000, "date": "2026-07-20", "status": "PAGO"},
+    ]
+    for p in items:
+        assert client.post("/api/financial", headers=h, json=p).status_code == 201
+    r = client.get("/api/reports/dre", headers=h, query_string={"year": 2026, "period": "semestral"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["title"] == "DRE - Demonstrativo do Resultado"
+    s1 = next(row for row in body["rows"] if row["period"] == "1º Semestre")
+    s2 = next(row for row in body["rows"] if row["period"] == "2º Semestre")
+    assert s1["income"] == "R$ 6.000,00" and s1["outcome"] == "R$ 3.000,00" and s1["result"] == "R$ 3.000,00"
+    assert s2["income"] == "R$ 4.000,00" and s2["outcome"] == "R$ 1.000,00" and s2["result"] == "R$ 3.000,00"
+    assert s2["accumulated"] == "R$ 6.000,00"

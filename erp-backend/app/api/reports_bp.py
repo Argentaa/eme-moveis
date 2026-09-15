@@ -1,10 +1,10 @@
 """GET /api/reports/* (+/export e ?format=pdf|xlsx).
 
 Contratos replicados do FastAPI original:
-- financial/clients/projects/stock -> ReportResponse
+- financial/clients/projects/stock/cash-flow/dre -> ReportResponse
   {title, generated_at, filters_applied, summary[], columns[], rows[]}
-- dre -> {periodo, receitas{itens,total}, despesas{...}, resultado_liquido,
-  margem_liquida, pendentes{receitas,despesas}}
+- dre -> tabela por periodo (mensal|trimestral|semestral|anual)
+- cash-flow -> fluxo de caixa mensal (12 meses do ano)
 - crm -> {periodo, negociacoes{...}, conversao{...}, ticket_medio{...},
   fluxo_caixa[], fontes_lead[]}
 - lead-sources -> ReportResponse (origem dos leads: fonte/campanha, conversao e valores)
@@ -432,54 +432,175 @@ def _build_stock_movements():
 
 # ── DRE ───────────────────────────────────────────────────────
 
+MONTH_LABELS = [
+    "1 - Janeiro", "2 - Fevereiro", "3 - Marco", "4 - Abril", "5 - Maio", "6 - Junho",
+    "7 - Julho", "8 - Agosto", "9 - Setembro", "10 - Outubro", "11 - Novembro", "12 - Dezembro",
+]
+
+
 def _build_dre():
     today = date.today()
     try:
-        m = int(request.args.get("month") or today.month)
-        y = int(request.args.get("year") or today.year)
+        year = int(request.args.get("year") or today.year)
     except (TypeError, ValueError):
-        m, y = today.month, today.year
+        return jsonify({"detail": "year invalido"}), 400
+    period = (request.args.get("period") or "mensal").lower()
+    if period not in ("mensal", "trimestral", "semestral", "anual"):
+        return jsonify({"detail": "period invalido"}), 400
 
     recs = db.session.query(FinancialRecord).filter(
-        FinancialRecord.type == "ENTRADA", FinancialRecord.status == "PAGO",
-        extract("month", FinancialRecord.date) == m,
-        extract("year", FinancialRecord.date) == y).all()
-    desps = db.session.query(FinancialRecord).filter(
-        FinancialRecord.type == "SAIDA", FinancialRecord.status == "PAGO",
-        extract("month", FinancialRecord.date) == m,
-        extract("year", FinancialRecord.date) == y).all()
+        FinancialRecord.status == "PAGO",
+        extract("year", FinancialRecord.date) == year,
+    ).all()
+
+    def bucket_of(m):
+        if period == "mensal":
+            return ("m", m)
+        if period == "trimestral":
+            return ("t", (m - 1) // 3 + 1)
+        if period == "semestral":
+            return ("s", 1 if m <= 6 else 2)
+        return ("a", 1)
+
+    def label_of(kind, key):
+        if kind == "m":
+            return MONTH_LABELS[key - 1]
+        if kind == "t":
+            return "%dº Trimestre" % key
+        if kind == "s":
+            return "%dº Semestre" % key
+        return "Ano"
+
+    def count_of(kind):
+        return {"m": 12, "t": 4, "s": 2, "a": 1}[kind]
+
+    buckets = {}
+    for r in recs:
+        kind, key = bucket_of(r.date.month)
+        b = buckets.setdefault((kind, key), {"income": 0.0, "outcome": 0.0})
+        v = float(r.amount or 0)
+        if r.type == "ENTRADA":
+            b["income"] += v
+        else:
+            b["outcome"] += v
+
+    pend = db.session.query(FinancialRecord).filter(
+        FinancialRecord.type == "ENTRADA", FinancialRecord.status == "PENDENTE",
+        extract("year", FinancialRecord.date) == year,
+    ).all()
+    pend_income = sum(float(r.amount or 0) for r in pend)
+
+    kind, _first = sorted(buckets)[0] if buckets else ("m", 1)
+    result_rows = []
+    acc = 0.0
+    total_income = 0.0
+    total_outcome = 0.0
+    for i in range(1, count_of(kind) + 1):
+        b = buckets.get((kind, i), {"income": 0.0, "outcome": 0.0})
+        result = b["income"] - b["outcome"]
+        acc += result
+        total_income += b["income"]
+        total_outcome += b["outcome"]
+        result_rows.append({
+            "period": label_of(kind, i),
+            "income": _fmt_brl(b["income"]),
+            "outcome": _fmt_brl(b["outcome"]),
+            "result": _fmt_brl(result),
+            "accumulated": _fmt_brl(acc),
+        })
+
+    final = total_income - total_outcome
+    return {
+        "title": "DRE - Demonstrativo do Resultado",
+        "generated_at": _now_iso(),
+        "filters_applied": {"year": year, "period": period},
+        "summary": [
+            {"label": "Receitas do Ano", "value": _fmt_brl(total_income), "tone": "positive"},
+            {"label": "Despesas do Ano", "value": _fmt_brl(total_outcome), "tone": "negative"},
+            {"label": "Resultado do Ano", "value": _fmt_brl(final),
+             "tone": "positive" if final >= 0 else "negative"},
+            {"label": "Faturamento Pendente", "value": _fmt_brl(pend_income), "tone": "neutral"},
+        ],
+        "columns": [
+            {"key": "period", "label": "Período"},
+            {"key": "income", "label": "Receitas"},
+            {"key": "outcome", "label": "Despesas"},
+            {"key": "result", "label": "Resultado"},
+            {"key": "accumulated", "label": "Resultado Acumulado"},
+        ],
+        "rows": result_rows,
+    }
+
+
+# ── Fluxo de Caixa ────────────────────────────────────────────
+
+def _build_cash_flow():
+    today = date.today()
+    try:
+        year = int(request.args.get("year") or today.year)
+    except (TypeError, ValueError):
+        return jsonify({"detail": "year invalido"}), 400
+
+    recs = db.session.query(FinancialRecord).filter(
+        FinancialRecord.status == "PAGO",
+        extract("year", FinancialRecord.date) == year,
+    ).all()
+    per_month = {}
+    for r in recs:
+        m = r.date.month
+        b = per_month.setdefault(m, {"income": 0.0, "outcome": 0.0})
+        v = float(r.amount or 0)
+        if r.type == "ENTRADA":
+            b["income"] += v
+        else:
+            b["outcome"] += v
+
     pend = db.session.query(FinancialRecord).filter(
         FinancialRecord.status == "PENDENTE",
-        extract("month", FinancialRecord.due_date) == m,
-        extract("year", FinancialRecord.due_date) == y).all()
+        extract("year", FinancialRecord.date) == year,
+    ).all()
+    pend_in = sum(float(r.amount or 0) for r in pend if r.type == "ENTRADA")
+    pend_out = sum(float(r.amount or 0) for r in pend if r.type == "SAIDA")
 
-    by_cat_r = {}
-    for r in recs:
-        by_cat_r[r.category or "Outros"] = by_cat_r.get(r.category or "Outros", 0) + float(r.amount or 0)
-    by_cat_d = {}
-    for r in desps:
-        by_cat_d[r.category or "Outros"] = by_cat_d.get(r.category or "Outros", 0) + float(r.amount or 0)
-    total_r = sum(by_cat_r.values())
-    total_d = sum(by_cat_d.values())
-    resultado = total_r - total_d
+    result_rows = []
+    acc = 0.0
+    total_in = 0.0
+    total_out = 0.0
+    for i in range(1, 13):
+        b = per_month.get(i, {"income": 0.0, "outcome": 0.0})
+        bal = b["income"] - b["outcome"]
+        acc += bal
+        total_in += b["income"]
+        total_out += b["outcome"]
+        result_rows.append({
+            "month": MONTH_LABELS[i - 1],
+            "income": _fmt_brl(b["income"]),
+            "outcome": _fmt_brl(b["outcome"]),
+            "balance": _fmt_brl(bal),
+            "accumulated": _fmt_brl(acc),
+        })
+
+    saldo = total_in - total_out
     return {
-        "periodo": {"mes": m, "ano": y},
-        "receitas": {
-            "itens": [{"categoria": k, "valor": v}
-                      for k, v in sorted(by_cat_r.items(), key=lambda kv: kv[1], reverse=True)],
-            "total": total_r,
-        },
-        "despesas": {
-            "itens": [{"categoria": k, "valor": v}
-                      for k, v in sorted(by_cat_d.items(), key=lambda kv: kv[1], reverse=True)],
-            "total": total_d,
-        },
-        "resultado_liquido": resultado,
-        "margem_liquida": round(resultado / total_r * 100, 2) if total_r > 0 else 0,
-        "pendentes": {
-            "receitas": sum(float(r.amount or 0) for r in pend if r.type == "ENTRADA"),
-            "despesas": sum(float(r.amount or 0) for r in pend if r.type == "SAIDA"),
-        },
+        "title": "Fluxo de Caixa Mensal",
+        "generated_at": _now_iso(),
+        "filters_applied": {"year": year},
+        "summary": [
+            {"label": "Total de Entradas", "value": _fmt_brl(total_in), "tone": "positive"},
+            {"label": "Total de Saidas", "value": _fmt_brl(total_out), "tone": "negative"},
+            {"label": "Saldo do Ano", "value": _fmt_brl(saldo),
+             "tone": "positive" if saldo >= 0 else "negative"},
+            {"label": "Pendente a Receber", "value": _fmt_brl(pend_in), "tone": "neutral"},
+            {"label": "Pendente a Pagar", "value": _fmt_brl(pend_out), "tone": "neutral"},
+        ],
+        "columns": [
+            {"key": "month", "label": "Mês"},
+            {"key": "income", "label": "Entradas"},
+            {"key": "outcome", "label": "Saídas"},
+            {"key": "balance", "label": "Saldo do Mês"},
+            {"key": "accumulated", "label": "Saldo Acumulado"},
+        ],
+        "rows": result_rows,
     }
 
 
@@ -638,6 +759,8 @@ def _build_lead_sources():
 
 _BUILDERS = {
     "financial": (_build_financial, "relatorio-financeiro"),
+    "cash-flow": (_build_cash_flow, "fluxo-caixa-mensal"),
+    "dre": (_build_dre, "relatorio-dre"),
     "clients": (_build_clients, "relatorio-clientes"),
     "projects": (_build_projects, "relatorio-projetos"),
     "stock": (_build_stock, "relatorio-estoque"),
@@ -701,7 +824,7 @@ def r_stock_export():
 @bp.get("/api/reports/dre")
 @token_required()
 def r_dre():
-    return jsonify(_build_dre())
+    return _serve("dre")
 
 
 @bp.get("/api/reports/crm")
@@ -720,3 +843,15 @@ def r_lead_sources():
 @token_required()
 def r_lead_sources_export():
     return _serve("lead-sources")
+
+
+@bp.get("/api/reports/cash-flow")
+@token_required()
+def r_cash_flow():
+    return _serve("cash-flow")
+
+
+@bp.get("/api/reports/cash-flow/export")
+@token_required()
+def r_cash_flow_export():
+    return _serve("cash-flow")
