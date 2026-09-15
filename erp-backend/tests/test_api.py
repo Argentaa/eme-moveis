@@ -1341,3 +1341,198 @@ def test_ticket_photo_cascade(client):
         db.session.delete(ticket)
         db.session.commit()
         assert db.session.query(TicketPhoto).filter_by(ticket_id=tid).count() == 0
+
+
+def test_tickets_crud(client):
+    h = _login(client)
+    with client.application.app_context():
+        from app.models.models import Client, Project
+        c = Client(name="Cliente Ticket")
+        db.session.add(c)
+        db.session.flush()
+        p = Project(client_id=c.id, title="Proj Ticket", status="ORCAMENTO")
+        db.session.add(p)
+        db.session.commit()
+        cid = c.id
+        pid = p.id
+    r = client.post("/api/tickets", headers=h, json={"client_id": cid, "project_id": pid, "description": "Porta desalinhou", "cost": 100, "cause": "Dobradica", "in_warranty": True})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    tid = body["id"]
+    assert body["number"].startswith("CH-")
+    assert body["status"] == "ABERTO"
+    assert body["client_name"] == "Cliente Ticket"
+    assert body["cost"] == 100
+    assert client.get("/api/tickets", headers=h).get_json().__len__() == 1
+    assert len(client.get("/api/tickets", headers=h, query_string={"status": "ABERTO"}).get_json()) == 1
+    assert len(client.get("/api/tickets", headers=h, query_string={"status": "RESOLVIDO"}).get_json()) == 0
+    r2 = client.get(f"/api/tickets/{tid}", headers=h)
+    assert r2.status_code == 200
+    assert r2.get_json()["photos"] == []
+    r3 = client.put(f"/api/tickets/{tid}", headers=h, json={"status": "EM_ANALISE", "cost": 200, "solution": "Ajuste"})
+    assert r3.status_code == 200, r3.get_data(as_text=True)
+    assert r3.get_json()["status"] == "EM_ANALISE"
+    assert r3.get_json()["cost"] == 200
+    r4 = client.delete(f"/api/tickets/{tid}", headers=h)
+    assert r4.status_code in (200, 204), r4.get_data(as_text=True)
+    assert len(client.get("/api/tickets", headers=h).get_json()) == 0
+    # validacoes client
+    r5 = client.post("/api/tickets", headers=h, json={"description": "sem client"})
+    assert r5.status_code == 400, r5.get_data(as_text=True)
+    assert "client_id" in r5.get_json().get("detail", "").lower()
+    r6 = client.post("/api/tickets", headers=h, json={"client_id": "id-inexistente", "description": "x"})
+    assert r6.status_code == 404, r6.get_data(as_text=True)
+    r7 = client.post("/api/tickets", headers=h, json={"client_id": cid, "project_id": "proj-inexistente", "description": "x"})
+    assert r7.status_code == 404, r7.get_data(as_text=True)
+
+
+def test_ticket_status_fluxo(client):
+    h = _login(client)
+    with client.application.app_context():
+        from app.models.models import Client
+        c = Client(name="Cliente Fluxo")
+        db.session.add(c)
+        db.session.commit()
+        cid = c.id
+    r = client.post("/api/tickets", headers=h, json={"client_id": cid, "description": "Fluxo teste"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    tid = r.get_json()["id"]
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    # ABERTO -> EM_ANALISE
+    assert client.put(f"/api/tickets/{tid}", headers=h, json={"status": "EM_ANALISE"}).status_code == 200
+    # EM_ANALISE -> AGENDADO com scheduled_at deve criar CalendarEvent ASSISTENCIA
+    r2 = client.put(f"/api/tickets/{tid}", headers=h, json={"status": "AGENDADO", "scheduled_at": today})
+    assert r2.status_code == 200, r2.get_data(as_text=True)
+    with client.application.app_context():
+        from app.models.models import CalendarEvent
+        evs = db.session.query(CalendarEvent).filter_by(type="ASSISTENCIA").all()
+        assert len(evs) >= 1, "CalendarEvent ASSISTENCIA nao criado"
+        assert any(e.client_id == cid for e in evs)
+    # AGENDADO -> EM_ATENDIMENTO
+    assert client.put(f"/api/tickets/{tid}", headers=h, json={"status": "EM_ATENDIMENTO"}).status_code == 200
+    # EM_ATENDIMENTO -> RESOLVIDO deve preencher resolved_at
+    r3 = client.put(f"/api/tickets/{tid}", headers=h, json={"status": "RESOLVIDO"})
+    assert r3.status_code == 200, r3.get_data(as_text=True)
+    assert r3.get_json()["resolved_at"] is not None
+    # RESOLVIDO -> ENCERRADO deve preencher closed_at
+    r4 = client.put(f"/api/tickets/{tid}", headers=h, json={"status": "ENCERRADO"})
+    assert r4.status_code == 200, r4.get_data(as_text=True)
+    assert r4.get_json()["closed_at"] is not None
+
+
+def test_ticket_agendado_cria_evento_calendario(client):
+    h = _login(client)
+    with client.application.app_context():
+        from app.models.models import Client, Project
+        c = Client(name="Cliente Agenda")
+        db.session.add(c)
+        db.session.flush()
+        p = Project(client_id=c.id, title="Proj Agenda", status="ORCAMENTO")
+        db.session.add(p)
+        db.session.commit()
+        cid = c.id
+        pid = p.id
+        uid = db.session.query(User).filter_by(username="admin").first().id
+    import datetime as _dt
+    tomorrow = (_dt.date.today() + _dt.timedelta(days=1)).isoformat()
+    r = client.post("/api/tickets", headers=h, json={"client_id": cid, "project_id": pid, "description": "Agendamento auto"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    tid = r.get_json()["id"]
+    number = r.get_json()["number"]
+    # PUT para AGENDADO com assigned_user_id
+    r2 = client.put(f"/api/tickets/{tid}", headers=h, json={"status": "AGENDADO", "scheduled_at": tomorrow, "assigned_user_id": uid})
+    assert r2.status_code == 200, r2.get_data(as_text=True)
+    body = r2.get_json()
+    assert body["calendar_event_id"] is not None
+    with client.application.app_context():
+        from app.models.models import CalendarEvent
+        ev = db.session.get(CalendarEvent, body["calendar_event_id"])
+        assert ev is not None
+        assert ev.type == "ASSISTENCIA"
+        assert ev.client_id == cid
+        assert ev.project_id == pid
+        assert ev.assigned_user_id == uid
+        assert number in ev.title or "Agendamento auto" in ev.title or body["description"][:10] in ev.title
+        before_id = ev.id
+        before_cnt = db.session.query(CalendarEvent).filter_by(type="ASSISTENCIA").count()
+    # mudar de AGENDADO para outro status nao deve duplicar evento
+    r3 = client.put(f"/api/tickets/{tid}", headers=h, json={"status": "EM_ATENDIMENTO"})
+    assert r3.status_code == 200
+    assert r3.get_json()["calendar_event_id"] == before_id
+    with client.application.app_context():
+        from app.models.models import CalendarEvent
+        after_cnt = db.session.query(CalendarEvent).filter_by(type="ASSISTENCIA").count()
+        assert after_cnt == before_cnt
+
+
+def test_ticket_photo_upload(client, tmp_path):
+    with client.application.app_context():
+        client.application.config["UPLOAD_DIR"] = str(tmp_path)
+    h = _login(client)
+    with client.application.app_context():
+        from app.models.models import Client
+        c = Client(name="Cliente Foto Upload")
+        db.session.add(c)
+        db.session.commit()
+        cid = c.id
+    r = client.post("/api/tickets", headers=h, json={"client_id": cid, "description": "foto upload"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    tid = r.get_json()["id"]
+    import io
+    data = {"file": (io.BytesIO(b"fake image data"), "foto_teste.jpg")}
+    r2 = client.post(f"/api/tickets/{tid}/photos", headers=h, data=data, content_type="multipart/form-data")
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+    photo = r2.get_json()
+    assert "filename" in photo
+    pid = photo["id"]
+    # GET ticket deve incluir photos
+    r3 = client.get(f"/api/tickets/{tid}", headers=h)
+    assert r3.status_code == 200
+    assert len(r3.get_json()["photos"]) == 1
+    # download
+    r4 = client.get(f"/api/tickets/photos/{pid}/download", headers=h)
+    assert r4.status_code == 200
+    assert r4.mimetype in ("image/jpeg", "application/octet-stream", "image/jpg")
+    # delete
+    r5 = client.delete(f"/api/tickets/photos/{pid}", headers=h)
+    assert r5.status_code == 200
+    assert r5.get_json().get("ok") is True
+    # validacoes
+    r6 = client.post("/api/tickets/id-inexistente/photos", headers=h, data={"file": (io.BytesIO(b"x"), "a.jpg")}, content_type="multipart/form-data")
+    assert r6.status_code == 404
+    r7 = client.post(f"/api/tickets/{tid}/photos", headers=h, data={}, content_type="multipart/form-data")
+    assert r7.status_code == 400
+    # sem token
+    r8 = client.post(f"/api/tickets/{tid}/photos", data={"file": (io.BytesIO(b"x"), "a.jpg")}, content_type="multipart/form-data")
+    assert r8.status_code == 401
+
+
+def test_ticket_validations(client):
+    h = _login(client)
+    with client.application.app_context():
+        from app.models.models import Client
+        c = Client(name="Cliente Valid")
+        db.session.add(c)
+        db.session.commit()
+        cid = c.id
+    # POST sem description
+    r = client.post("/api/tickets", headers=h, json={"client_id": cid})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    # criar valido
+    r2 = client.post("/api/tickets", headers=h, json={"client_id": cid, "description": "valid test"})
+    assert r2.status_code == 201
+    tid = r2.get_json()["id"]
+    # PUT status invalido
+    r3 = client.put(f"/api/tickets/{tid}", headers=h, json={"status": "INVALIDO"})
+    assert r3.status_code == 400, r3.get_data(as_text=True)
+    # levar para RESOLVIDO e tentar DELETE -> 400
+    client.put(f"/api/tickets/{tid}", headers=h, json={"status": "RESOLVIDO"})
+    r4 = client.delete(f"/api/tickets/{tid}", headers=h)
+    assert r4.status_code == 400, r4.get_data(as_text=True)
+    # levar para ENCERRADO e tentar DELETE -> 400
+    client.put(f"/api/tickets/{tid}", headers=h, json={"status": "ENCERRADO"})
+    r5 = client.delete(f"/api/tickets/{tid}", headers=h)
+    assert r5.status_code == 400, r5.get_data(as_text=True)
+    # GET inexistente
+    assert client.get("/api/tickets/id-inexistente-xyz", headers=h).status_code == 404
