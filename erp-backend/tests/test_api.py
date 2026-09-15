@@ -935,3 +935,258 @@ def test_purchase_item_model(client):
         db.session.delete(order)
         db.session.commit()
         assert db.session.query(PurchaseItem).filter_by(order_id=oid).count() == 0
+
+
+def test_purchases_crud(client):
+    h = _login(client)
+    import datetime
+
+    with client.application.app_context():
+        from app.models.models import Category, StockItem
+
+        cat = Category(name="Cat Compras CRUD", category_type="STOCK")
+        db.session.add(cat)
+        db.session.flush()
+        stock = StockItem(
+            name="MDF CRUD",
+            sku="MDF-CRUD-0001",
+            category_id=cat.id,
+            quantity=5,
+            min_quantity=1,
+        )
+        db.session.add(stock)
+        db.session.commit()
+        stock_id = stock.id
+
+    sup_resp = client.post("/api/suppliers", headers=h, json={"name": "Fornecedor CRUD"})
+    assert sup_resp.status_code == 201, sup_resp.get_data(as_text=True)
+    supplier_id = sup_resp.get_json()["id"]
+
+    today = datetime.date.today().isoformat()
+    expected = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+    payload = {
+        "supplier_id": supplier_id,
+        "request_date": today,
+        "expected_date": expected,
+        "notes": "compra teste",
+        "items": [
+            {"material_name": "MDF 18mm", "quantity": 2, "unit_price": 150, "stock_item_id": stock_id},
+            {"material_name": "Parafuso", "quantity": 10, "unit_price": 2},
+        ],
+    }
+    r = client.post("/api/purchases", headers=h, json=payload)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["number"].startswith("PC-")
+    assert body["status"] == "SOLICITADA"
+    assert body["total"] == 320
+    assert len(body["items"]) == 2
+    order_id = body["id"]
+
+    r = client.get("/api/purchases", headers=h)
+    assert r.status_code == 200
+    assert len(r.get_json()) == 1
+
+    r = client.get("/api/purchases", headers=h, query_string={"status": "SOLICITADA"})
+    assert r.status_code == 200
+    assert len(r.get_json()) == 1
+
+    r = client.get("/api/purchases", headers=h, query_string={"status": "RECEBIDA"})
+    assert r.status_code == 200
+    assert len(r.get_json()) == 0
+
+    r = client.put(
+        f"/api/purchases/{order_id}",
+        headers=h,
+        json={
+            "notes": "atualizado",
+            "status": "APROVADA",
+            "items": [
+                {"material_name": "MDF 15mm", "quantity": 1, "unit_price": 100},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["notes"] == "atualizado"
+    assert r.get_json()["status"] == "APROVADA"
+
+    r = client.delete(f"/api/purchases/{order_id}", headers=h)
+    assert r.status_code == 204, r.get_data(as_text=True)
+
+    r = client.get("/api/purchases", headers=h)
+    assert r.status_code == 200
+    assert len(r.get_json()) == 0
+
+    # supplier opcional
+    r2 = client.post(
+        "/api/purchases",
+        headers=h,
+        json={
+            "request_date": today,
+            "notes": "sem fornecedor",
+            "items": [{"material_name": "MDF Livre", "quantity": 1, "unit_price": 10}],
+        },
+    )
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+    assert r2.get_json()["supplier_id"] is None
+
+
+def test_purchase_receive_gera_stock_movement(client):
+    h = _login(client)
+    import datetime
+
+    with client.application.app_context():
+        from app.models.models import Category, StockItem
+
+        cat = Category(name="Cat Compras RECV", category_type="STOCK")
+        db.session.add(cat)
+        db.session.flush()
+        stock = StockItem(
+            name="MDF RECV",
+            sku="MDF-RECV-0001",
+            category_id=cat.id,
+            quantity=5,
+            min_quantity=1,
+        )
+        db.session.add(stock)
+        db.session.commit()
+        stock_id = stock.id
+
+    sup_id = client.post("/api/suppliers", headers=h, json={"name": "Fornecedor RECV"}).get_json()["id"]
+    today = datetime.date.today().isoformat()
+    r = client.post(
+        "/api/purchases",
+        headers=h,
+        json={
+            "supplier_id": sup_id,
+            "request_date": today,
+            "status": "APROVADA",
+            "notes": "para recebimento",
+            "items": [
+                {"material_name": "MDF 18mm", "quantity": 3, "unit_price": 10, "stock_item_id": stock_id},
+                {"material_name": "Cola", "quantity": 2, "unit_price": 5},
+            ],
+        },
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    order_id = r.get_json()["id"]
+
+    r = client.post(f"/api/purchases/{order_id}/receive", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["status"] == "RECEBIDA"
+    assert body["received_at"] is not None
+    assert body["items"][0]["received_qty"] == 3
+
+    with client.application.app_context():
+        from app.models.models import StockItem, StockMovement
+
+        item = db.session.get(StockItem, stock_id)
+        assert float(item.quantity) == 8, f"quantity {item.quantity} != 8"
+        movs = db.session.query(StockMovement).filter_by(item_id=stock_id).all()
+        assert len(movs) >= 1
+        assert any(float(m.quantity) == 3 and m.type == "ENTRADA" for m in movs)
+        assert not any(float(m.quantity) == 2 for m in movs if m.item_id == stock_id and float(m.quantity) == 2)
+
+    r2 = client.get(f"/api/stock/{stock_id}", headers=h)
+    if r2.status_code == 200:
+        assert r2.get_json()["quantity"] == 8
+
+
+def test_purchase_receive_sem_item_estoque(client):
+    h = _login(client)
+    import datetime
+
+    today = datetime.date.today().isoformat()
+    r = client.post(
+        "/api/purchases",
+        headers=h,
+        json={
+            "request_date": today,
+            "status": "APROVADA",
+            "items": [{"material_name": "Material Livre", "quantity": 4, "unit_price": 20}],
+        },
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    order_id = r.get_json()["id"]
+
+    with client.application.app_context():
+        from app.models.models import StockMovement
+
+        before = db.session.query(StockMovement).count()
+
+    r = client.post(f"/api/purchases/{order_id}/receive", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["status"] == "RECEBIDA"
+    assert body["items"][0]["received_qty"] == 4
+
+    with client.application.app_context():
+        from app.models.models import StockMovement
+
+        after = db.session.query(StockMovement).count()
+        assert after == before
+
+
+def test_purchase_validations(client):
+    h = _login(client)
+    import datetime
+
+    today = datetime.date.today().isoformat()
+
+    # sem items
+    r = client.post("/api/purchases", headers=h, json={"request_date": today, "items": []})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert "items" in r.get_json().get("detail", "").lower()
+
+    # quantity <=0
+    r = client.post(
+        "/api/purchases",
+        headers=h,
+        json={"request_date": today, "items": [{"material_name": "MDF", "quantity": 0, "unit_price": 10}]},
+    )
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # material_name vazio
+    r = client.post(
+        "/api/purchases",
+        headers=h,
+        json={"request_date": today, "items": [{"material_name": "   ", "quantity": 1, "unit_price": 10}]},
+    )
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # supplier_id inexistente
+    r = client.post(
+        "/api/purchases",
+        headers=h,
+        json={
+            "request_date": today,
+            "supplier_id": "id-inexistente-xyz",
+            "items": [{"material_name": "MDF", "quantity": 1, "unit_price": 10}],
+        },
+    )
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # cria compra valida para testar receive/delete quando RECEBIDA
+    r = client.post(
+        "/api/purchases",
+        headers=h,
+        json={
+            "request_date": today,
+            "status": "APROVADA",
+            "items": [{"material_name": "MDF", "quantity": 1, "unit_price": 10}],
+        },
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    oid = r.get_json()["id"]
+
+    r = client.post(f"/api/purchases/{oid}/receive", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+    # receive quando ja RECEBIDA
+    r = client.post(f"/api/purchases/{oid}/receive", headers=h)
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # DELETE quando RECEBIDA
+    r = client.delete(f"/api/purchases/{oid}", headers=h)
+    assert r.status_code == 400, r.get_data(as_text=True)
