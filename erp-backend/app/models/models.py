@@ -91,6 +91,10 @@ class Supplier(db.Model):
     contact = db.Column(String(160), nullable=True, default="")
     phone = db.Column(String(60), nullable=True, default="")
     email = db.Column(String(160), nullable=True, default="")
+    address = db.Column(Text, nullable=True, default="")
+    category = db.Column(String(80), nullable=True, default="")
+    payment_terms = db.Column(String(120), nullable=True, default="")
+    avg_delivery_days = db.Column(Integer, nullable=True)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
 
     def to_dict(self):
@@ -101,6 +105,10 @@ class Supplier(db.Model):
             "contact": self.contact or "",
             "phone": self.phone or "",
             "email": self.email or "",
+            "address": self.address or "",
+            "category": self.category or "",
+            "payment_terms": self.payment_terms or "",
+            "avg_delivery_days": self.avg_delivery_days,
             "created_at": iso(self.created_at),
         }
 

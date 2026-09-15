@@ -1190,3 +1190,89 @@ def test_purchase_validations(client):
     # DELETE quando RECEBIDA
     r = client.delete(f"/api/purchases/{oid}", headers=h)
     assert r.status_code == 400, r.get_data(as_text=True)
+
+
+def test_supplier_campos_ricos(client):
+    h = _login(client)
+    payload = {
+        "name": "Fornecedor Rico",
+        "cnpj": "12.345.678/0001-99",
+        "contact": "Ana",
+        "phone": "(11) 99999-0000",
+        "email": "rico@test.com",
+        "address": "Rua A, 123",
+        "category": "  Ferragens  ",
+        "payment_terms": "  28 dias  ",
+        "avg_delivery_days": 7,
+    }
+    r = client.post("/api/suppliers", headers=h, json=payload)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    sid = body["id"]
+    assert body["address"] == "Rua A, 123"
+    assert body["category"] == "Ferragens"
+    assert body["payment_terms"] == "28 dias"
+    assert body["avg_delivery_days"] == 7
+
+    lst = client.get("/api/suppliers", headers=h).get_json()
+    row = next(s for s in lst if s["id"] == sid)
+    assert row["address"] == "Rua A, 123"
+    assert row["category"] == "Ferragens"
+    assert row["payment_terms"] == "28 dias"
+    assert row["avg_delivery_days"] == 7
+
+    r2 = client.put(
+        f"/api/suppliers/{sid}",
+        headers=h,
+        json={"category": "  MDF  ", "payment_terms": "  30 dias  ", "avg_delivery_days": 14, "address": "Rua B, 456"},
+    )
+    assert r2.status_code == 200, r2.get_data(as_text=True)
+    assert r2.get_json()["category"] == "MDF"
+    assert r2.get_json()["payment_terms"] == "30 dias"
+    assert r2.get_json()["avg_delivery_days"] == 14
+    assert r2.get_json()["address"] == "Rua B, 456"
+
+    lst2 = client.get("/api/suppliers", headers=h).get_json()
+    row2 = next(s for s in lst2 if s["id"] == sid)
+    assert row2["category"] == "MDF"
+    assert row2["payment_terms"] == "30 dias"
+    assert row2["avg_delivery_days"] == 14
+    assert row2["address"] == "Rua B, 456"
+
+    # validacoes: avg_delivery_days negativo deve dar 400
+    r3 = client.post("/api/suppliers", headers=h, json={"name": "Forn Neg", "avg_delivery_days": -1})
+    assert r3.status_code == 400, r3.get_data(as_text=True)
+    assert "avg_delivery_days" in r3.get_json().get("detail", "").lower()
+
+    r4 = client.put(f"/api/suppliers/{sid}", headers=h, json={"avg_delivery_days": -5})
+    assert r4.status_code == 400, r4.get_data(as_text=True)
+
+    # category vazia aceita mas se fornecida trim (ja validado acima)
+    r5 = client.post("/api/suppliers", headers=h, json={"name": "Forn Vazio", "category": ""})
+    assert r5.status_code == 201, r5.get_data(as_text=True)
+    assert r5.get_json()["category"] == ""
+
+
+def test_supplier_filtros_e_compat(client):
+    h = _login(client)
+    # criar dois fornecedores com categorias distintas
+    r1 = client.post("/api/suppliers", headers=h, json={"name": "Forn Filtro MDF", "category": "MDF"})
+    assert r1.status_code == 201, r1.get_data(as_text=True)
+    r2 = client.post("/api/suppliers", headers=h, json={"name": "Forn Filtro Ferragens", "category": "Ferragens"})
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+
+    # GET filtrado por category=MDF
+    lst = client.get("/api/suppliers", headers=h, query_string={"category": "MDF"}).get_json()
+    assert any(s["id"] == r1.get_json()["id"] for s in lst)
+    assert all(s["category"] == "MDF" for s in lst)
+
+    # compat: criar sem campos novos (so name) deve dar 201 com defaults
+    r3 = client.post("/api/suppliers", headers=h, json={"name": "Forn Compat"})
+    assert r3.status_code == 201, r3.get_data(as_text=True)
+    body = r3.get_json()
+    assert body["name"] == "Forn Compat"
+    # defaults vazios/None
+    assert body.get("address") == ""
+    assert body.get("category") == ""
+    assert body.get("payment_terms") == ""
+    assert body.get("avg_delivery_days") is None
