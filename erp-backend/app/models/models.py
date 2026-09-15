@@ -105,6 +105,55 @@ class Supplier(db.Model):
         }
 
 
+class PurchaseOrder(db.Model):
+    __tablename__ = "purchase_orders"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    number = db.Column(String(20), nullable=False, unique=True)
+    status = db.Column(String(20), nullable=False, default="SOLICITADA")  # SOLICITADA|COTANDO|APROVADA|COMPRADA|RECEBIDA|CANCELADA
+    supplier_id = db.Column(String(36), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True)
+    request_date = db.Column(Date, nullable=False)
+    expected_date = db.Column(Date, nullable=True)
+    received_at = db.Column(DateTime, nullable=True)
+    notes = db.Column(Text, nullable=True, default="")
+    created_by = db.Column(String(80), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    supplier = db.relationship("Supplier")
+    items = db.relationship("PurchaseItem", cascade="all, delete-orphan", passive_deletes=False, order_by="PurchaseItem.position", overlaps="purchase_items,order")
+
+    def to_dict(self):
+        items = [i.to_dict() for i in self.items]
+        return {"id": self.id, "number": self.number, "status": self.status,
+                "supplier_id": self.supplier_id, "supplier_name": self.supplier.name if self.supplier else None,
+                "request_date": iso(self.request_date), "expected_date": iso(self.expected_date),
+                "received_at": iso(self.received_at),
+                "notes": self.notes or "", "created_by": self.created_by or "",
+                "created_at": iso(self.created_at), "items": items,
+                "total": sum(i.total for i in self.items)}
+
+
+class PurchaseItem(db.Model):
+    __tablename__ = "purchase_items"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    order_id = db.Column(String(36), ForeignKey("purchase_orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    stock_item_id = db.Column(String(36), ForeignKey("stock_items.id", ondelete="SET NULL"), nullable=True)
+    material_name = db.Column(String(200), nullable=False)
+    quantity = db.Column(Numeric(14, 3), nullable=False, default=1)
+    unit_price = db.Column(Numeric(14, 2), nullable=False, default=0)
+    received_qty = db.Column(Numeric(14, 3), nullable=False, default=0)
+    position = db.Column(Integer, nullable=False, default=0)
+    order = db.relationship("PurchaseOrder", backref=db.backref("purchase_items", overlaps="items"), overlaps="items")
+
+    @property
+    def total(self):
+        return (num(self.quantity) or 0) * (num(self.unit_price) or 0)
+
+    def to_dict(self):
+        return {"id": self.id, "order_id": self.order_id, "stock_item_id": self.stock_item_id,
+                "material_name": self.material_name, "quantity": num(self.quantity),
+                "unit_price": num(self.unit_price), "received_qty": num(self.received_qty),
+                "position": self.position, "total": self.total}
+
+
 class Project(db.Model):
     __tablename__ = "projects"
     id = db.Column(String(36), primary_key=True, default=new_uuid)

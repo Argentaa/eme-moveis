@@ -809,3 +809,129 @@ def test_funnel_columns_legacy_compat(client):
     assert r2.status_code == 200
     r3 = client.get("/api/funnel-columns", headers=h, query_string={"type": "CRM"}).get_json()
     assert next(c for c in r3 if c["column_key"] == "ORCAMENTO")["label"] == "Orçamento 2"
+
+
+def test_purchase_order_model(client):
+    _login(client)
+    import datetime
+
+    with client.application.app_context():
+        from app.models.models import Category, PurchaseItem, PurchaseOrder, StockItem, Supplier
+
+        cat = Category(name="Cat Compras PO", category_type="STOCK")
+        db.session.add(cat)
+        db.session.flush()
+        stock = StockItem(
+            name="MDF 18mm",
+            sku="MDF-18-PO-0001",
+            category_id=cat.id,
+            quantity=10,
+            min_quantity=2,
+        )
+        db.session.add(stock)
+        sup = Supplier(name="Fornecedor PO Teste")
+        db.session.add(sup)
+        db.session.flush()
+
+        order = PurchaseOrder(
+            number="PC-TESTE-0001",
+            status="SOLICITADA",
+            supplier_id=sup.id,
+            request_date=datetime.date.today(),
+        )
+        db.session.add(order)
+        db.session.flush()
+
+        item = PurchaseItem(
+            order=order,
+            stock_item_id=stock.id,
+            material_name="MDF 18mm",
+            quantity=2,
+            unit_price=150,
+            position=0,
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        assert order.number == "PC-TESTE-0001"
+        d = order.to_dict()
+        assert d["number"] == "PC-TESTE-0001"
+        assert d["status"] == "SOLICITADA"
+        assert d["supplier_name"] == sup.name
+        assert len(d["items"]) == 1
+        assert d["total"] == 300.0
+
+        di = item.to_dict()
+        assert di["stock_item_id"] == stock.id
+        assert di["material_name"] == "MDF 18mm"
+        assert di["quantity"] == 2
+        assert di["unit_price"] == 150
+        assert di["total"] == 300.0
+
+        oid = order.id
+        db.session.delete(order)
+        db.session.commit()
+        assert db.session.query(PurchaseItem).filter_by(order_id=oid).count() == 0
+
+
+def test_purchase_item_model(client):
+    _login(client)
+    import datetime
+
+    with client.application.app_context():
+        from app.models.models import Category, PurchaseItem, PurchaseOrder, StockItem, Supplier
+
+        cat = Category(name="Cat Compras PI", category_type="STOCK")
+        db.session.add(cat)
+        db.session.flush()
+        stock = StockItem(
+            name="MDF 18mm",
+            sku="MDF-18-PI-0001",
+            category_id=cat.id,
+            quantity=10,
+            min_quantity=2,
+        )
+        db.session.add(stock)
+        sup = Supplier(name="Fornecedor PI Teste")
+        db.session.add(sup)
+        db.session.flush()
+
+        order = PurchaseOrder(
+            number="PC-TESTE-0001",
+            status="SOLICITADA",
+            supplier_id=sup.id,
+            request_date=datetime.date.today(),
+        )
+        db.session.add(order)
+        db.session.flush()
+
+        item = PurchaseItem(
+            order=order,
+            stock_item_id=stock.id,
+            material_name="MDF 18mm",
+            quantity=2,
+            unit_price=150,
+            position=0,
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        assert order.number == "PC-TESTE-0001"
+        d = order.to_dict()
+        assert d["number"] == "PC-TESTE-0001"
+        assert d["status"] == "SOLICITADA"
+        assert d["supplier_name"] == sup.name
+        assert len(d["items"]) == 1
+        assert d["total"] == 300.0
+
+        di = item.to_dict()
+        assert di["stock_item_id"] == stock.id
+        assert di["material_name"] == "MDF 18mm"
+        assert di["quantity"] == 2
+        assert di["unit_price"] == 150
+        assert di["total"] == 300.0
+
+        oid = order.id
+        db.session.delete(order)
+        db.session.commit()
+        assert db.session.query(PurchaseItem).filter_by(order_id=oid).count() == 0
