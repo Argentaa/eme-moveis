@@ -7,13 +7,33 @@ from flask import Blueprint, jsonify, request, send_file
 from app.helpers import body_json, iso, num, parse_date
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import FinancialRecord, RecurringFinancial
+from app.models.models import FinancialRecord, RecurringFinancial, Supplier
 
 bp = Blueprint("financial", __name__)
 
-FIN_FIELDS = ("description", "type", "category", "amount", "date", "project_id", "status", "due_date")
+FIN_FIELDS = (
+    "description", "type", "category", "amount", "date", "project_id", "status", "due_date",
+    "doc_number", "issue_date", "doc_type", "bank", "account_plan", "item_description",
+    "installments", "client_id", "supplier_id", "is_recurring",
+)
 
 FREQ_DAYS = {"SEMANAL": 7, "QUINZENAL": 15, "MENSAL": 30, "ANUAL": 365}
+
+DOC_TYPES = ("BOLETO", "CHEQUE", "DEBITO_AUTOMATICO", "DINHEIRO", "FATURA", "PIX")
+
+
+def _validate_fin(data):
+    v = data.get("doc_type")
+    if v not in (None, "") and v not in DOC_TYPES:
+        return jsonify({"detail": "doc_type invalido"}), 400
+    if "installments" in data:
+        try:
+            n = int(data["installments"])
+        except (TypeError, ValueError):
+            return jsonify({"detail": "installments invalido"}), 400
+        if n < 1:
+            return jsonify({"detail": "installments deve ser maior ou igual a 1"}), 400
+    return None
 
 
 def _enrich(rec):
@@ -26,18 +46,28 @@ def _enrich(rec):
     client = db.session.get(Client, project.client_id) if project and project.client_id else None
     d["client_id"] = client.id if client else None
     d["client_name"] = client.name if client else None
+    supplier = db.session.get(Supplier, rec.supplier_id) if rec.supplier_id else None
+    d["supplier_name"] = supplier.name if supplier else None
     return d
 
 
 def _apply(data, rec):
     for f in FIN_FIELDS:
-        if f in data:
-            v = data[f]
-            if f in ("date", "due_date"):
-                v = parse_date(v)
-            if f == "project_id" and v == "":
-                v = None
-            setattr(rec, f, v)
+        if f not in data:
+            continue
+        v = data[f]
+        if f in ("date", "due_date", "issue_date"):
+            v = parse_date(v)
+        if f in ("project_id", "client_id", "supplier_id") and v == "":
+            v = None
+        if f == "installments":
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                v = 1
+        if f == "is_recurring":
+            v = bool(v)
+        setattr(rec, f, v)
 
 
 # ── Lancamentos ───────────────────────────────────────────────
@@ -154,6 +184,9 @@ def create_record():
         return jsonify({"detail": "type deve ser ENTRADA ou SAIDA"}), 400
     if data.get("amount") is None:
         return jsonify({"detail": "amount e obrigatorio"}), 400
+    err = _validate_fin(data)
+    if err:
+        return err
     rec = FinancialRecord(
         description=data["description"].strip(),
         type=data["type"],
@@ -164,13 +197,14 @@ def create_record():
         status=data.get("status") or "PENDENTE",
         due_date=parse_date(data.get("due_date")),
     )
+    _apply(data, rec)
     if rec.due_date is None:
         rec.due_date = rec.date
     if rec.status not in ("PAGO", "PENDENTE"):
         return jsonify({"detail": "status deve ser PAGO ou PENDENTE"}), 400
     db.session.add(rec)
     db.session.commit()
-    return jsonify(rec.to_dict()), 201
+    return jsonify(_enrich(rec)), 201
 
 
 @bp.put("/api/financial/<record_id>")
@@ -184,6 +218,9 @@ def update_record(record_id):
         return jsonify({"detail": "type deve ser ENTRADA ou SAIDA"}), 400
     if "status" in data and data["status"] not in ("PAGO", "PENDENTE"):
         return jsonify({"detail": "status deve ser PAGO ou PENDENTE"}), 400
+    err = _validate_fin(data)
+    if err:
+        return err
     _apply(data, rec)
     db.session.commit()
     return jsonify(rec.to_dict())

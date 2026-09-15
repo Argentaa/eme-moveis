@@ -593,3 +593,51 @@ def test_changelog_crud(client):
     assert client.delete("/api/changelog/" + eid, headers=h).status_code == 404
     assert client.post("/api/changelog", headers=h, json={"title": "   "}).status_code == 400
     assert client.post("/api/changelog", json={"title": "sem token"}).status_code == 401
+
+
+def test_financial_new_fields(client):
+    h = _login(client)
+    payload = {"description": "NF-e 123", "type": "SAIDA", "category": "MATERIAL", "amount": 1500, "date": "2026-09-01", "status": "PENDENTE", "doc_number": "NF 456", "issue_date": "2026-08-30", "doc_type": "BOLETO", "bank": "Banco X", "account_plan": "3.1.01", "item_description": "MDF 15mm", "installments": 3, "is_recurring": True}
+    r = client.post("/api/financial", headers=h, json=payload)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    row = r.get_json()
+    assert row["doc_number"] == "NF 456" and row["doc_type"] == "BOLETO" and row["bank"] == "Banco X"
+    assert row["account_plan"] == "3.1.01" and row["installments"] == 3 and row["is_recurring"] is True
+    assert row["issue_date"] == "2026-08-30"
+
+
+def test_financial_new_fields_validation(client):
+    h = _login(client)
+    base = {"description": "Inválido", "type": "SAIDA", "amount": 100, "date": "2026-09-01"}
+    r1 = client.post("/api/financial", headers=h, json=dict(base, doc_type="CARTAO"))
+    assert r1.status_code == 400, r1.get_data(as_text=True)
+    r2 = client.post("/api/financial", headers=h, json=dict(base, installments=0))
+    assert r2.status_code == 400, r2.get_data(as_text=True)
+    r3 = client.post("/api/financial", headers=h, json=dict(base, installments="abc"))
+    assert r3.status_code == 400, r3.get_data(as_text=True)
+
+
+def test_suppliers_crud(client):
+    h = _login(client)
+    r = client.post("/api/suppliers", headers=h, json={"name": "Madeireira Sul", "cnpj": "11.222.333/0001-44", "contact": "João", "phone": "(55) 99999-0000", "email": "vendas@madeireirasul.com.br"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    sid = r.get_json()["id"]
+    lst = client.get("/api/suppliers", headers=h).get_json()
+    assert any(s["id"] == sid for s in lst)
+    r2 = client.put("/api/suppliers/" + sid, headers=h, json={"phone": "(55) 98888-0000"})
+    assert r2.status_code == 200 and r2.get_json()["phone"] == "(55) 98888-0000"
+    assert client.delete("/api/suppliers/" + sid, headers=h).status_code == 200
+    assert client.delete("/api/suppliers/" + sid, headers=h).status_code == 404
+    assert client.post("/api/suppliers", headers=h, json={"name": "  "}).status_code == 400
+
+
+def test_financial_with_supplier(client):
+    h = _login(client)
+    s = client.post("/api/suppliers", headers=h, json={"name": "Fornecedor F1"})
+    assert s.status_code == 201, s.get_data(as_text=True)
+    sid = s.get_json()["id"]
+    r = client.post("/api/financial", headers=h, json={"description": "Compra MDF", "type": "SAIDA", "amount": 800, "date": "2026-09-01", "supplier_id": sid})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    row = r.get_json()
+    assert row["supplier_id"] == sid
+    assert row["supplier_name"] == "Fornecedor F1"

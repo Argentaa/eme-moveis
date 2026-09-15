@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Numeric, String, Text, Time
+from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, Numeric, String, Text, Time
 from sqlalchemy import ForeignKey, UniqueConstraint
 
 from app.helpers import iso, num
@@ -82,6 +82,28 @@ class Client(db.Model):
         return total if total > 0 else None
 
 
+class Supplier(db.Model):
+    __tablename__ = "suppliers"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(200), nullable=False)
+    cnpj = db.Column(String(30), nullable=True, default="")
+    contact = db.Column(String(160), nullable=True, default="")
+    phone = db.Column(String(60), nullable=True, default="")
+    email = db.Column(String(160), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "cnpj": self.cnpj or "",
+            "contact": self.contact or "",
+            "phone": self.phone or "",
+            "email": self.email or "",
+            "created_at": iso(self.created_at),
+        }
+
+
 class Project(db.Model):
     __tablename__ = "projects"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -124,8 +146,23 @@ class FinancialRecord(db.Model):
     project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
     status = db.Column(String(10), nullable=False, default="PENDENTE")
     due_date = db.Column(Date, nullable=True)
+    doc_number = db.Column(String(60), nullable=True, default="")
+    issue_date = db.Column(Date, nullable=True)
+    doc_type = db.Column(String(20), nullable=False, default="")  # BOLETO|CHEQUE|DEBITO_AUTOMATICO|DINHEIRO|FATURA|PIX
+    bank = db.Column(String(80), nullable=True, default="")
+    account_plan = db.Column(String(120), nullable=True, default="")
+    item_description = db.Column(Text, nullable=True, default="")
+    installments = db.Column(Integer, nullable=False, default=1)
+    client_id = db.Column(
+        String(36), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    supplier_id = db.Column(
+        String(36), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    is_recurring = db.Column(Boolean, nullable=False, default=False)
 
     project = db.relationship("Project")
+    supplier = db.relationship("Supplier")
 
     def to_dict(self):
         return {
@@ -138,6 +175,16 @@ class FinancialRecord(db.Model):
             "project_id": self.project_id,
             "status": self.status,
             "due_date": iso(self.due_date),
+            "doc_number": self.doc_number or "",
+            "issue_date": iso(self.issue_date),
+            "doc_type": self.doc_type,
+            "bank": self.bank or "",
+            "account_plan": self.account_plan or "",
+            "item_description": self.item_description or "",
+            "installments": self.installments,
+            "client_id": self.client_id,
+            "supplier_id": self.supplier_id,
+            "is_recurring": self.is_recurring,
         }
 
 
