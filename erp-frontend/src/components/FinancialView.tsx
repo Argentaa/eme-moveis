@@ -2,10 +2,11 @@ import React, { useEffect, useState, useRef } from 'react';
 import { 
   ArrowUpRight, ArrowDownRight, Wallet, Filter, Plus, Search, 
   Trash2, Landmark, Check, AlertTriangle, RefreshCw, Send, DollarSign, Edit3,
-  Receipt, FileText, FileType, X, Loader2, ChevronDown, ChevronRight, UserX
+  Receipt, FileText, FileType, X, Loader2, ChevronDown, ChevronRight, UserX,
+  Target, Truck, BarChart3, TrendingUp
 } from 'lucide-react';
-import { financialService, projectService, stockService, recurringService, getApiErrorMessage } from '../services/api';
-import { FinancialRecord, Project, Category } from '../types';
+import { financialService, projectService, stockService, recurringService, clientService, supplierService, budgetService, reportService, getApiErrorMessage } from '../services/api';
+import { FinancialRecord, Project, Category, Supplier, BudgetGoal, BudgetAnalysis, Client, ReportResult } from '../types';
 
 interface FinancialViewProps {
   userRole: string;
@@ -49,6 +50,15 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
     mode: 'NORMAL' as 'NORMAL' | 'PARCELADO' | 'FIXO',
     installments: '2',
     frequency: 'MENSAL' as 'SEMANAL' | 'QUINZENAL' | 'MENSAL' | 'ANUAL',
+    doc_number: '',
+    issue_date: '',
+    doc_type: '',
+    bank: '',
+    account_plan: '',
+    item_description: '',
+    client_id: '',
+    supplier_id: '',
+    is_recurring: false,
   });
 
   // Overdue (pendências) tab state
@@ -56,20 +66,131 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   const [overdueLoading, setOverdueLoading] = useState(true);
   const [expandedClientId, setExpandedClientId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState('');
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+
+  // Fluxo de caixa
+  const [cfData, setCfData] = useState<ReportResult | null>(null);
+  const [cfLoading, setCfLoading] = useState(false);
+  const [cfYear, setCfYear] = useState(new Date().getFullYear());
+
+  // Orçamento
+  const [budgetData, setBudgetData] = useState<BudgetAnalysis | null>(null);
+  const [budgetLoading, setBudgetLoading] = useState(false);
+  const [goals, setGoals] = useState<BudgetGoal[]>([]);
+  const [budgetYear, setBudgetYear] = useState(new Date().getFullYear());
+  const [budgetMonth, setBudgetMonth] = useState('');
+  const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
+  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [goalForm, setGoalForm] = useState({ year: new Date().getFullYear(), month: '', category: '', target_value: '' });
+  const [goalError, setGoalError] = useState('');
+  const [goalSaving, setGoalSaving] = useState(false);
+
+  // Fornecedor inline
+  const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [supplierError, setSupplierError] = useState('');
 
   const canEditOrDelete = ['ADMIN', 'GERENTE'].includes(userRole);
+
+  const reloadBudget = async () => {
+    try {
+      const [analysis, gols] = await Promise.all([
+        budgetService.getAnalysis(budgetYear, budgetMonth),
+        budgetService.getGoals(budgetYear, budgetMonth ? Number(budgetMonth) : undefined),
+      ]);
+      setBudgetData(analysis);
+      setGoals(gols);
+    } catch (err) {
+      console.error('Erro ao recarregar orçamento:', err);
+    }
+  };
+
+  const handleOpenGoalModal = (goal?: BudgetGoal) => {
+    setEditingGoalId(goal ? goal.id : null);
+    setGoalForm({
+      year: goal ? goal.year : budgetYear,
+      month: goal && goal.month ? String(goal.month) : '',
+      category: goal ? goal.category : '',
+      target_value: goal ? String(goal.target_value) : '',
+    });
+    setGoalError('');
+    setIsGoalModalOpen(true);
+  };
+
+  const handleSubmitGoal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGoalError('');
+    const cat = goalForm.category.trim();
+    if (!cat || !goalForm.target_value) {
+      setGoalError('Categoria e valor da meta são obrigatórios.');
+      return;
+    }
+    setGoalSaving(true);
+    try {
+      const payload = {
+        year: Number(goalForm.year) || budgetYear,
+        month: goalForm.month ? Number(goalForm.month) : null,
+        category: cat,
+        target_value: Number(goalForm.target_value) || 0,
+      };
+      if (editingGoalId) {
+        await budgetService.updateGoal(editingGoalId, payload);
+      } else {
+        await budgetService.createGoal(payload);
+      }
+      setIsGoalModalOpen(false);
+      reloadBudget();
+    } catch (err) {
+      setGoalError(getApiErrorMessage(err, 'Erro ao salvar a meta.'));
+    } finally {
+      setGoalSaving(false);
+    }
+  };
+
+  const handleDeleteGoal = async (goal: BudgetGoal) => {
+    if (!window.confirm('Excluir esta meta de orçamento?')) return;
+    try {
+      await budgetService.removeGoal(goal.id);
+      reloadBudget();
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao excluir a meta.'));
+    }
+  };
+
+  const handleCreateSupplier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSupplierError('');
+    if (!newSupplierName.trim()) {
+      setSupplierError('Informe o nome do fornecedor.');
+      return;
+    }
+    try {
+      const sup = await supplierService.create({ name: newSupplierName.trim() });
+      setSuppliers(prev => [...prev, sup]);
+      setFormData(prev => ({ ...prev, supplier_id: sup.id }));
+      setIsSupplierModalOpen(false);
+      setNewSupplierName('');
+    } catch (err) {
+      setSupplierError(getApiErrorMessage(err, 'Erro ao criar fornecedor.'));
+    }
+  };
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [fins, projs, cats] = await Promise.all([
+      const [fins, projs, cats, supps, clis] = await Promise.all([
         financialService.getAll(),
         projectService.getAll(),
-        stockService.getCategories('FINANCIAL')
+        stockService.getCategories('FINANCIAL'),
+        supplierService.getAll().catch(() => []),
+        clientService.getAll().catch(() => []),
       ]);
       setRecords(fins);
       setProjects(projs);
       setCategories(cats);
+      setSuppliers(supps);
+      setClients(clis);
     } catch (err) {
       console.error('Erro ao ler dados do financeiro:', err);
     } finally {
@@ -98,6 +219,37 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       loadOverdue();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    let active = true;
+    setCfLoading(true);
+    reportService.getReport('cash-flow', { year: String(cfYear) })
+      .then((data) => { if (active) setCfData(data); })
+      .catch(() => { if (active) setCfData(null); })
+      .finally(() => { if (active) setCfLoading(false); });
+    return () => { active = false; };
+  }, [cfYear]);
+
+  useEffect(() => {
+    let active = true;
+    setBudgetLoading(true);
+    Promise.all([
+      budgetService.getAnalysis(budgetYear, budgetMonth),
+      budgetService.getGoals(budgetYear, budgetMonth ? Number(budgetMonth) : undefined),
+    ])
+      .then(([analysis, gols]) => {
+        if (active) {
+          setBudgetData(analysis);
+          setGoals(gols);
+        }
+      })
+      .catch((err) => {
+        console.error('Erro ao carregar orçamento:', err);
+        if (active) setBudgetData(null);
+      })
+      .finally(() => { if (active) setBudgetLoading(false); });
+    return () => { active = false; };
+  }, [budgetYear, budgetMonth]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -135,7 +287,17 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       date: new Date().toISOString().substring(0, 10),
       due_date: new Date().toISOString().substring(0, 10),
       project_id: '',
-      status: 'PAGO'
+      status: 'PAGO',
+      installments: '1',
+      doc_number: '',
+      issue_date: '',
+      doc_type: '',
+      bank: '',
+      account_plan: '',
+      item_description: '',
+      client_id: '',
+      supplier_id: '',
+      is_recurring: false,
     });
     setSubmitError('');
     setIsModalOpen(true);
@@ -151,7 +313,17 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       date: record.date.substring(0, 10),
       due_date: record.due_date ? record.due_date.substring(0, 10) : record.date.substring(0, 10),
       project_id: record.project_id || '',
-      status: record.status
+      status: record.status,
+      installments: record.installments ? String(record.installments) : '1',
+      doc_number: record.doc_number || '',
+      issue_date: record.issue_date ? record.issue_date.substring(0, 10) : '',
+      doc_type: record.doc_type || '',
+      bank: record.bank || '',
+      account_plan: record.account_plan || '',
+      item_description: record.item_description || '',
+      client_id: record.client_id || '',
+      supplier_id: record.supplier_id || '',
+      is_recurring: record.is_recurring || false,
     });
     setSubmitError('');
     setIsModalOpen(true);
@@ -180,7 +352,17 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         date: formData.date,
         due_date: formData.due_date,
         project_id: formData.project_id || undefined,
-        status: formData.status
+        status: formData.status,
+        doc_number: formData.doc_number || undefined,
+        issue_date: formData.issue_date || undefined,
+        doc_type: formData.doc_type || undefined,
+        bank: formData.bank || undefined,
+        account_plan: formData.account_plan || undefined,
+        item_description: formData.item_description || undefined,
+        installments: Number(formData.installments) || 1,
+        client_id: formData.client_id || undefined,
+        supplier_id: formData.supplier_id || undefined,
+        is_recurring: formData.is_recurring,
       };
 
       if (editingRecordId) {
@@ -375,6 +557,70 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
           </div>
         </div>
 
+      </div>
+
+      {/* Fluxo de Caixa Mensal */}
+      <div className="glass-panel rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-red-500" />
+            <h3 className="text-sm font-semibold text-white font-sans">Fluxo de Caixa Mensal</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-zinc-400 font-mono">Ano:</label>
+            <select
+              value={cfYear}
+              onChange={(e) => setCfYear(Number(e.target.value))}
+              className="bg-zinc-900 border border-zinc-800 text-white text-xs rounded px-3 py-1.5 focus:outline-none focus:border-red-600 font-mono"
+            >
+              {[cfYear - 1, cfYear, cfYear + 1].map(y => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+            <TrendingUp className="w-4 h-4 text-zinc-600" />
+          </div>
+        </div>
+        {cfLoading ? (
+          <div className="flex justify-center py-6">
+            <RefreshCw className="w-6 h-6 text-red-600 animate-spin" />
+          </div>
+        ) : cfData ? (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              {cfData.summary.map((s) => (
+                <div key={s.label} className="bg-zinc-950/50 rounded p-3 border border-zinc-900">
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">{s.label}</span>
+                  <span className={`text-sm font-bold font-mono block mt-1 ${s.tone === 'positive' ? 'text-emerald-400' : s.tone === 'negative' ? 'text-red-500' : 'text-white'}`}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+            <CFBarChart data={cfData} />
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs font-mono text-zinc-300">
+                <thead className="text-zinc-500 uppercase tracking-wider border-b border-zinc-900">
+                  <tr>
+                    {cfData.columns.map((c) => (
+                      <th key={c.key} className="py-2 pr-4 font-normal">{c.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-900">
+                  {cfData.rows.map((row: any) => (
+                    <tr key={row.month} className="hover:bg-zinc-900/40">
+                      <td className="py-2 pr-4 text-zinc-400">{row.month}</td>
+                      <td className="py-2 pr-4 text-emerald-400">{row.income}</td>
+                      <td className="py-2 pr-4 text-red-500">{row.outcome}</td>
+                      <td className="py-2 pr-4 text-white">{row.balance}</td>
+                      <td className="py-2 pr-4 text-zinc-300">{row.accumulated}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-zinc-500 font-mono">Não foi possível carregar o fluxo de caixa.</p>
+        )}
       </div>
 
       {/* Advanced Filters */}
@@ -584,6 +830,116 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         </div>
       )}
 
+      {/* Orçamento x Realizado */}
+      <div className="glass-panel rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Target className="w-4 h-4 text-red-500" />
+            <h3 className="text-sm font-semibold text-white font-sans">Planejamento Orçamentário</h3>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={budgetYear}
+              onChange={(e) => setBudgetYear(Number(e.target.value))}
+              className="bg-zinc-900 border border-zinc-800 text-white text-xs rounded px-3 py-1.5 focus:outline-none focus:border-red-600 font-mono"
+            >
+              {[budgetYear - 1, budgetYear, budgetYear + 1].map(y => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+            <select
+              value={budgetMonth}
+              onChange={(e) => setBudgetMonth(e.target.value)}
+              className="bg-zinc-900 border border-zinc-800 text-white text-xs rounded px-3 py-1.5 focus:outline-none focus:border-red-600 font-mono"
+            >
+              <option value="">Ano todo</option>
+              {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
+                <option key={m} value={m}>Mês {m}</option>
+              ))}
+            </select>
+            {canEditOrDelete && (
+              <button
+                onClick={() => handleOpenGoalModal()}
+                className="bg-red-600 hover:bg-red-700 text-white text-xs font-medium px-3 py-1.5 rounded flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" /> Nova Meta
+              </button>
+            )}
+          </div>
+        </div>
+
+        {budgetLoading ? (
+          <div className="flex justify-center py-6">
+            <RefreshCw className="w-6 h-6 text-red-600 animate-spin" />
+          </div>
+        ) : budgetData ? (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {budgetData.summary.map((s) => (
+                <div key={s.label} className="bg-zinc-950/50 rounded p-3 border border-zinc-900">
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">{s.label}</span>
+                  <span className={`text-sm font-bold font-mono block mt-1 ${s.tone === 'positive' ? 'text-emerald-400' : s.tone === 'negative' ? 'text-red-500' : 'text-white'}`}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs font-mono text-zinc-300">
+                <thead className="text-zinc-500 uppercase tracking-wider border-b border-zinc-900">
+                  <tr>
+                    <th className="py-2 pr-4 font-normal">Categoria</th>
+                    <th className="py-2 pr-4 font-normal">Orçado</th>
+                    <th className="py-2 pr-4 font-normal">Realizado</th>
+                    <th className="py-2 pr-4 font-normal">Diferença</th>
+                    <th className="py-2 pr-4 font-normal w-40">% Realizado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-900">
+                  {budgetData.rows.map((row) => {
+                    const pct = row.percentage === '--' ? 0 : Number(row.percentage.replace('%', '').replace(',', '.'));
+                    const pctCls = pct >= 100 ? 'bg-red-600' : pct >= 60 ? 'bg-emerald-600' : 'bg-amber-600';
+                    return (
+                      <tr key={row.category} className="hover:bg-zinc-900/40">
+                        <td className="py-2.5 pr-4 text-white font-sans">{row.category}</td>
+                        <td className="py-2.5 pr-4 text-zinc-300">{row.budget}</td>
+                        <td className="py-2.5 pr-4 text-zinc-300">{row.actual}</td>
+                        <td className="py-2.5 pr-4 text-zinc-300">{row.difference}</td>
+                        <td className="py-2.5 pr-4">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 bg-zinc-900 rounded overflow-hidden">
+                              <div className={`h-full ${pctCls}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                            </div>
+                            <span className="text-[11px] text-zinc-400 shrink-0">{row.percentage}</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {goals.length > 0 && (
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider">Metas cadastradas:</span>
+                {goals.map((g) => (
+                  <span key={g.id} className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-300 rounded">
+                    {g.category} — {g.target_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
+                    {g.month ? ` (mês ${g.month})` : ' (anual)'}
+                    {canEditOrDelete && (
+                      <>
+                        <button onClick={() => handleOpenGoalModal(g)} className="text-zinc-500 hover:text-sky-400 cursor-pointer" title="Editar"><Edit3 className="w-3 h-3" /></button>
+                        <button onClick={() => handleDeleteGoal(g)} className="text-zinc-500 hover:text-red-400 cursor-pointer" title="Excluir"><Trash2 className="w-3 h-3" /></button>
+                      </>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-xs text-zinc-500 font-mono">Não foi possível carregar o orçamento.</p>
+        )}
+      </div>
+
       </>
       )}
 
@@ -778,6 +1134,143 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Nº do Documento</label>
+                  <input
+                    type="text"
+                    value={formData.doc_number}
+                    onChange={(e) => setFormData({ ...formData, doc_number: e.target.value })}
+                    placeholder="Ex: NF 456 / Boleto 00123"
+                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656 font-mono"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Data de Emissão</label>
+                  <input
+                    type="date"
+                    value={formData.issue_date}
+                    onChange={(e) => setFormData({ ...formData, issue_date: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Tipo de Documento</label>
+                  <select
+                    value={formData.doc_type}
+                    onChange={(e) => setFormData({ ...formData, doc_type: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                  >
+                    <option value="">— Selecione —</option>
+                    <option value="BOLETO">Boleto</option>
+                    <option value="CHEQUE">Cheque</option>
+                    <option value="DEBITO_AUTOMATICO">Débito Automático</option>
+                    <option value="DINHEIRO">Dinheiro</option>
+                    <option value="FATURA">Fatura</option>
+                    <option value="PIX">PIX</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Banco / Conta</label>
+                  <input
+                    type="text"
+                    value={formData.bank}
+                    onChange={(e) => setFormData({ ...formData, bank: e.target.value })}
+                    placeholder="Ex: Sicredi 1234"
+                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Cliente (Opcional)</label>
+                  <select
+                    value={formData.client_id}
+                    onChange={(e) => setFormData({ ...formData, client_id: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                  >
+                    <option value="">Nenhum</option>
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Fornecedor (Opcional)</label>
+                  <div className="flex gap-2">
+                    <select
+                      value={formData.supplier_id}
+                      onChange={(e) => setFormData({ ...formData, supplier_id: e.target.value })}
+                      className="flex-1 bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                    >
+                      <option value="">Nenhum</option>
+                      {suppliers.map(s => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                    {canEditOrDelete && (
+                      <button
+                        type="button"
+                        onClick={() => { setNewSupplierName(''); setSupplierError(''); setIsSupplierModalOpen(true); }}
+                        className="px-3 bg-zinc-900 hover:bg-emerald-950/40 text-zinc-400 hover:text-emerald-400 rounded border border-zinc-800 transition cursor-pointer"
+                        title="Cadastrar fornecedor"
+                      >
+                        <Truck className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Plano de Contas</label>
+                  <input
+                    type="text"
+                    value={formData.account_plan}
+                    onChange={(e) => setFormData({ ...formData, account_plan: e.target.value })}
+                    placeholder="Ex: 3.1.01 – Materiais"
+                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656 font-mono"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Nº de Parcelas</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={formData.installments}
+                    onChange={(e) => setFormData({ ...formData, installments: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Descrição do Item / Serviço (Detalhada)</label>
+                <textarea
+                  value={formData.item_description}
+                  onChange={(e) => setFormData({ ...formData, item_description: e.target.value })}
+                  rows={2}
+                  placeholder="Ex: 12 chapas de MDF 15mm, ferragens, corrediças..."
+                  className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656 resize-none"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formData.is_recurring}
+                  onChange={(e) => setFormData({ ...formData, is_recurring: e.target.checked })}
+                  className="accent-red-600 w-4 h-4"
+                />
+                Despesa Recorrente
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="space-y-2">
                   <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Vincular Ambiente / Projeto (Opcional)</label>
                   <select 
                     value={formData.project_id}
@@ -885,6 +1378,127 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         </div>
       )}
 
+      {/* Goal Modal — nova meta de orçamento */}
+      {isGoalModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
+            <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-5 border-b border-zinc-800 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Target className="w-5 h-5 text-red-500" />
+                <h3 className="text-base font-serif font-semibold text-white">{editingGoalId ? 'Editar Meta' : 'Nova Meta de Orçamento'}</h3>
+              </div>
+              <button onClick={() => setIsGoalModalOpen(false)} className="text-zinc-500 hover:text-white cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleSubmitGoal} className="p-6 space-y-4">
+              {goalError && (
+                <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">{goalError}</div>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Ano *</label>
+                  <input
+                    type="number"
+                    required
+                    min={2000}
+                    max={2100}
+                    value={goalForm.year}
+                    onChange={(e) => setGoalForm({ ...goalForm, year: Number(e.target.value) })}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Mês (opcional)</label>
+                  <select
+                    value={goalForm.month}
+                    onChange={(e) => setGoalForm({ ...goalForm, month: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                  >
+                    <option value="">Anual</option>
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
+                      <option key={m} value={m}>Mês {m}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Categoria *</label>
+                <input
+                  type="text"
+                  required
+                  value={goalForm.category}
+                  onChange={(e) => setGoalForm({ ...goalForm, category: e.target.value })}
+                  placeholder="Ex: VENDAS, MATERIAL, MÃO DE OBRA"
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Valor da Meta (R$) *</label>
+                <input
+                  type="number"
+                  required
+                  min={0}
+                  step="0.01"
+                  value={goalForm.target_value}
+                  onChange={(e) => setGoalForm({ ...goalForm, target_value: e.target.value })}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                />
+              </div>
+              <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800">
+                <button type="button" onClick={() => setIsGoalModalOpen(false)} className="px-4 py-2 text-xs bg-zinc-900 text-zinc-300 hover:text-white rounded border border-zinc-800 cursor-pointer font-mono">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={goalSaving} className="px-5 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer disabled:opacity-50">
+                  {goalSaving ? 'Salvando...' : editingGoalId ? 'Salvar Alterações' : 'Criar Meta'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Supplier Modal — cadastro rápido */}
+      {isSupplierModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="glass-panel w-full max-w-sm rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
+            <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-5 border-b border-zinc-800 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Truck className="w-5 h-5 text-red-500" />
+                <h3 className="text-base font-serif font-semibold text-white">Novo Fornecedor</h3>
+              </div>
+              <button onClick={() => setIsSupplierModalOpen(false)} className="text-zinc-500 hover:text-white cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleCreateSupplier} className="p-6 space-y-4">
+              {supplierError && (
+                <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">{supplierError}</div>
+              )}
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Nome do Fornecedor *</label>
+                <input
+                  type="text"
+                  required
+                  value={newSupplierName}
+                  onChange={(e) => setNewSupplierName(e.target.value)}
+                  placeholder="Ex: Madeireira Sul"
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600"
+                />
+              </div>
+              <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800">
+                <button type="button" onClick={() => setIsSupplierModalOpen(false)} className="px-4 py-2 text-xs bg-zinc-900 text-zinc-300 hover:text-white rounded border border-zinc-800 cursor-pointer font-mono">
+                  Cancelar
+                </button>
+                <button type="submit" className="px-5 py-2 text-sm bg-emerald-700 hover:bg-emerald-600 text-white rounded font-semibold cursor-pointer">
+                  Criar Fornecedor
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Detail Modal — view record + generate receipt */}
       {detailRecord && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -940,6 +1554,27 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                 </p>
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">Documento</span>
+                  <p className="text-zinc-300 text-sm mt-0.5">
+                    {detailRecord.doc_number || '—'}{detailRecord.doc_type ? ' · ' + detailRecord.doc_type : ''}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">Banco / Conta</span>
+                  <p className="text-zinc-300 text-sm mt-0.5">{detailRecord.bank || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">Fornecedor</span>
+                  <p className="text-zinc-300 text-sm mt-0.5">{detailRecord.supplier_name || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">Parcelas</span>
+                  <p className="text-zinc-300 text-sm mt-0.5">{detailRecord.installments || 1}</p>
+                </div>
+              </div>
+
               {receiptError && (
                 <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">
                   {receiptError}
@@ -990,5 +1625,42 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       )}
 
     </div>
+  );
+}
+
+function parseMoney(s: string): number {
+  if (!s) return 0;
+  const n = parseFloat(s.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.'));
+  return isNaN(n) ? 0 : n;
+}
+
+function CFBarChart({ data }: { data: ReportResult }) {
+  const rows = data.rows as any[];
+  const max = Math.max(1, ...rows.map(r => Math.max(parseMoney(r.income), parseMoney(r.outcome))));
+  const W = 640;
+  const H = 180;
+  const pad = 22;
+  const bw = (W - pad * 2) / rows.length;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Gráfico do fluxo de caixa mensal">
+      {rows.map((r, i) => {
+        const inc = parseMoney(r.income);
+        const out = parseMoney(r.outcome);
+        const hInc = (inc / max) * (H - pad * 2 - 18);
+        const hOut = (out / max) * (H - pad * 2 - 18);
+        const xc = pad + i * bw + bw / 2;
+        return (
+          <g key={r.month}>
+            <title>{`${r.month}: entradas ${r.income}, saídas ${r.outcome}`}</title>
+            <rect x={xc - 9} y={H - pad - hInc} width={11} height={hInc || 1} rx={2} fill="#34d399" />
+            <rect x={xc + 2} y={H - pad - hOut} width={11} height={hOut || 1} rx={2} fill="#f87171" />
+            <text x={xc} y={H - 6} textAnchor="middle" fontSize={8} fill="#71717a">
+              {String(r.month).split(' - ')[0]}
+            </text>
+          </g>
+        );
+      })}
+      <rect x={pad} y={pad} width={W - pad * 2} height={H - pad * 2 - 12} fill="none" stroke="#27272a" strokeWidth={1} rx={4} />
+    </svg>
   );
 }

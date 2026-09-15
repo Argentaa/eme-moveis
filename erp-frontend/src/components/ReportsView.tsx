@@ -36,10 +36,9 @@ const TONE_CLASSES: Record<string, string> = {
 
 export default function ReportsView({ userRole }: ReportsViewProps) {
   const [activeArea, setActiveArea] = useState<ReportArea>('financial');
-  const [dreData, setDreData] = useState<any>(null);
-  const [dreLoading, setDreLoading] = useState(false);
-  const [dreMonth, setDreMonth] = useState(new Date().getMonth() + 1);
   const [dreYear, setDreYear] = useState(new Date().getFullYear());
+  const [drePeriod, setDrePeriod] = useState('mensal');
+  const [dreLoading, setDreLoading] = useState(false);
   const [crmData, setCrmData] = useState<any>(null);
   const [crmLoading, setCrmLoading] = useState(false);
   const [crmDateFrom, setCrmDateFrom] = useState('');
@@ -84,11 +83,14 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
 
   const loadDRE = async () => {
     setDreLoading(true);
+    setError('');
     try {
-      const data = await reportService.getDRE(dreMonth, dreYear);
-      setDreData(data);
+      const result = await reportService.getReport('dre', { year: String(dreYear), period: drePeriod });
+      setReport(result);
     } catch (err) {
       console.error('Erro ao carregar DRE:', err);
+      setError(getApiErrorMessage(err, 'Erro ao carregar o DRE. Tente novamente.'));
+      setReport(null);
     } finally {
       setDreLoading(false);
     }
@@ -96,7 +98,21 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
 
   useEffect(() => {
     if (activeArea === 'dre') loadDRE();
-  }, [activeArea, dreMonth, dreYear]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeArea, dreYear, drePeriod]);
+
+  const handleDreExport = async (format: 'pdf' | 'xlsx') => {
+    setExporting(format);
+    setError('');
+    try {
+      await reportService.exportReport('dre', format, { year: String(dreYear), period: drePeriod });
+    } catch (err) {
+      console.error('Erro ao exportar DRE:', err);
+      setError(getApiErrorMessage(err, 'Erro ao exportar o relatório. Tente novamente.'));
+    } finally {
+      setExporting(null);
+    }
+  };
 
   const loadCRM = async () => {
     setCrmLoading(true);
@@ -226,35 +242,25 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
         })}
       </div>
 
-      {/* DRE Panel — só aparece quando aba DRE está ativa */}
+      {/* DRE Panel — tabela por ano e período */}
       {activeArea === 'dre' && (
         <div className="space-y-5">
-          {/* Seletor de período */}
-          <div className="glass-panel p-5 rounded-lg flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-zinc-400 font-mono uppercase">Mês</label>
-              <select
-                value={dreMonth}
-                onChange={e => setDreMonth(Number(e.target.value))}
-                className="bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none font-mono"
-              >
-                {['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'].map((m, i) => (
-                  <option key={i+1} value={i+1}>{m}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-zinc-400 font-mono uppercase">Ano</label>
-              <select
-                value={dreYear}
-                onChange={e => setDreYear(Number(e.target.value))}
-                className="bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none font-mono"
-              >
-                {[2024, 2025, 2026, 2027].map(y => (
+          <div className="glass-panel p-5 rounded-lg flex flex-wrap items-end gap-4">
+            <FilterField label="Ano">
+              <select value={dreYear} onChange={e => setDreYear(Number(e.target.value))} className={inputClass}>
+                {[dreYear - 1, dreYear, dreYear + 1].map(y => (
                   <option key={y} value={y}>{y}</option>
                 ))}
               </select>
-            </div>
+            </FilterField>
+            <FilterField label="Período">
+              <select value={drePeriod} onChange={e => setDrePeriod(e.target.value)} className={inputClass}>
+                <option value="mensal">Mensal</option>
+                <option value="trimestral">Trimestral</option>
+                <option value="semestral">Semestral</option>
+                <option value="anual">Anual</option>
+              </select>
+            </FilterField>
           </div>
 
           {dreLoading ? (
@@ -262,85 +268,80 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
               <RefreshCw className="w-10 h-10 text-red-600 animate-spin mb-4" />
               <p className="text-zinc-400 font-mono text-xs">Calculando DRE...</p>
             </div>
-          ) : dreData ? (
-            <div className="space-y-4">
-              {/* Resultado líquido */}
-              <div className={`glass-panel p-5 rounded-lg border-l-4 ${dreData.resultado_liquido >= 0 ? 'border-l-emerald-500' : 'border-l-red-500'}`}>
-                <p className="text-xs text-zinc-400 font-mono uppercase tracking-widest">Resultado Líquido</p>
-                <p className={`text-3xl font-bold font-sans mt-1 ${dreData.resultado_liquido >= 0 ? 'text-emerald-400' : 'text-red-500'}`}>
-                  {dreData.resultado_liquido.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </p>
-                <p className="text-xs text-zinc-500 font-mono mt-1">
-                  Margem líquida: {dreData.margem_liquida}%
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Receitas */}
-                <div className="glass-panel rounded-lg overflow-hidden">
-                  <div className="p-4 bg-emerald-950/20 border-b border-zinc-900 flex justify-between items-center">
-                    <span className="text-sm font-semibold text-emerald-400 font-sans">Receitas</span>
-                    <span className="text-sm font-bold font-mono text-emerald-400">
-                      {dreData.receitas.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </span>
-                  </div>
-                  <div className="divide-y divide-zinc-900">
-                    {dreData.receitas.itens.length === 0 ? (
-                      <p className="p-4 text-xs text-zinc-500 font-mono">Nenhuma receita no período.</p>
-                    ) : dreData.receitas.itens.map((item: any) => (
-                      <div key={item.categoria} className="flex justify-between items-center p-3">
-                        <span className="text-xs text-zinc-300 font-sans">{item.categoria}</span>
-                        <span className="text-xs font-mono text-zinc-400">
-                          {item.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+          ) : report ? (
+            <div className="space-y-5">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                <div>
+                  <h2 className="text-lg font-serif text-white">{report.title}</h2>
+                  <p className="text-[11px] text-zinc-500 font-mono">Gerado em {report.generated_at} — {report.rows.length} registro(s)</p>
                 </div>
-
-                {/* Despesas */}
-                <div className="glass-panel rounded-lg overflow-hidden">
-                  <div className="p-4 bg-red-950/20 border-b border-zinc-900 flex justify-between items-center">
-                    <span className="text-sm font-semibold text-red-400 font-sans">Despesas</span>
-                    <span className="text-sm font-bold font-mono text-red-400">
-                      {dreData.despesas.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </span>
-                  </div>
-                  <div className="divide-y divide-zinc-900">
-                    {dreData.despesas.itens.length === 0 ? (
-                      <p className="p-4 text-xs text-zinc-500 font-mono">Nenhuma despesa no período.</p>
-                    ) : dreData.despesas.itens.map((item: any) => (
-                      <div key={item.categoria} className="flex justify-between items-center p-3">
-                        <span className="text-xs text-zinc-300 font-sans">{item.categoria}</span>
-                        <span className="text-xs font-mono text-zinc-400">
-                          {item.valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleDreExport('pdf')}
+                    disabled={exporting !== null}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-900 hover:bg-red-950/40 border border-zinc-800 hover:border-red-900/40 text-zinc-300 hover:text-red-400 rounded text-xs font-mono uppercase transition cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+                  >
+                    {exporting === 'pdf' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                    PDF
+                  </button>
+                  <button
+                    onClick={() => handleDreExport('xlsx')}
+                    disabled={exporting !== null}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-900 hover:bg-emerald-950/40 border border-zinc-800 hover:border-emerald-900/40 text-zinc-300 hover:text-emerald-400 rounded text-xs font-mono uppercase transition cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+                  >
+                    {exporting === 'xlsx' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+                    Excel
+                  </button>
                 </div>
               </div>
 
-              {/* Pendentes */}
-              {(dreData.pendentes.receitas > 0 || dreData.pendentes.despesas > 0) && (
-                <div className="glass-panel p-4 rounded-lg border border-amber-900/40 bg-amber-950/10">
-                  <p className="text-xs text-amber-400 font-mono uppercase tracking-widest mb-3">Pendências no período (vencimento)</p>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-[11px] text-zinc-500 font-mono">A Receber</p>
-                      <p className="text-sm font-bold text-emerald-400 font-mono">
-                        {dreData.pendentes.receitas.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+              {/* Summary Cards */}
+              {report.summary.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {report.summary.map((item, idx) => (
+                    <div key={idx} className={`glass-panel p-4 rounded-lg border-l-4 ${TONE_CLASSES[item.tone || 'neutral']}`}>
+                      <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">{item.label}</span>
+                      <p className={`text-lg font-bold font-sans mt-1 ${TONE_CLASSES[item.tone || 'neutral'].split(' ')[0]}`}>
+                        {item.value}
                       </p>
                     </div>
-                    <div>
-                      <p className="text-[11px] text-zinc-500 font-mono">A Pagar</p>
-                      <p className="text-sm font-bold text-red-400 font-mono">
-                        {dreData.pendentes.despesas.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                      </p>
-                    </div>
-                  </div>
+                  ))}
                 </div>
               )}
+
+              {/* Detailed Table */}
+              <div className="glass-panel rounded-lg overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm text-zinc-300">
+                    <thead className="text-xs uppercase font-mono text-zinc-500 bg-zinc-950/70 border-b border-zinc-905">
+                      <tr>
+                        {report.columns.map(col => (
+                          <th key={col.key} className="py-3.5 px-5 font-normal whitespace-nowrap">{col.label}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-900">
+                      {report.rows.map((row, idx) => (
+                        <tr key={idx} className="hover:bg-zinc-900/40">
+                          {report.columns.map(col => (
+                            <td key={col.key} className="py-3 px-5 font-sans text-xs whitespace-nowrap">
+                              {row[col.key] ?? '-'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+
+                      {report.rows.length === 0 && (
+                        <tr>
+                          <td colSpan={report.columns.length} className="py-12 text-center text-zinc-500 font-mono">
+                            Nenhum registro encontrado para os filtros selecionados.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           ) : null}
         </div>

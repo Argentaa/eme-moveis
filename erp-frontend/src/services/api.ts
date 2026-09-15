@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -485,12 +485,60 @@ export const reportService = {
     const response = await api.get('/api/reports/crm', { params });
     return response.data;
   },
+};
 
-  async getDRE(month?: number, year?: number): Promise<any> {
-    const params: Record<string, number> = {};
-    if (month) params.month = month;
-    if (year) params.year = year;
-    const response = await api.get('/api/reports/dre', { params });
+// Supplier Services
+export const supplierService = {
+  async getAll(): Promise<Supplier[]> {
+    const response = await api.get('/api/suppliers');
+    return response.data;
+  },
+
+  async create(data: { name: string; cnpj?: string; contact?: string; phone?: string; email?: string }): Promise<Supplier> {
+    const response = await api.post('/api/suppliers', data);
+    return response.data;
+  },
+
+  async update(id: string, data: Partial<Supplier>): Promise<Supplier> {
+    const response = await api.put(`/api/suppliers/${id}`, data);
+    return response.data;
+  },
+
+  async remove(id: string): Promise<any> {
+    const response = await api.delete(`/api/suppliers/${id}`);
+    return response.data;
+  },
+};
+
+// Budget Services
+export const budgetService = {
+  async getGoals(year?: number, month?: number): Promise<BudgetGoal[]> {
+    const params: Record<string, string> = {};
+    if (year) params.year = String(year);
+    if (month) params.month = String(month);
+    const response = await api.get('/api/budget/goals', { params });
+    return response.data;
+  },
+
+  async createGoal(data: { year: number; month?: number | null; category: string; target_value: number }): Promise<BudgetGoal> {
+    const response = await api.post('/api/budget/goals', data);
+    return response.data;
+  },
+
+  async updateGoal(id: string, data: Partial<BudgetGoal>): Promise<BudgetGoal> {
+    const response = await api.put(`/api/budget/goals/${id}`, data);
+    return response.data;
+  },
+
+  async removeGoal(id: string): Promise<any> {
+    const response = await api.delete(`/api/budget/goals/${id}`);
+    return response.data;
+  },
+
+  async getAnalysis(year: number, month?: number | ''): Promise<BudgetAnalysis> {
+    const params: Record<string, string> = { year: String(year) };
+    if (month) params.month = String(month);
+    const response = await api.get('/api/budget/analysis', { params });
     return response.data;
   },
 };

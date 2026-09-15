@@ -64,7 +64,55 @@ export interface FinancialRecord {
   date: string;
   due_date: string;
   project_id?: string;
+  project_title?: string | null;
+  client_id?: string | null;
+  client_name?: string | null;
+  supplier_id?: string | null;
+  supplier_name?: string | null;
   status: 'PAGO' | 'PENDENTE';
+  doc_number?: string;
+  issue_date?: string | null;
+  doc_type?: string;
+  bank?: string;
+  account_plan?: string;
+  item_description?: string;
+  installments?: number;
+  is_recurring?: boolean;
+}
+
+export interface Supplier {
+  id: string;
+  name: string;
+  cnpj: string;
+  contact: string;
+  phone: string;
+  email: string;
+  created_at: string;
+}
+
+export interface BudgetGoal {
+  id: string;
+  year: number;
+  month: number | null;
+  category: string;
+  target_value: number;
+  created_at: string;
+}
+
+export interface BudgetAnalysis {
+  title: string;
+  period: { year: number; month: number | null };
+  summary: { label: string; value: string; tone: string }[];
+  columns: { key: string; label: string }[];
+  rows: {
+    category: string;
+    budget: string;
+    actual: string;
+    difference: string;
+    percentage: string;
+    _budget?: number;
+    _actual?: number;
+  }[];
 }
 
 export interface Category {
@@ -100,7 +148,7 @@ export interface StockMovement {
 
 // ── Relatórios ──────────────────────────────────────────────────
 
-export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources';
+export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow';
 
 export interface ReportColumn {
   key: string;
