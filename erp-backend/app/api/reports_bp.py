@@ -7,6 +7,7 @@ Contratos replicados do FastAPI original:
   margem_liquida, pendentes{receitas,despesas}}
 - crm -> {periodo, negociacoes{...}, conversao{...}, ticket_medio{...},
   fluxo_caixa[], fontes_lead[]}
+- lead-sources -> ReportResponse (origem dos leads: fonte/campanha, conversao e valores)
 """
 import io
 from datetime import date, datetime, timezone
