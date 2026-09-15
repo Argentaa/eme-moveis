@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  Plus, Search, Edit2, Trash2, Mail, Phone, MapPin, 
+import {
+  Plus, Search, Edit2, Trash2, Mail, Phone, MapPin,
   ArrowLeft, Send, RefreshCw,
-  Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, FolderPlus, Eye
+  Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, FolderPlus, Eye, Funnel as FunnelIcon, X
 } from 'lucide-react';
 import { FunnelStatus } from '../types';
 import { clientService, projectService, funnelService, calendarService, leadOptionService, getApiErrorMessage } from '../services/api';
-import { Client, Project, LeadOption } from '../types';
+import { Client, Project, LeadOption, Funnel, FunnelColumn } from '../types';
 import ClientDetailModal from './ClientDetailModal';
 
 interface ClientsViewProps {
@@ -18,9 +18,11 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   const [viewMode, setViewMode] = useState<'LIST' | 'KANBAN'>('KANBAN');
-  const [funnelColumns, setFunnelColumns] = useState<any[]>([]);
+  const [funnels, setFunnels] = useState<Funnel[]>([]);
+  const [selectedFunnelId, setSelectedFunnelId] = useState<string>('');
+  const [funnelColumns, setFunnelColumns] = useState<FunnelColumn[]>([]);
   const [editingFunnelCol, setEditingFunnelCol] = useState<string | null>(null);
   const [editingFunnelLabel, setEditingFunnelLabel] = useState('');
   const [editingFunnelDesc, setEditingFunnelDesc] = useState('');
@@ -31,6 +33,15 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [lostModalClient, setLostModalClient] = useState<Client | null>(null);
   const [lostReason, setLostReason] = useState('');
   const [lostError, setLostError] = useState('');
+
+  // Funnel manager modal state
+  const [showFunnelManager, setShowFunnelManager] = useState(false);
+  const [newFunnelName, setNewFunnelName] = useState('');
+  const [managerError, setManagerError] = useState('');
+  const [renameFunnelName, setRenameFunnelName] = useState('');
+  const [newStageLabel, setNewStageLabel] = useState('');
+  const [stageError, setStageError] = useState('');
+  const [stageDrafts, setStageDrafts] = useState<Record<string, string>>({});
 
   // Modais Control
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -45,7 +56,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [newCampaignName, setNewCampaignName] = useState('');
   const [addingSource, setAddingSource] = useState(false);
   const [newSourceName, setNewSourceName] = useState('');
-  
+
   // Form States
   const [formData, setFormData] = useState({
     name: '',
@@ -53,12 +64,17 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     phone: '',
     cpf_cnpj: '',
     address: '',
-    funnel_status: 'PROSPECCAO' as FunnelStatus,
+    funnel_status: 'PROSPECCAO' as string,
+    funnel_id: '' as string,
     estimated_value: '',
     lead_source: '',
     campaign: '',
   });
   const [submitError, setSubmitError] = useState('');
+
+  const selectedFunnel = funnels.find(f => f.id === selectedFunnelId) || funnels.find(f => f.is_default) || funnels[0] || null;
+
+  const sortColumns = (cols: FunnelColumn[]) => [...cols].sort((a, b) => a.position - b.position || a.label.localeCompare(b.label));
 
   const loadClients = async () => {
     setLoading(true);
@@ -78,12 +94,55 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
+  const loadFunnels = async () => {
+    try {
+      const data = await funnelService.getFunnels('CRM');
+      if (data && data.length > 0) {
+        setFunnels(data);
+        let targetId = selectedFunnelId;
+        if (!targetId || !data.find(f => f.id === targetId)) {
+          const def = data.find(f => f.is_default);
+          targetId = def ? def.id : data[0].id;
+          setSelectedFunnelId(targetId);
+        }
+        const target = data.find(f => f.id === targetId) || data.find(f => f.is_default) || data[0];
+        const sorted = sortColumns(target.columns || []);
+        setFunnelColumns(sorted);
+      } else {
+        setFunnels([]);
+        setFunnelColumns([]);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar funis:', err);
+    }
+  };
+
+  const switchFunnel = (id: string) => {
+    setSelectedFunnelId(id);
+    const target = funnels.find(f => f.id === id);
+    if (target) {
+      const sorted = sortColumns(target.columns || []);
+      setFunnelColumns(sorted);
+    }
+    setEditingFunnelCol(null);
+  };
+
   useEffect(() => {
     loadClients();
-    loadFunnelColumns();
+    loadFunnels();
     leadOptionService.getSources().then(setSources).catch(() => setSources([]));
     leadOptionService.getCampaigns().then(setCampaigns).catch(() => setCampaigns([]));
   }, []);
+
+  // keep rename input and stage drafts in sync when funnel changes or modal opens
+  useEffect(() => {
+    if (selectedFunnel) {
+      setRenameFunnelName(selectedFunnel.name);
+      const drafts: Record<string, string> = {};
+      (selectedFunnel.columns || []).forEach(c => { drafts[c.column_key] = c.label; });
+      setStageDrafts(drafts);
+    }
+  }, [selectedFunnel?.id, selectedFunnel?.name, showFunnelManager]);
 
   const handleOpenCreateModal = () => {
     setEditingClient(null);
@@ -93,7 +152,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       phone: '',
       cpf_cnpj: '',
       address: '',
-      funnel_status: 'PROSPECCAO' as FunnelStatus,
+      funnel_status: 'PROSPECCAO' as string,
+      funnel_id: selectedFunnel ? selectedFunnel.id : (funnels[0]?.id || ''),
       estimated_value: '',
       lead_source: '',
       campaign: '',
@@ -115,6 +175,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       cpf_cnpj: client.cpf_cnpj,
       address: client.address,
       funnel_status: client.funnel_status,
+      funnel_id: (client as any).funnel_id || '',
       estimated_value: client.estimated_value ? String(client.estimated_value) : '',
       lead_source: client.lead_source || '',
       campaign: client.campaign || '',
@@ -137,8 +198,9 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
 
     try {
-      const payload = {
+      const payload: any = {
         ...formData,
+        funnel_id: formData.funnel_id || undefined,
         estimated_value: formData.estimated_value !== '' ? Number(formData.estimated_value) : undefined,
       };
       if (editingClient) {
@@ -171,7 +233,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   };
 
   // Filter clients
-  const filteredClients = clients.filter(c => 
+  const filteredClients = clients.filter(c =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.cpf_cnpj.includes(searchQuery)
@@ -221,20 +283,12 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
-  const loadFunnelColumns = async () => {
-    try {
-      const cols = await funnelService.getAll();
-      if (cols && cols.length > 0) setFunnelColumns(cols);
-    } catch (err) {
-      console.error('Erro ao carregar colunas do funil:', err);
-    }
-  };
-
   const handleSaveFunnelCol = async (columnKey: string) => {
+    if (!selectedFunnel) return;
     try {
-      await funnelService.update(columnKey, { label: editingFunnelLabel, description: editingFunnelDesc });
+      await funnelService.updateFunnelColumn(selectedFunnel.id, columnKey, { label: editingFunnelLabel, description: editingFunnelDesc });
       setEditingFunnelCol(null);
-      loadFunnelColumns();
+      await loadFunnels();
     } catch (err) {
       alert(getApiErrorMessage(err, 'Erro ao salvar coluna.'));
     }
@@ -272,17 +326,18 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
-  const FUNNEL_DEFAULTS = [
-    { id: 'PROSPECCAO' as FunnelStatus, label: 'Prospecção', color: 'border-t-zinc-500', desc: 'Leads identificados' },
-    { id: 'ORCAMENTO' as FunnelStatus, label: 'Orçamento', color: 'border-t-blue-500', desc: 'Proposta em elaboração' },
-    { id: 'APRESENTACAO' as FunnelStatus, label: 'Apresentação', color: 'border-t-purple-500', desc: 'Apresentando ao cliente' },
-    { id: 'NEGOCIACAO' as FunnelStatus, label: 'Negociação', color: 'border-t-amber-500', desc: 'Em processo de negociação' },
-    { id: 'FECHAMENTO' as FunnelStatus, label: 'Fechamento', color: 'border-t-emerald-500', desc: 'Contrato assinado' },
-  ];
-  const FUNNEL_COLUMNS = FUNNEL_DEFAULTS.map(def => {
-    const fromDB = funnelColumns.find(c => c.column_key === def.id);
-    return fromDB ? { ...def, label: fromDB.label, desc: fromDB.description || def.desc } : def;
-  });
+  const FUNNEL_DEFAULTS_COLOR: Record<string, string> = {
+    PROSPECCAO: 'border-t-zinc-500',
+    ORCAMENTO: 'border-t-blue-500',
+    APRESENTACAO: 'border-t-purple-500',
+    NEGOCIACAO: 'border-t-amber-500',
+    FECHAMENTO: 'border-t-emerald-500',
+  };
+  const FALLBACK_COLORS = ['border-t-rose-500', 'border-t-cyan-500', 'border-t-indigo-500', 'border-t-teal-500'];
+
+  const getColumnColor = (key: string, idx: number) => {
+    return FUNNEL_DEFAULTS_COLOR[key] || FALLBACK_COLORS[idx % FALLBACK_COLORS.length];
+  };
 
   // Opções de campanha e fonte — inclui o valor atual do cliente quando ausente da lista
   const campaignOptions: LeadOption[] = campaigns.some(c => c.name === formData.campaign)
@@ -297,8 +352,13 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       ? [{ id: '__fonte_atual__', name: formData.lead_source, active: true, created_at: '' }, ...sources]
       : sources;
 
+  // For form stage options derived from chosen funnel
+  const formFunnel = (formData.funnel_id ? funnels.find(f => f.id === formData.funnel_id) : null) || selectedFunnel || funnels[0] || null;
+  const formFunnelColumns = formFunnel ? sortColumns(formFunnel.columns || []) : [];
+  const formStatusExists = formFunnelColumns.some(c => c.column_key === formData.funnel_status);
+
   const handleShiftFunnel = async (client: Client, direction: 'LEFT' | 'RIGHT') => {
-    const cols = FUNNEL_COLUMNS.map(c => c.id);
+    const cols = funnelColumns.map(fc => fc.column_key);
     const idx = cols.indexOf(client.funnel_status);
     let nextIdx = idx;
     if (direction === 'LEFT' && idx > 0) nextIdx = idx - 1;
@@ -306,11 +366,141 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     if (nextIdx === idx) return;
     const nextStatus = cols[nextIdx];
     try {
-      setClients(prev => prev.map(c => c.id === client.id ? { ...c, funnel_status: nextStatus } : c));
+      setClients(prev => prev.map(c => c.id === client.id ? { ...c, funnel_status: nextStatus as FunnelStatus } : c));
       await clientService.updateFunnel(client.id, nextStatus);
     } catch (err) {
       alert(getApiErrorMessage(err, 'Erro ao mover cliente no funil.'));
       loadClients();
+    }
+  };
+
+  const handleCreateFunnel = async () => {
+    const name = newFunnelName.trim();
+    if (!name) {
+      setManagerError('Nome do funil é obrigatório.');
+      return;
+    }
+    setManagerError('');
+    try {
+      const novo = await funnelService.createFunnel({ name, kind: 'CRM' });
+      setNewFunnelName('');
+      const data = await funnelService.getFunnels('CRM');
+      setFunnels(data);
+      const target = data.find(f => f.id === novo.id) || novo;
+      setSelectedFunnelId(target.id);
+      setFunnelColumns(sortColumns(target.columns || []));
+      setEditingFunnelCol(null);
+    } catch (err) {
+      setManagerError(getApiErrorMessage(err, 'Erro ao criar funil.'));
+    }
+  };
+
+  const handleRenameFunnel = async () => {
+    if (!selectedFunnel) return;
+    const name = renameFunnelName.trim();
+    if (!name) {
+      setManagerError('Nome é obrigatório.');
+      return;
+    }
+    setManagerError('');
+    try {
+      await funnelService.updateFunnel(selectedFunnel.id, { name });
+      await loadFunnels();
+    } catch (err) {
+      setManagerError(getApiErrorMessage(err, 'Erro ao renomear funil.'));
+    }
+  };
+
+  const handleAddStage = async () => {
+    if (!selectedFunnel) return;
+    const label = newStageLabel.trim();
+    if (!label) {
+      setStageError('Informe o nome da etapa.');
+      return;
+    }
+    setStageError('');
+    try {
+      await funnelService.addFunnelColumn(selectedFunnel.id, { label });
+      setNewStageLabel('');
+      await loadFunnels();
+    } catch (err) {
+      setStageError(getApiErrorMessage(err, 'Erro ao adicionar etapa.'));
+    }
+  };
+
+  const handleSaveStageLabel = async (columnKey: string) => {
+    if (!selectedFunnel) return;
+    const label = (stageDrafts[columnKey] || '').trim();
+    if (!label) {
+      setStageError('Label é obrigatório.');
+      return;
+    }
+    setStageError('');
+    try {
+      await funnelService.updateFunnelColumn(selectedFunnel.id, columnKey, { label });
+      await loadFunnels();
+    } catch (err) {
+      setStageError(getApiErrorMessage(err, 'Erro ao salvar etapa.'));
+    }
+  };
+
+  const handleMoveStage = async (columnKey: string, direction: 'UP' | 'DOWN') => {
+    if (!selectedFunnel) return;
+    const sorted = sortColumns(funnelColumns);
+    const idx = sorted.findIndex(c => c.column_key === columnKey);
+    if (idx === -1) return;
+    const newIdx = direction === 'UP' ? idx - 1 : idx + 1;
+    if (newIdx < 0 || newIdx >= sorted.length) return;
+    const reordered = [...sorted];
+    const tmp = reordered[idx];
+    reordered[idx] = reordered[newIdx];
+    reordered[newIdx] = tmp;
+    setStageError('');
+    try {
+      // send sequential positions 0..n for all columns after swap
+      await Promise.all(
+        reordered.map((col, pos) =>
+          funnelService.updateFunnelColumn(selectedFunnel.id, col.column_key, { position: pos })
+        )
+      );
+      await loadFunnels();
+    } catch (err) {
+      setStageError(getApiErrorMessage(err, 'Erro ao reordenar etapas.'));
+    }
+  };
+
+  const handleRemoveStage = async (columnKey: string) => {
+    if (!selectedFunnel) return;
+    if (!confirm('Deseja remover esta etapa?')) return;
+    setStageError('');
+    try {
+      await funnelService.removeFunnelColumn(selectedFunnel.id, columnKey);
+      await loadFunnels();
+    } catch (err) {
+      setStageError(getApiErrorMessage(err, 'Erro ao remover etapa.'));
+    }
+  };
+
+  const handleRemoveFunnel = async () => {
+    if (!selectedFunnel) return;
+    if (selectedFunnel.is_default) return;
+    if (!confirm(`Deseja excluir o funil "${selectedFunnel.name}"?`)) return;
+    setManagerError('');
+    try {
+      await funnelService.removeFunnel(selectedFunnel.id);
+      const data = await funnelService.getFunnels('CRM');
+      setFunnels(data);
+      if (data.length > 0) {
+        const def = data.find(f => f.is_default) || data[0];
+        setSelectedFunnelId(def.id);
+        setFunnelColumns(sortColumns(def.columns || []));
+      } else {
+        setSelectedFunnelId('');
+        setFunnelColumns([]);
+      }
+      setShowFunnelManager(false);
+    } catch (err) {
+      setManagerError(getApiErrorMessage(err, 'Erro ao excluir funil.'));
     }
   };
 
@@ -334,7 +524,40 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
           <p className="text-sm text-zinc-400 font-mono mt-1">Gerenciamento das informações dos clientes da marcenaria.</p>
         </div>
         
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Funnel selector */}
+          {funnels.length > 0 && (
+            <select
+              value={selectedFunnelId}
+              onChange={e => switchFunnel(e.target.value)}
+              className="bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600 font-sans h-[38px]"
+            >
+              {funnels.map(f => (
+                <option key={f.id} value={f.id}>{f.name}{f.is_default ? ' (padrão)' : ''}</option>
+              ))}
+            </select>
+          )}
+          {['ADMIN', 'GERENTE'].includes(userRole) && (
+            <button
+              onClick={() => {
+                if (selectedFunnel) {
+                  setRenameFunnelName(selectedFunnel.name);
+                  const drafts: Record<string, string> = {};
+                  sortColumns(selectedFunnel.columns || []).forEach(c => { drafts[c.column_key] = c.label; });
+                  setStageDrafts(drafts);
+                }
+                setManagerError('');
+                setStageError('');
+                setNewFunnelName('');
+                setNewStageLabel('');
+                setShowFunnelManager(true);
+              }}
+              className="bg-zinc-900 hover:bg-zinc-800 text-white text-sm font-medium px-3 py-2 rounded shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer font-sans h-[38px] border border-zinc-800"
+              title="Gerenciar funis"
+            >
+              <FunnelIcon className="w-3.5 h-3.5" /> Funis
+            </button>
+          )}
           {/* View mode switcher */}
           <div className="bg-zinc-900 border border-zinc-800 p-1 rounded-md flex">
             <button
@@ -389,7 +612,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         </div>
       ) : viewMode === 'KANBAN' ? (
         /* KANBAN FUNIL DE VENDAS */
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 overflow-x-auto min-w-[900px] pb-4">
+        <div className="grid grid-cols-1 gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, funnelColumns.length)}, minmax(0, 1fr))`, minWidth: Math.max(900, funnelColumns.length * 230) as any }}>
           {(() => {
             const today = new Date();
             const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -409,15 +632,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
             });
             return null;
           })()}
-          {FUNNEL_COLUMNS.map(col => {
-            const colClients = filteredClients.filter(c => c.funnel_status === col.id);
+          {funnelColumns.map((col, idx) => {
+            const colClients = filteredClients.filter(c => (c.funnel_id === selectedFunnel?.id || (!c.funnel_id && !!selectedFunnel?.is_default)) && c.funnel_status === col.column_key);
             const colTotal = colClients.reduce((acc, c) => acc + clientDisplayValue(c, projects).value, 0);
+            const borderColor = getColumnColor(col.column_key, idx);
             return (
-              <div key={col.id} className={`glass-panel rounded-xl flex flex-col min-h-[500px] overflow-hidden border-t-2 ${col.color}`}>
+              <div key={col.column_key} className={`glass-panel rounded-xl flex flex-col min-h-[500px] overflow-hidden border-t-2 ${borderColor}`}>
                 <div className="p-4 bg-zinc-950/60 border-b border-zinc-900">
                   <div className="flex justify-between items-start">
                     <div className="flex-1 min-w-0">
-                      {editingFunnelCol === col.id ? (
+                      {editingFunnelCol === col.column_key ? (
                         <div className="space-y-1.5">
                           <input
                             type="text"
@@ -434,7 +658,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             className="w-full bg-zinc-950 border border-zinc-700 text-zinc-400 rounded px-2 py-1 text-xs focus:outline-none"
                           />
                           <div className="flex gap-1.5 mt-1">
-                            <button onClick={() => handleSaveFunnelCol(col.id)} className="text-[10px] font-mono text-emerald-400 hover:text-emerald-300 cursor-pointer">Salvar</button>
+                            <button onClick={() => handleSaveFunnelCol(col.column_key)} className="text-[10px] font-mono text-emerald-400 hover:text-emerald-300 cursor-pointer">Salvar</button>
                             <button onClick={() => setEditingFunnelCol(null)} className="text-[10px] font-mono text-zinc-500 hover:text-white cursor-pointer">Cancelar</button>
                           </div>
                         </div>
@@ -444,7 +668,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             <h3 className="text-sm font-sans font-bold text-white">{col.label}</h3>
                             {['ADMIN', 'GERENTE'].includes(userRole) && (
                               <button
-                                onClick={() => { setEditingFunnelCol(col.id); setEditingFunnelLabel(col.label); setEditingFunnelDesc(col.desc); }}
+                                onClick={() => { setEditingFunnelCol(col.column_key); setEditingFunnelLabel(col.label); setEditingFunnelDesc(col.description || ''); }}
                                 className="p-0.5 text-zinc-600 hover:text-zinc-300 cursor-pointer"
                                 title="Editar nome da coluna"
                               >
@@ -452,7 +676,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                               </button>
                             )}
                           </div>
-                          <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{col.desc}</p>
+                          {col.description && <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{col.description}</p>}
+                          {!col.description && null}
                           {colTotal > 0 && (
                             <p className="text-[11px] font-mono text-emerald-600 font-semibold mt-0.5">
                               {colTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
@@ -490,7 +715,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                         <div className="flex gap-1">
                           <button
                             onClick={(e) => { e.stopPropagation(); handleShiftFunnel(client, 'LEFT'); }}
-                            disabled={client.funnel_status === 'PROSPECCAO'}
+                            disabled={funnelColumns.findIndex(fc => fc.column_key === client.funnel_status) === 0}
                             className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 cursor-pointer"
                             title="Recuar etapa"
                           >
@@ -498,7 +723,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); handleShiftFunnel(client, 'RIGHT'); }}
-                            disabled={client.funnel_status === 'FECHAMENTO'}
+                            disabled={funnelColumns.findIndex(fc => fc.column_key === client.funnel_status) === funnelColumns.length - 1}
                             className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 cursor-pointer"
                             title="Avançar etapa"
                           >
@@ -791,10 +1016,139 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         </div>
       )}
 
+      {/* Modal Gestão de Funis */}
+      {showFunnelManager && selectedFunnel && ['ADMIN', 'GERENTE'].includes(userRole) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="glass-panel w-full max-w-2xl rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="bg-zinc-950 p-5 border-b border-zinc-800 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2">
+              <FunnelIcon className="w-5 h-5 text-red-500" />
+                <h3 className="text-base font-serif font-semibold text-white">Gestão de Funis</h3>
+              </div>
+              <button onClick={() => setShowFunnelManager(false)} className="text-zinc-500 hover:text-white cursor-pointer p-1">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-6 space-y-6 overflow-y-auto">
+              {/* Novo funil */}
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-white font-sans">Novo funil</h4>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newFunnelName}
+                    onChange={e => setNewFunnelName(e.target.value)}
+                    placeholder="Nome do novo funil"
+                    className="flex-1 bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-2 text-sm focus:outline-none focus:border-red-600"
+                  />
+                  <button
+                    onClick={handleCreateFunnel}
+                    className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap"
+                  >
+                    Criar
+                  </button>
+                </div>
+                {managerError && <p className="text-xs text-red-400 font-mono">{managerError}</p>}
+              </div>
+
+              <div className="border-t border-zinc-800 pt-6 space-y-4">
+                <h4 className="text-sm font-semibold text-white font-sans">Funil atual</h4>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={renameFunnelName}
+                    onChange={e => setRenameFunnelName(e.target.value)}
+                    className="flex-1 bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-2 text-sm focus:outline-none focus:border-red-600"
+                  />
+                  <button
+                    onClick={handleRenameFunnel}
+                    className="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap border border-zinc-700"
+                  >
+                    Salvar
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs text-zinc-400 font-mono uppercase">Etapas</p>
+                  {sortColumns(funnelColumns).map((col, idx, arr) => (
+                    <div key={col.column_key} className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded px-2 py-2">
+                      <input
+                        type="text"
+                        value={stageDrafts[col.column_key] ?? col.label}
+                        onChange={e => setStageDrafts(prev => ({ ...prev, [col.column_key]: e.target.value }))}
+                        className="flex-1 bg-zinc-950 border border-zinc-800 text-white rounded px-2 py-1 text-sm focus:outline-none focus:border-zinc-600"
+                      />
+                      <button
+                        onClick={() => handleSaveStageLabel(col.column_key)}
+                        className="px-2 py-1 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white rounded cursor-pointer"
+                        title="Salvar label"
+                      >
+                        Salvar
+                      </button>
+                      <button
+                        onClick={() => handleMoveStage(col.column_key, 'UP')}
+                        disabled={idx === 0}
+                        className="p-1 text-zinc-400 hover:text-white disabled:opacity-20 cursor-pointer"
+                        title="Mover para cima"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        onClick={() => handleMoveStage(col.column_key, 'DOWN')}
+                        disabled={idx === arr.length - 1}
+                        className="p-1 text-zinc-400 hover:text-white disabled:opacity-20 cursor-pointer"
+                        title="Mover para baixo"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        onClick={() => handleRemoveStage(col.column_key)}
+                        className="p-1 text-zinc-500 hover:text-red-400 cursor-pointer"
+                        title="Remover etapa"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  {stageError && <p className="text-xs text-red-400 font-mono">{stageError}</p>}
+                  <div className="flex gap-2 pt-2">
+                    <input
+                      type="text"
+                      value={newStageLabel}
+                      onChange={e => setNewStageLabel(e.target.value)}
+                      placeholder="Nova etapa"
+                      className="flex-1 bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-2 text-sm focus:outline-none focus:border-red-600"
+                    />
+                    <button
+                      onClick={handleAddStage}
+                      className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap"
+                    >
+                      Adicionar etapa
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Rodapé excluir funil */}
+              {!selectedFunnel.is_default && (
+                <div className="border-t border-zinc-800 pt-6">
+                  <button
+                    onClick={handleRemoveFunnel}
+                    className="px-4 py-2 text-sm bg-zinc-900 hover:bg-red-950/40 text-red-400 border border-red-900/40 rounded font-mono cursor-pointer"
+                  >
+                    Excluir funil
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Slideout Side Modal for Client Action */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800/80 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800/80 shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
             <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center">
               <div>
                 <h3 className="text-lg font-serif font-semibold text-white">
@@ -882,18 +1236,45 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 />
               </div>
 
+              {funnels.length > 1 && (
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Funil</label>
+                  <select
+                    value={formData.funnel_id}
+                    onChange={(e) => {
+                      const newId = e.target.value;
+                      const targetFunnel = funnels.find(f => f.id === newId);
+                      const targetCols = targetFunnel ? sortColumns(targetFunnel.columns || []) : [];
+                      let nextStatus = formData.funnel_status;
+                      if (targetCols.length > 0 && !targetCols.some(c => c.column_key === nextStatus)) {
+                        nextStatus = targetCols[0].column_key;
+                      }
+                      setFormData(prev => ({ ...prev, funnel_id: newId, funnel_status: nextStatus }));
+                    }}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                  >
+                    {funnels.map(f => (
+                      <option key={f.id} value={f.id}>{f.name}{f.is_default ? ' (padrão)' : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="space-y-2">
                 <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Etapa do Funil de Vendas</label>
                 <select
                   value={formData.funnel_status}
-                  onChange={(e) => setFormData({ ...formData, funnel_status: e.target.value as FunnelStatus })}
+                  onChange={(e) => setFormData({ ...formData, funnel_status: e.target.value })}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
                 >
-                  {FUNNEL_COLUMNS.map(col => (
-                    <option key={col.id} value={col.id}>{col.label}</option>
+                  {formFunnelColumns.map(col => (
+                    <option key={col.column_key} value={col.column_key}>{col.label}</option>
                   ))}
                   {formData.funnel_status === 'PERDIDO' && (
                     <option value="PERDIDO">Perdido</option>
+                  )}
+                  {!formStatusExists && formData.funnel_status !== 'PERDIDO' && formData.funnel_status && (
+                    <option value={formData.funnel_status}>{formData.funnel_status}</option>
                   )}
                 </select>
               </div>

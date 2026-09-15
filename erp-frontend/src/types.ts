@@ -25,6 +25,7 @@ export interface Client {
   address: string;
   created_at: string;
   funnel_status: FunnelStatus;
+  funnel_id?: string | null;
   lost_reason?: string | null;
   estimated_value?: number | null;
   lead_source?: string | null;
@@ -51,6 +52,7 @@ export interface Project {
   deadline: string;
   steps: ProjectStep[];
   created_at: string;
+  funnel_id?: string | null;
 }
 
 export type FinancialType = 'ENTRADA' | 'SAIDA';
@@ -240,4 +242,24 @@ export interface ChangelogEntry {
   entry_date: string;
   created_by: string;
   created_at: string;
+}
+
+export interface FunnelColumn {
+  id: string;
+  column_key: string;
+  label: string;
+  description?: string | null;
+  type: string;
+  position: number;
+  funnel_id?: string | null;
+}
+
+export interface Funnel {
+  id: string;
+  name: string;
+  kind: string;
+  is_default: boolean;
+  active: boolean;
+  created_at: string;
+  columns: FunnelColumn[];
 }

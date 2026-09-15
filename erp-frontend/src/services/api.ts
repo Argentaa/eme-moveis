@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -557,6 +557,41 @@ export const funnelService = {
 
   async update(columnKey: string, data: { label: string; description?: string }, type: 'CRM' | 'PROJECTS' = 'CRM'): Promise<any> {
     const response = await api.put(`/api/funnel-columns/${columnKey}`, data, { params: { type } });
+    return response.data;
+  },
+
+  async getFunnels(kind?: string): Promise<Funnel[]> {
+    const response = await api.get('/api/funnels', { params: kind ? { kind } : {} });
+    return response.data;
+  },
+
+  async createFunnel(data: { name: string; kind: string }): Promise<Funnel> {
+    const response = await api.post('/api/funnels', data);
+    return response.data;
+  },
+
+  async updateFunnel(id: string, data: { name?: string; active?: boolean }): Promise<Funnel> {
+    const response = await api.put(`/api/funnels/${id}`, data);
+    return response.data;
+  },
+
+  async removeFunnel(id: string): Promise<any> {
+    const response = await api.delete(`/api/funnels/${id}`);
+    return response.data;
+  },
+
+  async addFunnelColumn(funnelId: string, data: { label: string }): Promise<FunnelColumn> {
+    const response = await api.post(`/api/funnels/${funnelId}/columns`, data);
+    return response.data;
+  },
+
+  async updateFunnelColumn(funnelId: string, columnKey: string, data: { label?: string; description?: string; position?: number }): Promise<FunnelColumn> {
+    const response = await api.put(`/api/funnels/${funnelId}/columns/${columnKey}`, data);
+    return response.data;
+  },
+
+  async removeFunnelColumn(funnelId: string, columnKey: string): Promise<any> {
+    const response = await api.delete(`/api/funnels/${funnelId}/columns/${columnKey}`);
     return response.data;
   },
 };
