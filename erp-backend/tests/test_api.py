@@ -1832,3 +1832,243 @@ def test_production_issues_model(client):
         assert db.session.query(ProductionIssue).filter_by(project_id=pid).count() == 0
         assert db.session.query(ProjectEnvironment).filter_by(project_id=pid).count() == 0
         assert db.session.query(TimeEntry).filter_by(project_id=pid).count() == 0
+
+
+def test_environments_api(client):
+    h = _login(client)
+    # cria cliente + projeto via API
+    cid = client.post("/api/clients", headers=h, json={"name": "Cli Env", "cpf_cnpj": "env1"}).get_json()["id"]
+    pid = client.post("/api/projects", headers=h, json={"title": "Proj Env", "client_id": cid}).get_json()["id"]
+
+
+    # POST /api/projects/<id>/environments
+    r = client.post(f"/api/projects/{pid}/environments", headers=h,
+                    json={"name": "Cozinha", "env_type": "COZINHA", "area_m2": 32, "value": 5000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["id"]
+    assert body["name"] == "Cozinha"
+    assert body["area_m2"] == 32
+    assert body["project_title"] == "Proj Env"
+
+    env_id = body["id"]
+
+    # GET lista 1
+    r = client.get(f"/api/projects/{pid}/environments", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert len(r.get_json()) == 1
+
+    # PUT altera area_m2 para 35 value 6000 env_type SALA
+    r = client.put(f"/api/environments/{env_id}", headers=h,
+                   json={"area_m2": 35, "value": 6000, "env_type": "SALA"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    b = r.get_json()
+    assert b["area_m2"] == 35
+    assert b["value"] == 6000
+    assert b["env_type"] == "SALA"
+
+    # DELETE
+    r = client.delete(f"/api/environments/{env_id}", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+    # validacoes
+    r = client.post(f"/api/projects/{pid}/environments", headers=h,
+                    json={"env_type": "COZINHA"})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    r = client.post(f"/api/projects/{pid}/environments", headers=h,
+                    json={"name": "Teste", "env_type": "INVALIDO"})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    r = client.post("/api/projects/id-inexistente/environments", headers=h,
+                    json={"name": "X"})
+    assert r.status_code == 404, r.get_data(as_text=True)
+
+
+def test_workers_machines_api(client):
+    h = _login(client)
+    # Workers
+    r = client.post("/api/workers", headers=h, json={"name": "Carlos"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    wid = r.get_json()["id"]
+
+    r = client.get("/api/workers", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert len(r.get_json()) == 1
+
+    r = client.put(f"/api/workers/{wid}", headers=h, json={"name": "Carlos Silva"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["name"] == "Carlos Silva"
+
+    # POST duplicado name deve dar 400 unique
+    r = client.post("/api/workers", headers=h, json={"name": "Carlos Silva"})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # DELETE hard quando sem time_entries (200)
+    r = client.delete(f"/api/workers/{wid}", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+    # criar novamente para testar 400 quando em uso
+    r = client.post("/api/workers", headers=h, json={"name": "Carlos Silva"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    wid2 = r.get_json()["id"]
+
+    # criar dependencias para validar bloqueio
+    cid = client.post("/api/clients", headers=h, json={"name": "Cli Work", "cpf_cnpj": "work1"}).get_json()["id"]
+    pid = client.post("/api/projects", headers=h, json={"title": "Proj Work", "client_id": cid}).get_json()["id"]
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    r = client.post(f"/api/projects/{pid}/time", headers=h,
+                    json={"worker_id": wid2, "hours": 2, "work_date": today})
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    r = client.delete(f"/api/workers/{wid2}", headers=h)
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # Machines - mesmo fluxo
+    r = client.post("/api/machines", headers=h, json={"name": "Serra"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    mid = r.get_json()["id"]
+
+    r = client.get("/api/machines", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert len([x for x in r.get_json() if x["id"] == mid]) == 1
+
+    r = client.put(f"/api/machines/{mid}", headers=h, json={"name": "Serra Circular"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["name"] == "Serra Circular"
+
+    r = client.post("/api/machines", headers=h, json={"name": "Serra Circular"})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    r = client.delete(f"/api/machines/{mid}", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+
+def test_time_entries_api(client):
+    h = _login(client)
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+
+    # cria Worker+Machine+Project+Environment
+    wid = client.post("/api/workers", headers=h, json={"name": "Apontador TE"}).get_json()["id"]
+    mid = client.post("/api/machines", headers=h, json={"name": "Maquina TE"}).get_json()["id"]
+    cid = client.post("/api/clients", headers=h, json={"name": "Cli TE", "cpf_cnpj": "te1"}).get_json()["id"]
+    pid = client.post("/api/projects", headers=h, json={"title": "Proj TE", "client_id": cid}).get_json()["id"]
+    env_id = client.post(f"/api/projects/{pid}/environments", headers=h,
+                         json={"name": "Sala TE", "env_type": "SALA"}).get_json()["id"]
+
+    # POST /api/projects/<id>/time
+    r = client.post(f"/api/projects/{pid}/time", headers=h,
+                    json={"project_id": pid, "environment_id": env_id, "worker_id": wid, "machine_id": mid, "hours": 8, "hours_type": "PRODUTIVA", "work_date": today})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["hours"] == 8
+    entry_id = r.get_json()["id"]
+
+    # GET lista 1
+    r = client.get(f"/api/projects/{pid}/time", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert len(r.get_json()) == 1
+
+    # PUT altera hours para 9 IMPRODUTIVA
+    r = client.put(f"/api/time-entries/{entry_id}", headers=h,
+                   json={"hours": 9, "hours_type": "IMPRODUTIVA"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    b = r.get_json()
+    assert b["hours"] == 9
+    assert b["hours_type"] == "IMPRODUTIVA"
+
+    # DELETE
+    r = client.delete(f"/api/time-entries/{entry_id}", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+    # Validacoes
+    r = client.post(f"/api/projects/{pid}/time", headers=h,
+                    json={"hours": 0, "work_date": today})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    r = client.post(f"/api/projects/{pid}/time", headers=h,
+                    json={"hours": 2, "hours_type": "INVALIDO", "work_date": today})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    r = client.post(f"/api/projects/{pid}/time", headers=h,
+                    json={"hours": 2, "worker_id": "id-inexistente", "work_date": today})
+    assert r.status_code == 404, r.get_data(as_text=True)
+
+    r = client.post("/api/projects/id-inexistente/time", headers=h,
+                    json={"hours": 2, "work_date": today})
+    assert r.status_code == 404, r.get_data(as_text=True)
+
+
+def test_production_issues_api(client):
+    h = _login(client)
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+
+    wid = client.post("/api/workers", headers=h, json={"name": "Func Issues API"}).get_json()["id"]
+    cid = client.post("/api/clients", headers=h, json={"name": "Cli Issues API", "cpf_cnpj": "issapi1"}).get_json()["id"]
+    pid = client.post("/api/projects", headers=h, json={"title": "Proj Issues API", "client_id": cid}).get_json()["id"]
+
+    # POST RETRABALHO
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "RETRABALHO", "worker_id": wid, "hours_spent": 2, "cost": 120, "reason": "Teste", "issue_date": today})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    id1 = r.get_json()["id"]
+
+    # POST DESPERDICIO
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "DESPERDICIO", "material": "MDF", "quantity": 1, "issue_date": today})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    id2 = r.get_json()["id"]
+
+    # POST PERDA
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "PERDA", "cost": 300, "issue_date": today})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    id3 = r.get_json()["id"]
+
+    # GET lista 3
+    r = client.get(f"/api/projects/{pid}/issues", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert len(r.get_json()) == 3
+
+    # PUT altera cost
+    r = client.put(f"/api/issues/{id1}", headers=h, json={"cost": 200})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["cost"] == 200
+
+    # DELETE
+    r = client.delete(f"/api/issues/{id2}", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+    # Validacoes
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "INVALIDO", "issue_date": today})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # RETRABALHO sem worker_id deve aceitar (cost nullable)
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "RETRABALHO", "cost": 50, "issue_date": today})
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    # se worker_id fornecido invalido 404
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "RETRABALHO", "worker_id": "id-inexistente", "issue_date": today})
+    assert r.status_code == 404, r.get_data(as_text=True)
+
+    # cost negativo 400
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "PERDA", "cost": -10, "issue_date": today})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # quantity negativo 400
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "DESPERDICIO", "quantity": -1, "issue_date": today})
+    assert r.status_code == 400, r.get_data(as_text=True)
+
+    # issue_date ausente deve usar today default (201)
+    r = client.post(f"/api/projects/{pid}/issues", headers=h,
+                    json={"kind": "PERDA", "cost": 10})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["issue_date"] == today
+
