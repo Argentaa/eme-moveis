@@ -2900,3 +2900,51 @@ def test_alertas_financeiros(client):
     prox_count2 = len([n for n in notifs2 if n["type"] == "CONTA_PROXIMA"])
     assert venc_count2 == venc_count, f"dedupe CONTA_VENCIDA falhou: {venc_count} -> {venc_count2}"
     assert prox_count2 == prox_count, f"dedupe CONTA_PROXIMA falhou: {prox_count} -> {prox_count2}"
+
+
+def test_project_attachments_api(client, tmp_path):
+    with client.application.app_context():
+        client.application.config["UPLOAD_DIR"] = str(tmp_path)
+    h = _login(client)
+    # cria cliente e projeto
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Proj Anexo", "cpf_cnpj": "p-attach-1"}).get_json()["id"]
+    r = client.post(
+        "/api/projects",
+        headers=h,
+        json={"title": "Projeto Anexo Teste", "client_id": cid, "description": "d", "status": "ORCAMENTO", "value": 5000, "deadline": "2030-06-01", "steps": []},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    pid = r.get_json()["id"]
+    import io
+    # sem file -> 400
+    r = client.post(f"/api/projects/{pid}/attachments", headers=h, data={}, content_type="multipart/form-data")
+    assert r.status_code == 400
+    # projeto inexistente -> 404 (GET e POST)
+    assert client.get("/api/projects/id-inexistente/attachments", headers=h).status_code == 404
+    r = client.post("/api/projects/id-inexistente/attachments", headers=h, data={"file": (io.BytesIO(b"x"), "a.txt")}, content_type="multipart/form-data")
+    assert r.status_code == 404
+    # upload ok
+    data = {"file": (io.BytesIO(b"%PDF-1.4 fake pdf projeto"), "teste.pdf")}
+    r = client.post(f"/api/projects/{pid}/attachments", headers=h, data=data, content_type="multipart/form-data")
+    assert r.status_code == 201, r.get_data(as_text=True)
+    att = r.get_json()
+    assert att["filename"] == "teste.pdf"
+    assert att["project_id"] == pid
+    assert att["client_id"] == cid
+    aid = att["id"]
+    # lista por projeto
+    lst = client.get(f"/api/projects/{pid}/attachments", headers=h).get_json()
+    assert len(lst) == 1
+    assert lst[0]["id"] == aid
+    # download via endpoint generico
+    d = client.get(f"/api/attachments/{aid}/download", headers=h)
+    assert d.status_code == 200
+    assert b"%PDF-1.4" in d.data
+    # delete
+    assert client.delete(f"/api/attachments/{aid}", headers=h).status_code == 200
+    assert client.get(f"/api/attachments/{aid}/download", headers=h).status_code == 404
+    # lista vazia apos delete
+    lst2 = client.get(f"/api/projects/{pid}/attachments", headers=h).get_json()
+    assert len(lst2) == 0
+    # sem token -> 401
+    assert client.get(f"/api/projects/{pid}/attachments").status_code == 401

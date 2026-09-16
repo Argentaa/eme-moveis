@@ -2,10 +2,10 @@ import React, { useEffect, useState } from 'react';
 import {
   BarChart, Layers, ListTodo, Plus, Search, Calendar, Landmark,
   Trash2, ArrowRight, ArrowLeft, CheckCircle, RefreshCw, Eye, Edit3, Edit2,
-  Hammer, Clock, AlertTriangle,
+  Hammer, Clock, AlertTriangle, FileText, Paperclip, Download,
 } from 'lucide-react';
-import { projectService, clientService, funnelService, productionService, workerService, machineService, getApiErrorMessage } from '../services/api';
-import { Project, Client, ProjectStatus, ProjectStep, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue } from '../types';
+import { projectService, clientService, funnelService, productionService, workerService, machineService, attachmentService, getApiErrorMessage } from '../services/api';
+import { Project, Client, ProjectStatus, ProjectStep, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, Attachment } from '../types';
 
 interface ProjectsViewProps {
   userRole: string;
@@ -59,7 +59,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [isStepsModalOpen, setIsStepsModalOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [activeDetailTab, setActiveDetailTab] = useState<'GERAL' | 'AMBIENTES' | 'TEMPO' | 'OCORRENCIAS'>('GERAL');
+  const [activeDetailTab, setActiveDetailTab] = useState<'GERAL' | 'AMBIENTES' | 'TEMPO' | 'OCORRENCIAS' | 'ARQUIVOS'>('GERAL');
 
   // Detail tab data
   const [environments, setEnvironments] = useState<ProjectEnvironment[]>([]);
@@ -77,6 +77,11 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
   const [issuesLoading, setIssuesLoading] = useState(false);
   const [issueForm, setIssueForm] = useState<{ kind: string; worker_id: string; material: string; quantity: string; hours_spent: string; cost: string; reason: string; issue_date: string; notes: string }>({ kind: 'RETRABALHO', worker_id: '', material: '', quantity: '', hours_spent: '', cost: '', reason: '', issue_date: new Date().toISOString().substring(0,10), notes: '' });
   const [issueError, setIssueError] = useState('');
+  // Arquivos por projeto
+  const [projectAttachments, setProjectAttachments] = useState<Attachment[]>([]);
+  const [attLoading, setAttLoading] = useState(false);
+  const [attError, setAttError] = useState('');
+  const [attUploading, setAttUploading] = useState(false);
 
   // GERAL tab edit fields (when in detail modal)
   const [geralEdit, setGeralEdit] = useState<{ start_date: string; planned_end_date: string; actual_end_date: string }>({ start_date: '', planned_end_date: '', actual_end_date: '' });
@@ -300,7 +305,48 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
     } catch { setIssues([]); }
     finally { setIssuesLoading(false); }
   };
+  const loadProjectAttachments = async (projectId: string) => {
+    setAttLoading(true);
+    setAttError('');
+    try {
+      const data = await attachmentService.getProjectAttachments(projectId);
+      setProjectAttachments(data || []);
+    } catch (err) {
+      setAttError(getApiErrorMessage(err, 'Erro ao carregar arquivos.'));
+    } finally { setAttLoading(false); }
+  };
+  const handleProjectFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedProject) return;
+    setAttUploading(true);
+    setAttError('');
+    try {
+      await attachmentService.uploadProjectAttachment(selectedProject.id, file);
+      await loadProjectAttachments(selectedProject.id);
+    } catch (err) {
+      setAttError(getApiErrorMessage(err, 'Erro ao enviar arquivo.'));
+    } finally {
+      setAttUploading(false);
+      e.target.value = '';
+    }
+  };
+  const handleDownloadProjectAttachment = async (att: Attachment) => {
+    try { await attachmentService.download(att.id); } catch (err) { setAttError(getApiErrorMessage(err, 'Erro ao baixar arquivo.')); }
+  };
+  const handleDeleteProjectAttachment = async (attId: string) => {
+    if (!selectedProject) return;
+    if (!confirm('Remover este arquivo?')) return;
+    try {
+      await attachmentService.remove(attId);
+      await loadProjectAttachments(selectedProject.id);
+    } catch (err) { setAttError(getApiErrorMessage(err, 'Erro ao remover arquivo.')); }
+  };
 
+  useEffect(() => {
+    if (activeDetailTab === 'ARQUIVOS' && selectedProject) {
+      loadProjectAttachments(selectedProject.id);
+    }
+  }, [activeDetailTab, selectedProject?.id]);
   const handleSaveGeralDates = async () => {
     if (!selectedProject) return;
     setGeralSaving(true);
@@ -938,8 +984,8 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
             </div>
             {/* Tabs */}
             <div className="flex gap-1 p-2 bg-zinc-950/60 border-b border-zinc-900 shrink-0 overflow-x-auto">
-              {(['GERAL','AMBIENTES','TEMPO','OCORRENCIAS'] as const).map(tab => {
-                const icons: Record<string, any> = { GERAL: Layers, AMBIENTES: Hammer, TEMPO: Clock, OCORRENCIAS: AlertTriangle };
+              {(['GERAL','AMBIENTES','TEMPO','OCORRENCIAS','ARQUIVOS'] as const).map(tab => {
+                const icons: Record<string, any> = { GERAL: Layers, AMBIENTES: Hammer, TEMPO: Clock, OCORRENCIAS: AlertTriangle, ARQUIVOS: FileText };
                 const Icon = icons[tab];
                 return (
                   <button key={tab} onClick={() => setActiveDetailTab(tab)} className={`flex items-center gap-1.5 px-3 py-2 rounded text-xs font-mono uppercase tracking-wider cursor-pointer whitespace-nowrap ${activeDetailTab===tab ? 'bg-red-600 text-white' : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'}`}>
@@ -1197,6 +1243,35 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                             <div className="text-zinc-500 mt-0.5 flex gap-3 flex-wrap">{is.quantity!=null ? `Qtd: ${is.quantity}` : ''} {is.hours_spent!=null ? `Horas: ${is.hours_spent}` : ''} {is.cost!=null ? `Custo: ${Number(is.cost).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}` : ''} {is.worker_name ? `· ${is.worker_name}` : ''}</div>
                           </div>
                           <button onClick={() => handleDeleteIssue(is.id)} className="p-1.5 bg-zinc-800 hover:bg-red-950 text-zinc-400 hover:text-red-400 rounded cursor-pointer shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {activeDetailTab === 'ARQUIVOS' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-mono uppercase text-zinc-400 tracking-wider flex items-center gap-2"><Paperclip className="w-3.5 h-3.5" /> Arquivos do projeto</div>
+                    <label className={`px-4 py-2 rounded text-xs font-mono cursor-pointer flex items-center gap-1.5 ${attUploading ? 'bg-zinc-800 text-zinc-400' : 'bg-red-600 hover:bg-red-700 text-white'}`}>
+                      <Paperclip className="w-3.5 h-3.5" /> {attUploading ? 'Enviando...' : 'Upload'}
+                      <input type="file" className="hidden" onChange={handleProjectFileChange} disabled={attUploading} />
+                    </label>
+                  </div>
+                  {attError && <div className="p-2 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">{attError}</div>}
+                  {attLoading ? <p className="text-xs font-mono text-zinc-500">Carregando arquivos...</p> : (
+                    <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                      {projectAttachments.length === 0 && <p className="text-xs font-mono text-zinc-500 text-center py-8 border border-dashed border-zinc-800 rounded glass-panel">Nenhum arquivo anexado a este projeto.</p>}
+                      {projectAttachments.map(att => (
+                        <div key={att.id} className="p-3 bg-zinc-900/60 border border-zinc-800 rounded flex justify-between items-center glass-panel">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-semibold text-white font-sans flex items-center gap-2 truncate"><FileText className="w-4 h-4 text-zinc-400 shrink-0" /> <span className="truncate">{att.filename}</span></div>
+                            <div className="text-[11px] font-mono text-zinc-500 mt-0.5">{att.created_at ? new Date(att.created_at).toLocaleString('pt-BR') : '-'} {att.created_by ? `· ${att.created_by}` : ''} {att.size ? `· ${(att.size/1024).toFixed(1)} KB` : ''}</div>
+                          </div>
+                          <div className="flex items-center gap-1.5 ml-3 shrink-0">
+                            <button onClick={() => handleDownloadProjectAttachment(att)} className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded cursor-pointer" title="Download"><Download className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => handleDeleteProjectAttachment(att.id)} className="p-1.5 bg-zinc-800 hover:bg-red-950 text-zinc-400 hover:text-red-400 rounded cursor-pointer" title="Remover"><Trash2 className="w-3.5 h-3.5" /></button>
+                          </div>
                         </div>
                       ))}
                     </div>

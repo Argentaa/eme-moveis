@@ -188,6 +188,20 @@ export const attachmentService = {
     const response = await api.delete(`/api/attachments/${attachmentId}`);
     return response.data;
   },
+
+  async getProjectAttachments(projectId: string): Promise<Attachment[]> {
+    const response = await api.get(`/api/projects/${projectId}/attachments`);
+    return response.data;
+  },
+
+  async uploadProjectAttachment(projectId: string, file: File): Promise<Attachment> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post(`/api/projects/${projectId}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
 };
 
 // Lead Option Services

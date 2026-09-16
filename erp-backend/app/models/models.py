@@ -509,6 +509,7 @@ class Attachment(db.Model):
     __tablename__ = "attachments"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
     client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
     filename = db.Column(String(255), nullable=False)
     stored_name = db.Column(String(80), nullable=False, unique=True)
     mime_type = db.Column(String(120), nullable=True, default="")
@@ -517,12 +518,15 @@ class Attachment(db.Model):
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
     # passive_deletes=False: SQLite nao habilita FK por padrao; o ORM garante o cascade em qualquer banco
     client = db.relationship("Client", backref=db.backref("attachments", cascade="all, delete-orphan", passive_deletes=False))
+    project = db.relationship("Project", backref=db.backref("project_attachments", cascade="all, delete-orphan", passive_deletes=False))
 
     def to_dict(self):
         # stored_name (nome interno do arquivo) nao e serializado propositalmente
         return {
             "id": self.id,
             "client_id": self.client_id,
+            "project_id": self.project_id,
+            "project_title": self.project.title if getattr(self, "project", None) else None,
             "filename": self.filename,
             "mime_type": self.mime_type or "",
             "size": self.size,

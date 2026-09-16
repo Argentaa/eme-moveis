@@ -7,7 +7,7 @@ from werkzeug.utils import secure_filename
 
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import Attachment, Client
+from app.models.models import Attachment, Client, Project
 
 bp = Blueprint("attachments", __name__)
 
@@ -82,3 +82,49 @@ def delete_attachment(attachment_id):
     except OSError:
         pass  # registro no banco ja removido; arquivo orfao tolerado
     return jsonify({"ok": True})
+
+
+@bp.get("/api/projects/<project_id>/attachments")
+@token_required()
+def list_project_attachments(project_id):
+    proj = db.session.get(Project, project_id)
+    if not proj:
+        return jsonify({"detail": "Projeto nao encontrado"}), 404
+    rows = (
+        db.session.query(Attachment)
+        .filter_by(project_id=project_id)
+        .order_by(Attachment.created_at.desc())
+        .all()
+    )
+    return jsonify([a.to_dict() for a in rows])
+
+
+@bp.post("/api/projects/<project_id>/attachments")
+@token_required()
+def upload_project_attachment(project_id):
+    proj = db.session.get(Project, project_id)
+    if not proj:
+        return jsonify({"detail": "Projeto nao encontrado"}), 404
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"detail": "Arquivo obrigatorio (campo 'file')"}), 400
+    original = secure_filename(file.filename) or "arquivo"
+    if len(original) > 255:
+        stem, ext = os.path.splitext(original)
+        original = (stem[:max(0, 255 - len(ext))] + ext)[:255]
+    ext = os.path.splitext(original)[1].lower()
+    stored = uuid.uuid4().hex + ext
+    path = os.path.join(_upload_dir(), stored)
+    file.save(path)
+    row = Attachment(
+        client_id=proj.client_id,
+        project_id=project_id,
+        filename=original,
+        stored_name=stored,
+        mime_type=file.mimetype or "",
+        size=os.path.getsize(path),
+        created_by=_creator(),
+    )
+    db.session.add(row)
+    db.session.commit()
+    return jsonify(row.to_dict()), 201

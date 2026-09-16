@@ -325,6 +325,8 @@ export interface Interaction {
 export interface Attachment {
   id: string;
   client_id: string;
+  project_id?: string | null;
+  project_title?: string | null;
   filename: string;
   mime_type: string;
   size: number;
