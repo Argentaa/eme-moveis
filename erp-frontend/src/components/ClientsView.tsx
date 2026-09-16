@@ -5,8 +5,8 @@ import {
   Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, FolderPlus, Eye, Funnel as FunnelIcon, X
 } from 'lucide-react';
 import { FunnelStatus } from '../types';
-import { clientService, projectService, funnelService, calendarService, leadOptionService, getApiErrorMessage } from '../services/api';
-import { Client, Project, LeadOption, Funnel, FunnelColumn } from '../types';
+import { clientService, projectService, funnelService, calendarService, leadOptionService, partnerService, getApiErrorMessage } from '../services/api';
+import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner } from '../types';
 import ClientDetailModal from './ClientDetailModal';
 
 interface ClientsViewProps {
@@ -52,6 +52,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   // Lead Options (fonte e campanha)
   const [campaigns, setCampaigns] = useState<LeadOption[]>([]);
   const [sources, setSources] = useState<LeadOption[]>([]);
+  const [partners, setPartners] = useState<Partner[]>([]);
   const [addingCampaign, setAddingCampaign] = useState(false);
   const [newCampaignName, setNewCampaignName] = useState('');
   const [addingSource, setAddingSource] = useState(false);
@@ -69,6 +70,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     estimated_value: '',
     lead_source: '',
     campaign: '',
+    partner_id: '' as string,
   });
   const [submitError, setSubmitError] = useState('');
 
@@ -132,6 +134,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     loadFunnels();
     leadOptionService.getSources().then(setSources).catch(() => setSources([]));
     leadOptionService.getCampaigns().then(setCampaigns).catch(() => setCampaigns([]));
+    partnerService.list().then(setPartners).catch(() => setPartners([]));
   }, []);
 
   // keep rename input and stage drafts in sync when funnel changes or modal opens
@@ -145,6 +148,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   }, [selectedFunnel?.id, selectedFunnel?.name, showFunnelManager]);
 
   const handleOpenCreateModal = () => {
+    partnerService.list().then(setPartners).catch(() => {});
     setEditingClient(null);
     setFormData({
       name: '',
@@ -157,6 +161,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       estimated_value: '',
       lead_source: '',
       campaign: '',
+      partner_id: '',
     });
     setSubmitError('');
     setAddingSource(false);
@@ -167,6 +172,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   };
 
   const handleOpenEditModal = (client: Client) => {
+    partnerService.list().then(setPartners).catch(() => {});
     setEditingClient(client);
     setFormData({
       name: client.name,
@@ -179,6 +185,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       estimated_value: client.estimated_value ? String(client.estimated_value) : '',
       lead_source: client.lead_source || '',
       campaign: client.campaign || '',
+      partner_id: (client as any).partner_id || '',
     });
     setSubmitError('');
     setAddingSource(false);
@@ -201,6 +208,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       const payload: any = {
         ...formData,
         funnel_id: formData.funnel_id || undefined,
+        partner_id: formData.partner_id || undefined,
         estimated_value: formData.estimated_value !== '' ? Number(formData.estimated_value) : undefined,
       };
       if (editingClient) {
@@ -698,6 +706,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       return (
                       <div key={client.id} onClick={() => setDetailClient(client)} className="p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg cursor-pointer">
                         <h4 className="text-sm font-semibold text-zinc-100 group-hover:text-white">{client.name}</h4>
+                        {(client as any).partner_name && <span className="inline-flex items-center mt-1 text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded">🤝 {(client as any).partner_name}</span>}
                         {client.email && <p className="text-[11px] text-zinc-500 mt-0.5 truncate">✉ {client.email}</p>}
                         {client.phone && <p className="text-[11px] text-zinc-500 truncate">📞 {client.phone}</p>}
                         {displayValue > 0 && (
@@ -1324,6 +1333,20 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                     <option value="__nova_campanha__">+ Nova campanha...</option>
                   </select>
                 )}
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Parceiro / Arquiteto</label>
+                <select
+                  value={formData.partner_id}
+                  onChange={(e) => setFormData({ ...formData, partner_id: e.target.value })}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                >
+                  <option value="">Nenhum</option>
+                  {partners.map(par => (
+                    <option key={par.id} value={par.id}>{par.name}{par.office ? ' — ' + par.office : ''}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="space-y-2">

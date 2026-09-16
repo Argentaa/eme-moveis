@@ -3056,3 +3056,91 @@ def test_checklists_api(client):
     cascade_id = r["id"]
     assert client.delete(f"/api/projects/{pid}", headers=h).status_code == 200
     assert client.delete(f"/api/checklist-items/{cascade_id}", headers=h).status_code == 404
+
+
+def test_partners_api(client):
+    h = _login(client)
+    # name vazio 400
+    assert client.post("/api/partners", headers=h, json={"name": "   "}).status_code == 400
+    # sem token 401
+    assert client.get("/api/partners").status_code == 401
+    # create
+    r = client.post("/api/partners", headers=h, json={"name": "Escritorio Silva", "office": "Silva Arquitetura", "city": "Seberi"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    pid = r.get_json()["id"]
+    assert r.get_json()["name"] == "Escritorio Silva"
+    assert r.get_json()["office"] == "Silva Arquitetura"
+    assert r.get_json()["city"] == "Seberi"
+    # get list 1
+    lst = client.get("/api/partners", headers=h).get_json()
+    assert len(lst) >= 1
+    assert any(p["id"] == pid for p in lst)
+    # get single
+    assert client.get(f"/api/partners/{pid}", headers=h).status_code == 200
+    assert client.get("/api/partners/nao-existe", headers=h).status_code == 404
+    # update
+    r = client.put(f"/api/partners/{pid}", headers=h, json={"office": "Silva Arq Atualizado"})
+    assert r.status_code == 200 and r.get_json()["office"] == "Silva Arq Atualizado"
+    # update name vazio 400
+    assert client.put(f"/api/partners/{pid}", headers=h, json={"name": " "}).status_code == 400
+    assert client.put("/api/partners/nao-existe", headers=h, json={"name": "x"}).status_code == 404
+    # client com parceiro
+    r = client.post("/api/clients", headers=h, json={"name": "Cliente A", "cpf_cnpj": "part-001", "partner_id": pid})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    cid = r.get_json()["id"]
+    assert r.get_json()["partner_id"] == pid
+    assert r.get_json()["partner_name"] == "Escritorio Silva"
+    # GET clients contem partner_name
+    lst2 = client.get("/api/clients", headers=h).get_json()
+    row = next(c for c in lst2 if c["id"] == cid)
+    assert row["partner_name"] == "Escritorio Silva"
+    # update client partner_id invalido 404
+    assert client.put(f"/api/clients/{cid}", headers=h, json={"partner_id": "nao-existe"}).status_code == 404
+    # create client com partner invalido 404
+    assert client.post("/api/clients", headers=h, json={"name": "Cliente B", "cpf_cnpj": "part-002", "partner_id": "nao-existe"}).status_code == 404
+    # partner em uso não pode deletar 400
+    r = client.delete(f"/api/partners/{pid}", headers=h)
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert "em uso" in r.get_data(as_text=True).lower()
+    # remover vinculo e deletar
+    assert client.put(f"/api/clients/{cid}", headers=h, json={"partner_id": ""}).status_code == 200
+    assert client.delete(f"/api/clients/{cid}", headers=h).status_code == 200
+    assert client.delete(f"/api/partners/{pid}", headers=h).status_code == 200
+    assert client.get(f"/api/partners/{pid}", headers=h).status_code == 404
+    # delete nao existe 404
+    assert client.delete("/api/partners/nao-existe", headers=h).status_code == 404
+    # delete sem token 401
+    r = client.post("/api/partners", headers=h, json={"name": "TempPartner"}).get_json()
+    tmp = r["id"]
+    assert client.delete(f"/api/partners/{tmp}").status_code == 401
+    assert client.delete(f"/api/partners/{tmp}", headers=h).status_code == 200
+
+
+def test_report_partners(client):
+    h = _login(client)
+    r = client.post("/api/partners", headers=h, json={"name": "Escritorio Report", "office": "Report Arq", "city": "Seberi"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    pid = r.get_json()["id"]
+    # cria 2 clientes com partner
+    c1 = client.post("/api/clients", headers=h, json={"name": "Cli Rep 1", "cpf_cnpj": "rep-001", "partner_id": pid, "estimated_value": 10000}).get_json()
+    c2 = client.post("/api/clients", headers=h, json={"name": "Cli Rep 2", "cpf_cnpj": "rep-002", "partner_id": pid, "estimated_value": 5000}).get_json()
+    # report partners
+    r = client.get("/api/reports/partners", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert "Parceiro" in body["title"]
+    assert len(body["rows"]) >= 1
+    assert any("Escritorio Report" in str(row.get("partner", "")) for row in body["rows"])
+    # verifica summary contem Clientes com Parceiro
+    assert any("Clientes com Parceiro" in s["label"] for s in body["summary"])
+    # verifica export xlsx
+    assert client.get("/api/reports/partners?format=xlsx", headers=h).status_code == 200
+    # verifica export pdf
+    assert client.get("/api/reports/partners?format=pdf", headers=h).status_code == 200
+    # crm tambem deve conter vendas por parceiro
+    crm = client.get("/api/reports/crm", headers=h).get_json()
+    assert "vendas_por_parceiro" in crm or "parceiros" in crm or "partner_clients_count" in crm
+    # cleanup
+    client.delete(f"/api/clients/{c1['id']}", headers=h)
+    client.delete(f"/api/clients/{c2['id']}", headers=h)
+    client.delete(f"/api/partners/{pid}", headers=h)

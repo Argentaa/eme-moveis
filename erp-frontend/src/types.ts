@@ -16,6 +16,18 @@ export interface User {
 
 export type FunnelStatus = 'PROSPECCAO' | 'ORCAMENTO' | 'APRESENTACAO' | 'NEGOCIACAO' | 'FECHAMENTO' | 'PERDIDO';
 
+export interface Partner {
+  id: string;
+  name: string;
+  office: string;
+  phone: string;
+  email: string;
+  city: string;
+  notes: string;
+  active: boolean;
+  created_at: string;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -26,6 +38,8 @@ export interface Client {
   created_at: string;
   funnel_status: FunnelStatus;
   funnel_id?: string | null;
+  partner_id?: string | null;
+  partner_name?: string | null;
   lost_reason?: string | null;
   estimated_value?: number | null;
   lead_source?: string | null;
@@ -286,7 +300,7 @@ export interface StockMovement {
 
 // ── Relatórios ──────────────────────────────────────────────────
 
-export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'tickets' | 'production';
+export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'tickets' | 'production' | 'partners';
 
 export interface ReportColumn {
   key: string;

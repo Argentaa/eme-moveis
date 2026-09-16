@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -140,6 +140,30 @@ export const clientService = {
 
   async deleteInteraction(interactionId: string): Promise<any> {
     const response = await api.delete(`/api/interactions/${interactionId}`);
+    return response.data;
+  },
+};
+
+// Partner Services
+export const partnerService = {
+  async list(): Promise<Partner[]> {
+    const response = await api.get('/api/partners');
+    return response.data;
+  },
+  async get(id: string): Promise<Partner> {
+    const response = await api.get('/api/partners/' + id);
+    return response.data;
+  },
+  async create(data: { name: string; office?: string; phone?: string; email?: string; city?: string; notes?: string; active?: boolean }): Promise<Partner> {
+    const response = await api.post('/api/partners', data);
+    return response.data;
+  },
+  async update(id: string, data: Partial<Partner>): Promise<Partner> {
+    const response = await api.put('/api/partners/' + id, data);
+    return response.data;
+  },
+  async remove(id: string): Promise<any> {
+    const response = await api.delete('/api/partners/' + id);
     return response.data;
   },
 };

@@ -45,6 +45,32 @@ class User(db.Model):
         return d
 
 
+class Partner(db.Model):
+    __tablename__ = "partners"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(200), nullable=False)
+    office = db.Column(String(160), nullable=True, default="")
+    phone = db.Column(String(60), nullable=True, default="")
+    email = db.Column(String(160), nullable=True, default="")
+    city = db.Column(String(120), nullable=True, default="")
+    notes = db.Column(Text, nullable=True, default="")
+    active = db.Column(Boolean, nullable=False, default=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "office": self.office or "",
+            "phone": self.phone or "",
+            "email": self.email or "",
+            "city": self.city or "",
+            "notes": self.notes or "",
+            "active": bool(self.active),
+            "created_at": iso(self.created_at),
+        }
+
+
 class Client(db.Model):
     __tablename__ = "clients"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -60,6 +86,8 @@ class Client(db.Model):
     lead_source = db.Column(String(120), nullable=True)
     campaign = db.Column(String(120), nullable=True)
     funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True, index=True)
+    partner_id = db.Column(String(36), ForeignKey("partners.id", ondelete="SET NULL"), nullable=True, index=True)
+    partner = db.relationship("Partner")
 
     def to_dict(self):
         return {
@@ -77,6 +105,8 @@ class Client(db.Model):
             "campaign": self.campaign,
             "negotiation_value": self.negotiation_value,
             "funnel_id": self.funnel_id,
+            "partner_id": self.partner_id,
+            "partner_name": self.partner.name if getattr(self, "partner", None) else None,
         }
 
     @property

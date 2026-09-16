@@ -17,6 +17,7 @@ from app.models.models import (
     Interaction,
     LeadSource,
     NegotiationItem,
+    Partner,
     Product,
     Project,
 )
@@ -26,7 +27,7 @@ bp = Blueprint("clients", __name__)
 CLIENT_FIELDS = (
     "name", "email", "phone", "cpf_cnpj", "address",
     "funnel_status", "lost_reason", "estimated_value", "lead_source", "campaign",
-    "funnel_id",
+    "funnel_id", "partner_id",
 )
 
 INTERACTION_TYPES = ("CONVERSA", "PROPOSTA", "ORCAMENTO", "OBSERVACAO")
@@ -96,7 +97,7 @@ def create_client():
         return jsonify({"detail": "name e obrigatorio"}), 400
     client = Client()
     for f in CLIENT_FIELDS:
-        if f == "funnel_id":
+        if f in ("funnel_id", "partner_id"):
             continue
         if f in data:
             setattr(client, f, data[f] if data[f] != "" or f in ("email", "phone", "address") else None)
@@ -108,6 +109,15 @@ def create_client():
     if funnel_resolved == "invalid":
         return jsonify({"detail": "funnel_id invalido"}), 400
     client.funnel_id = funnel_resolved
+    if "partner_id" in data:
+        raw = data.get("partner_id")
+        if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+            client.partner_id = None
+        else:
+            pid = str(raw).strip()
+            if not db.session.get(Partner, pid):
+                return jsonify({"detail": "Parceiro nao encontrado"}), 404
+            client.partner_id = pid
     _upsert_option(LeadSource, client.lead_source)
     _upsert_option(Campaign, client.campaign)
     db.session.add(client)
@@ -294,7 +304,7 @@ def update_client(client_id):
     old_source = client.lead_source
     old_campaign = client.campaign
     for f in CLIENT_FIELDS:
-        if f == "funnel_id":
+        if f in ("funnel_id", "partner_id"):
             continue
         if f in data:
             setattr(client, f, data[f])
@@ -309,6 +319,15 @@ def update_client(client_id):
             if not funnel or funnel.kind != "CRM" or not funnel.active:
                 return jsonify({"detail": "funnel_id invalido"}), 400
             client.funnel_id = fid
+    if "partner_id" in data:
+        raw = data.get("partner_id")
+        if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+            client.partner_id = None
+        else:
+            pid = str(raw).strip()
+            if not db.session.get(Partner, pid):
+                return jsonify({"detail": "Parceiro nao encontrado"}), 404
+            client.partner_id = pid
     _upsert_option(LeadSource, client.lead_source)
     _upsert_option(Campaign, client.campaign)
     if client.funnel_status != old_funnel:

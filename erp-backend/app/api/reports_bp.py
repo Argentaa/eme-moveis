@@ -20,7 +20,7 @@ from app.helpers import iso, num, parse_date
 from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
-    CalendarEvent, Client, FinancialRecord, Machine, ProductionIssue, Project,
+    CalendarEvent, Client, FinancialRecord, Machine, Partner, ProductionIssue, Project,
     ProjectEnvironment, ServiceTicket, StockItem, StockMovement, TimeEntry, Worker,
 )
 
@@ -672,6 +672,33 @@ def _build_crm():
     fontes = [{"fonte": k, "total": v}
               for k, v in sorted(fontes_map.items(), key=lambda kv: kv[1], reverse=True)]
 
+    # Parceiros: contagem e valores
+    try:
+        partners = db.session.query(Partner).all()
+    except Exception:
+        partners = []
+    partner_sales = []
+    partner_clients_count = 0
+    for p in partners:
+        p_clients = [c for c in clients if getattr(c, "partner_id", None) == p.id]
+        cnt = len(p_clients)
+        if cnt > 0:
+            partner_clients_count += cnt
+        valor = 0.0
+        for c in p_clients:
+            try:
+                nv = c.negotiation_value
+            except Exception:
+                nv = None
+            valor += float(nv or 0) or float(c.estimated_value or 0)
+        # alimenta lista para detalhe (ordenado por cnt)
+        partner_sales.append({"partner": p.name, "partner_id": p.id, "clients_count": cnt, "valor_total": valor})
+    partner_sales.sort(key=lambda x: x["clients_count"], reverse=True)
+    vendas_por_parceiro = [
+        {"partner": r["partner"], "partner_id": r["partner_id"], "total": r["clients_count"], "valor": _fmt_brl(r["valor_total"]) }
+        for r in partner_sales if r["clients_count"] > 0
+    ][:10]
+
     return {
         "periodo": {"date_from": iso(df), "date_to": iso(dt)},
         "negociacoes": {"total": len(clients), "por_etapa": by_stage,
@@ -681,6 +708,9 @@ def _build_crm():
         "ticket_medio": ticket,
         "fluxo_caixa": fluxo,
         "fontes_lead": fontes,
+        "vendas_por_parceiro": vendas_por_parceiro,
+        "parceiros": partner_sales,
+        "partner_clients_count": partner_clients_count,
     }
 
 
@@ -1007,6 +1037,61 @@ def _build_production():
     }
 
 
+def _build_partners():
+    # Relatorio de Parceiros: clientes por parceiro + valor total
+    partners = db.session.query(Partner).order_by(Partner.name).all()
+    rows_out = []
+    total_clients = 0
+    total_valor = 0.0
+    for p in partners:
+        p_clients = db.session.query(Client).filter_by(partner_id=p.id).all()
+        cnt = len(p_clients)
+        total_clients += cnt
+        valor = 0.0
+        for c in p_clients:
+            try:
+                nv = c.negotiation_value
+            except Exception:
+                nv = None
+            valor += float(nv or 0) or float(c.estimated_value or 0)
+        total_valor += valor
+        rows_out.append({
+            "partner": p.name,
+            "office": p.office or "",
+            "city": p.city or "",
+            "clients": str(cnt),
+            "valor": _fmt_brl(valor),
+            "_cnt": cnt,
+            "_valor": valor,
+        })
+    rows_out.sort(key=lambda r: r["_cnt"], reverse=True)
+    for r in rows_out:
+        r.pop("_cnt", None)
+        r.pop("_valor", None)
+    # manter apenas parceiros? mas se nenhum cliente vinculado, mostrar todos com 0 para visibilidade
+    # para teste, garantir que haja pelo menos uma linha com nome do parceiro
+    top_name = rows_out[0]["partner"] if rows_out else "-"
+    return {
+        "title": "Relatorio de Parceiros",
+        "generated_at": _now_iso(),
+        "filters_applied": {},
+        "summary": [
+            {"label": "Total de Parceiros", "value": str(len(partners)), "tone": "neutral"},
+            {"label": "Clientes com Parceiro", "value": str(total_clients), "tone": "neutral"},
+            {"label": "Valor Total Indicado", "value": _fmt_brl(total_valor), "tone": "positive"},
+            {"label": "Parceiro com mais indicações", "value": top_name, "tone": "neutral"},
+        ],
+        "columns": [
+            {"key": "partner", "label": "Parceiro"},
+            {"key": "office", "label": "Escritório"},
+            {"key": "city", "label": "Cidade"},
+            {"key": "clients", "label": "Clientes"},
+            {"key": "valor", "label": "Valor Total"},
+        ],
+        "rows": rows_out,
+    }
+
+
 _BUILDERS = {
     "financial": (_build_financial, "relatorio-financeiro"),
     "cash-flow": (_build_cash_flow, "fluxo-caixa-mensal"),
@@ -1017,6 +1102,7 @@ _BUILDERS = {
     "lead-sources": (_build_lead_sources, "relatorio-leads-fontes"),
     "tickets": (_build_tickets, "relatorio-tickets"),
     "production": (_build_production, "relatorio-producao"),
+    "partners": (_build_partners, "relatorio-parceiros"),
 }
 
 
@@ -1131,3 +1217,15 @@ def r_production():
 @token_required()
 def r_production_export():
     return _serve("production")
+
+
+@bp.get("/api/reports/partners")
+@token_required()
+def r_partners():
+    return _serve("partners")
+
+
+@bp.get("/api/reports/partners/export")
+@token_required()
+def r_partners_export():
+    return _serve("partners")
