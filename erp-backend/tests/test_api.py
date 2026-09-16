@@ -2766,3 +2766,137 @@ def test_saldo_baixo_alerta(client):
     r = client.get("/api/calendar/notifications", headers=h)
     after = len([n for n in r.get_json() if n["type"] == "SALDO_BAIXO"])
     assert after == before
+
+
+def test_venda_fechada_cria_projeto(client):
+    h = _login(client)
+    # cria Client via API autenticado
+    r = client.post(
+        "/api/clients",
+        headers=h,
+        json={"name": "Cliente Teste Venda", "estimated_value": 5000, "lead_source": "Instagram", "funnel_status": "PROSPECCAO"},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    cid = body["id"]
+    cname = body["name"]
+    # verifica qual e a ultima coluna do funil CRM default
+    r = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    funnels = r.get_json()
+    crm_default = next((f for f in funnels if f.get("is_default")), funnels[0] if funnels else None)
+    assert crm_default is not None, "funil CRM default nao encontrado"
+    fid = crm_default["id"]
+    cols = sorted(crm_default.get("columns", []), key=lambda c: c.get("position", 0))
+    # Se nao existir VENDA_FECHADA, criar via POST /api/funnels/<id>/columns
+    keys = [c.get("column_key") for c in cols]
+    last_key = cols[-1]["column_key"] if cols else None
+    if "VENDA_FECHADA" not in keys:
+        # tenta criar VENDA_FECHADA como ultima coluna
+        rc = client.post(f"/api/funnels/{fid}/columns", headers=h, json={"label": "Venda Fechada"})
+        # se ja existir ou falha, ignora; re-busca funil
+        if rc.status_code in (200, 201):
+            r = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"})
+            funnels = r.get_json()
+            crm_default = next((f for f in funnels if f.get("id") == fid), next((f for f in funnels if f.get("is_default")), funnels[0]))
+            cols = sorted(crm_default.get("columns", []), key=lambda c: c.get("position", 0))
+            last_key = cols[-1]["column_key"] if cols else "VENDA_FECHADA"
+        else:
+            # fallback: usa VENDA_FECHADA diretamente (ou ultima conhecida)
+            last_key = "VENDA_FECHADA"
+    else:
+        # garante que ultima seja VENDA_FECHADA reordenando se preciso
+        # se VENDA_FECHADA nao for a ultima, move para ultima posicao via PUT position
+        if last_key != "VENDA_FECHADA":
+            max_pos = max(c.get("position", 0) for c in cols)
+            client.put(f"/api/funnels/{fid}/columns/VENDA_FECHADA", headers=h, json={"position": max_pos + 1})
+            r = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"})
+            funnels = r.get_json()
+            crm_default = next((f for f in funnels if f.get("id") == fid), funnels[0])
+            cols = sorted(crm_default.get("columns", []), key=lambda c: c.get("position", 0))
+            last_key = cols[-1]["column_key"] if cols else "VENDA_FECHADA"
+    # faz PUT para venda fechada (ultima coluna)
+    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": last_key})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    # verifica que GET /api/projects lista contem projeto com client_id igual e title igual ao nome
+    r = client.get("/api/projects", headers=h)
+    assert r.status_code == 200
+    projs = [p for p in r.get_json() if p.get("client_id") == cid]
+    assert len(projs) == 1, f"esperado 1 projeto para cliente {cid}, obtido {projs}"
+    proj = projs[0]
+    assert proj["title"] == cname or cname in proj["title"] or proj["title"] in cname
+    assert proj["status"] == "ORCAMENTO"
+    # value igual ao estimated_value (5000) ou negotiation_value
+    val = proj.get("value")
+    assert val == 5000 or val == 5000.0 or val == 5000.00, f"value {val} != 5000"
+    # idempotencia: segundo PUT mesmo funnel_status nao duplica
+    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": last_key})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    r = client.get("/api/projects", headers=h)
+    projs2 = [p for p in r.get_json() if p.get("client_id") == cid]
+    assert len(projs2) == 1, f"idempotencia falhou: {len(projs2)} projetos apos segundo PUT"
+    # mudar para outro status nao cria e depois voltar nao duplica quando ja houver projeto ativo
+    other_key = next((c.get("column_key") for c in cols if c.get("column_key") != last_key), "PROSPECCAO")
+    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": other_key})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    r = client.get("/api/projects", headers=h)
+    projs3 = [p for p in r.get_json() if p.get("client_id") == cid]
+    assert len(projs3) == 1, f"mudanca para {other_key} criou projeto indevido: {len(projs3)}"
+    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": last_key})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    r = client.get("/api/projects", headers=h)
+    projs4 = [p for p in r.get_json() if p.get("client_id") == cid]
+    assert len(projs4) == 1, f"voltar para {last_key} duplicou: {len(projs4)}"
+
+
+def test_alertas_financeiros(client):
+    h = _login(client)
+    import datetime as _dt
+    today = _dt.date.today()
+    yesterday = (today - _dt.timedelta(days=1)).isoformat()
+    in3 = (today + _dt.timedelta(days=3)).isoformat()
+    today_iso = today.isoformat()
+    # cria 2 lancamentos: vencida e proxima
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Conta Vencida SAIDA Teste", "type": "SAIDA", "amount": 100, "date": today_iso, "due_date": yesterday, "status": "PENDENTE", "category": "Teste"},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Conta Proxima ENTRADA Teste", "type": "ENTRADA", "amount": 200, "date": today_iso, "due_date": in3, "status": "PENDENTE", "category": "Teste"},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    # outro vencido tipo RECEBER (ENTRADA)
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Conta Vencida ENTRADA Teste", "type": "ENTRADA", "amount": 150, "date": today_iso, "due_date": yesterday, "status": "PENDENTE", "category": "Teste"},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    # chama generate-alerts
+    r = client.post("/api/calendar/notifications/generate-alerts", headers=h)
+    if r.status_code == 404:
+        r = client.post("/api/calendar/generate-alerts", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    r = client.get("/api/calendar/notifications", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    notifs = r.get_json()
+    # verifica existe CONTA_VENCIDA e CONTA_PROXIMA
+    assert any(n["type"] == "CONTA_VENCIDA" for n in notifs), f"CONTA_VENCIDA nao encontrada: {notifs}"
+    assert any(n["type"] == "CONTA_PROXIMA" for n in notifs), f"CONTA_PROXIMA nao encontrada: {notifs}"
+    venc_count = len([n for n in notifs if n["type"] == "CONTA_VENCIDA"])
+    prox_count = len([n for n in notifs if n["type"] == "CONTA_PROXIMA"])
+    # dedupe: chamar generate-alerts novamente e verificar nao duplica
+    r = client.post("/api/calendar/notifications/generate-alerts", headers=h)
+    if r.status_code == 404:
+        r = client.post("/api/calendar/generate-alerts", headers=h)
+    assert r.status_code == 200
+    r = client.get("/api/calendar/notifications", headers=h)
+    notifs2 = r.get_json()
+    venc_count2 = len([n for n in notifs2 if n["type"] == "CONTA_VENCIDA"])
+    prox_count2 = len([n for n in notifs2 if n["type"] == "CONTA_PROXIMA"])
+    assert venc_count2 == venc_count, f"dedupe CONTA_VENCIDA falhou: {venc_count} -> {venc_count2}"
+    assert prox_count2 == prox_count, f"dedupe CONTA_PROXIMA falhou: {prox_count} -> {prox_count2}"

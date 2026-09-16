@@ -226,5 +226,20 @@ def generate_alerts():
             if not q:
                 db.session.add(Notification(title=f"Saldo baixo: {acc.name}", message=f"Conta {acc.name} com saldo {cur:.2f} abaixo de {thr:.2f}.", type="SALDO_BAIXO"))
                 created += 1
+    # Alertas financeiros: contas vencidas e proximas do vencimento (7 dias)
+    from app.models.models import FinancialRecord  # noqa: F401
+    for rec in db.session.query(FinancialRecord).filter(FinancialRecord.status == "PENDENTE", FinancialRecord.due_date != None).all():  # noqa: E711
+        try:
+            delta = (rec.due_date - date.today()).days
+        except Exception:
+            continue
+        if delta < 0:
+            if not db.session.query(Notification).filter(Notification.type == "CONTA_VENCIDA", Notification.title.contains(rec.description[:20] if rec.description else rec.id[:8])).first():
+                db.session.add(Notification(title=f"Conta vencida: {rec.description[:30]}", message=f"{rec.description} venceu em {rec.due_date} - R$ {rec.amount}", type="CONTA_VENCIDA"))
+                created += 1
+        elif 0 <= delta <= 7:
+            if not db.session.query(Notification).filter(Notification.type == "CONTA_PROXIMA", Notification.title.contains(rec.description[:20] if rec.description else rec.id[:8])).first():
+                db.session.add(Notification(title=f"Conta a vencer: {rec.description[:30]}", message=f"{rec.description} vence em {rec.due_date} - R$ {rec.amount}", type="CONTA_PROXIMA"))
+                created += 1
     db.session.commit()
     return jsonify({"ok": True, "generated": created})
