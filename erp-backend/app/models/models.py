@@ -1160,6 +1160,21 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Financeiro vinculado à conta bancária",
      "Lançamentos com vínculo à conta — o saldo reflete pagamentos e recebimentos; alerta de saldo baixo na agenda.",
      "MELHORIA", "2026-09-16"),
+    ("Venda fechada cria projeto automaticamente",
+     "Ao mover o cliente para a etapa final do funil, o projeto correspondente é criado no kanban com valor da negociação e checklist padrão — sem duplicar se já houver projeto ativo.",
+     "NOVIDADE", "2026-09-16"),
+    ("Alertas financeiros de contas vencidas e a vencer",
+     "Contas pendentes vencidas e próximas do vencimento (7 dias) geram alertas na agenda com dedupe e são exibidos no painel.",
+     "MELHORIA", "2026-09-16"),
+    ("Anexos por projeto",
+     "Cada projeto tem sua aba Arquivos — plantas, fotos e PDFs vinculados ao projeto com download seguro, persistindo entre deploys.",
+     "NOVIDADE", "2026-09-16"),
+    ("Checklists por etapa do projeto",
+     "Itens configuráveis em cada etapa do projeto (conferir medidas, conferir acabamento, etc.) com responsável, data de conclusão e observações — checkbox com atribuição automática.",
+     "NOVIDADE", "2026-09-16"),
+    ("Parceiros e arquitetos com relatório",
+     "Cadastro de parceiros (escritório, cidade, contato) vinculado ao cliente, badge no kanban, bloqueio de exclusão em uso e relatório dedicado com ranking por indicações e valor.",
+     "NOVIDADE", "2026-09-16"),
 ]
 
 
