@@ -178,6 +178,11 @@ class Project(db.Model):
     funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True, index=True)
 
     client = db.relationship("Client", backref=db.backref("projects", cascade="all, delete-orphan", passive_deletes=True))
+    # NOTA: relationships Project.environments / time_entries / production_issues sao
+    # criados via backref nas classes ProjectEnvironment / TimeEntry / ProductionIssue
+    # definidas ao fim do arquivo. Nao duplicar aqui para nao conflitar (sqlalchemy
+    # levanta erro de backref duplicado). O to_dict abaixo consome self.environments
+    # que passa a existir apos o carregamento completo dos models.
 
     def to_dict(self):
         return {
@@ -192,6 +197,9 @@ class Project(db.Model):
             "steps": self.steps or [],
             "created_at": iso(self.created_at),
             "funnel_id": self.funnel_id,
+            "environments": [e.to_dict() for e in getattr(self, "environments", [])],
+            "total_area_m2": float(sum((num(e.area_m2) or 0) for e in getattr(self, "environments", []))),
+            "total_environments": len(getattr(self, "environments", [])),
         }
 
 
@@ -706,6 +714,152 @@ class TicketPhoto(db.Model):
             "mime_type": self.mime_type or "",
             "size": self.size,
             "created_by": self.created_by or "",
+            "created_at": iso(self.created_at),
+        }
+
+
+class ProjectEnvironment(db.Model):
+    __tablename__ = "project_environments"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = db.Column(String(120), nullable=False)
+    env_type = db.Column(String(30), nullable=False, default="OUTRO")  # COZINHA|QUARTO|SALA|PAINEL|ESCRITORIO|OUTRO
+    area_m2 = db.Column(Numeric(10, 2), nullable=True)
+    value = db.Column(Numeric(14, 2), nullable=True)
+    status = db.Column(String(20), nullable=False, default="PLANEJADO")  # PLANEJADO|EM_PRODUCAO|CONCLUIDO
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    project = db.relationship(
+        "Project",
+        backref=db.backref(
+            "environments",
+            cascade="all, delete-orphan",
+            passive_deletes=False,
+            order_by="ProjectEnvironment.created_at",
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "project_title": self.project.title if self.project else None,
+            "name": self.name,
+            "env_type": self.env_type,
+            "area_m2": num(self.area_m2),
+            "value": num(self.value),
+            "status": self.status,
+            "created_at": iso(self.created_at),
+        }
+
+
+class Worker(db.Model):
+    __tablename__ = "workers"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(160), nullable=False, unique=True)
+    active = db.Column(Boolean, nullable=False, default=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "active": bool(self.active),
+            "created_at": iso(self.created_at),
+        }
+
+
+class Machine(db.Model):
+    __tablename__ = "machines"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(160), nullable=False, unique=True)
+    active = db.Column(Boolean, nullable=False, default=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "active": bool(self.active),
+            "created_at": iso(self.created_at),
+        }
+
+
+class TimeEntry(db.Model):
+    __tablename__ = "time_entries"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    environment_id = db.Column(String(36), ForeignKey("project_environments.id", ondelete="SET NULL"), nullable=True, index=True)
+    worker_id = db.Column(String(36), ForeignKey("workers.id", ondelete="SET NULL"), nullable=True, index=True)
+    machine_id = db.Column(String(36), ForeignKey("machines.id", ondelete="SET NULL"), nullable=True, index=True)
+    hours = db.Column(Numeric(6, 2), nullable=False, default=0)
+    hours_type = db.Column(String(20), nullable=False, default="PRODUTIVA")  # PRODUTIVA|IMPRODUTIVA
+    work_date = db.Column(Date, nullable=False)
+    notes = db.Column(Text, nullable=True, default="")
+    created_by = db.Column(String(80), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    project = db.relationship(
+        "Project",
+        backref=db.backref("time_entries", cascade="all, delete-orphan", passive_deletes=False),
+    )
+    environment = db.relationship("ProjectEnvironment")
+    worker = db.relationship("Worker")
+    machine = db.relationship("Machine")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "project_title": self.project.title if self.project else None,
+            "environment_id": self.environment_id,
+            "environment_name": self.environment.name if self.environment else None,
+            "worker_id": self.worker_id,
+            "worker_name": self.worker.name if self.worker else None,
+            "machine_id": self.machine_id,
+            "machine_name": self.machine.name if self.machine else None,
+            "hours": num(self.hours),
+            "hours_type": self.hours_type,
+            "work_date": iso(self.work_date),
+            "notes": self.notes or "",
+            "created_by": self.created_by or "",
+            "created_at": iso(self.created_at),
+        }
+
+
+class ProductionIssue(db.Model):
+    __tablename__ = "production_issues"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = db.Column(String(20), nullable=False)  # RETRABALHO|DESPERDICIO|PERDA
+    worker_id = db.Column(String(36), ForeignKey("workers.id", ondelete="SET NULL"), nullable=True, index=True)
+    material = db.Column(String(120), nullable=True, default="")
+    quantity = db.Column(Numeric(14, 3), nullable=True)
+    hours_spent = db.Column(Numeric(6, 2), nullable=True)
+    cost = db.Column(Numeric(14, 2), nullable=True)
+    reason = db.Column(Text, nullable=True, default="")
+    issue_date = db.Column(Date, nullable=False, default=lambda: utcnow().date())
+    notes = db.Column(Text, nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    project = db.relationship(
+        "Project",
+        backref=db.backref("production_issues", cascade="all, delete-orphan", passive_deletes=False),
+    )
+    worker = db.relationship("Worker")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "project_title": self.project.title if self.project else None,
+            "kind": self.kind,
+            "worker_id": self.worker_id,
+            "worker_name": self.worker.name if self.worker else None,
+            "material": self.material or "",
+            "quantity": num(self.quantity),
+            "hours_spent": num(self.hours_spent),
+            "cost": num(self.cost),
+            "reason": self.reason or "",
+            "issue_date": iso(self.issue_date),
+            "notes": self.notes or "",
             "created_at": iso(self.created_at),
         }
 

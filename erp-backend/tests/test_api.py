@@ -1627,3 +1627,208 @@ def test_report_tickets(client):
         assert r_exp.status_code == 200, f"export {fmt} failed: {r_exp.get_data(as_text=True)[:200]}"
         r_exp2 = client.get(f"/api/reports/tickets?format={fmt}", headers=h)
         assert r_exp2.status_code == 200
+
+
+def test_environments_model(client):
+    _login(client)
+    from app.extensions import db
+    from app.models.models import Client, Project, ProjectEnvironment
+
+    with client.application.app_context():
+        c = Client(name="Cliente Ambientes")
+        db.session.add(c)
+        db.session.commit()
+        p = Project(client_id=c.id, title="Projeto Ambientes", status="ORCAMENTO", value=50000)
+        db.session.add(p)
+        db.session.commit()
+        env1 = ProjectEnvironment(
+            project_id=p.id,
+            name="Cozinha",
+            env_type="COZINHA",
+            area_m2=32,
+            value=15000,
+            status="PLANEJADO",
+        )
+        env2 = ProjectEnvironment(
+            project_id=p.id,
+            name="Quarto",
+            env_type="QUARTO",
+            area_m2=21,
+            value=9000,
+            status="EM_PRODUCAO",
+        )
+        db.session.add_all([env1, env2])
+        db.session.commit()
+
+        d1 = env1.to_dict()
+        assert d1["project_title"] == "Projeto Ambientes"
+        assert d1["name"] == "Cozinha"
+        assert d1["env_type"] == "COZINHA"
+
+        d_proj = p.to_dict()
+        assert len(d_proj["environments"]) == 2
+        assert d_proj["total_area_m2"] == 53.0
+        assert d_proj["total_environments"] == 2
+
+
+def test_workers_machines_model(client):
+    _login(client)
+    from app.extensions import db
+    from app.models.models import Machine, Worker
+
+    with client.application.app_context():
+        w = Worker(name="Carlos", active=True)
+        m = Machine(name="Serra Circular")
+        db.session.add_all([w, m])
+        db.session.commit()
+
+        dw = w.to_dict()
+        assert dw["name"] == "Carlos"
+        assert dw["active"] is True
+        assert dw["created_at"] is not None
+
+        dm = m.to_dict()
+        assert dm["name"] == "Serra Circular"
+        # Machine active default True (bool True mesmo sem passar explicito)
+        assert dm["active"] is True
+        assert dm["created_at"] is not None
+
+
+def test_time_entries_model(client):
+    _login(client)
+    import datetime
+
+    from app.extensions import db
+    from app.models.models import Client, Machine, Project, ProjectEnvironment, TimeEntry, Worker
+
+    with client.application.app_context():
+        c = Client(name="Cliente Apontamento")
+        db.session.add(c)
+        db.session.commit()
+        p = Project(client_id=c.id, title="Projeto Apontamento", status="PRODUCAO")
+        db.session.add(p)
+        db.session.commit()
+        env = ProjectEnvironment(
+            project_id=p.id, name="Sala", env_type="SALA", area_m2=15, value=5000, status="EM_PRODUCAO"
+        )
+        db.session.add(env)
+        db.session.commit()
+        w = Worker(name="Apontador 1")
+        db.session.add(w)
+        db.session.commit()
+        m = Machine(name="Maquina Apontamento")
+        db.session.add(m)
+        db.session.commit()
+
+        te = TimeEntry(
+            project_id=p.id,
+            environment_id=env.id,
+            worker_id=w.id,
+            machine_id=m.id,
+            hours=8,
+            hours_type="PRODUTIVA",
+            work_date=datetime.date.today(),
+            notes="dia cheio",
+        )
+        db.session.add(te)
+        db.session.commit()
+
+        d = te.to_dict()
+        assert d["project_title"] == "Projeto Apontamento"
+        assert d["environment_name"] == "Sala"
+        assert d["worker_name"] == "Apontador 1"
+        assert d["machine_name"] == "Maquina Apontamento"
+        assert d["hours"] == 8
+        assert d["hours_type"] == "PRODUTIVA"
+        assert d["work_date"] == datetime.date.today().isoformat()
+        assert d["notes"] == "dia cheio"
+
+
+def test_production_issues_model(client):
+    _login(client)
+    import datetime
+
+    from app.extensions import db
+    from app.models.models import Client, ProductionIssue, Project, ProjectEnvironment, TimeEntry, Worker
+
+    with client.application.app_context():
+        c = Client(name="Cliente Issues")
+        db.session.add(c)
+        db.session.commit()
+        p = Project(client_id=c.id, title="Projeto Issues", status="PRODUCAO")
+        db.session.add(p)
+        db.session.commit()
+        w = Worker(name="Funcionario Issues")
+        db.session.add(w)
+        db.session.commit()
+
+        # Ambiente e apontamento para validar cascade (Project -> env + time_entry + issues)
+        env = ProjectEnvironment(
+            project_id=p.id, name="Cozinha Issues", env_type="COZINHA", area_m2=10, value=1000, status="PLANEJADO"
+        )
+        db.session.add(env)
+        db.session.commit()
+        te = TimeEntry(
+            project_id=p.id,
+            environment_id=env.id,
+            worker_id=w.id,
+            hours=2,
+            hours_type="PRODUTIVA",
+            work_date=datetime.date.today(),
+        )
+        db.session.add(te)
+        db.session.commit()
+
+        today = datetime.date.today()
+        iss1 = ProductionIssue(
+            kind="RETRABALHO",
+            project_id=p.id,
+            worker_id=w.id,
+            hours_spent=2.5,
+            cost=120,
+            reason="Peça riscada",
+            issue_date=today,
+        )
+        iss2 = ProductionIssue(
+            kind="DESPERDICIO",
+            project_id=p.id,
+            material="MDF",
+            quantity=1,
+            reason="Corte errado",
+            issue_date=today,
+        )
+        iss3 = ProductionIssue(
+            kind="PERDA",
+            project_id=p.id,
+            cost=300,
+            reason="Furto de chapa",
+            issue_date=today,
+        )
+        db.session.add_all([iss1, iss2, iss3])
+        db.session.commit()
+
+        d1 = iss1.to_dict()
+        assert d1["kind"] == "RETRABALHO"
+        assert d1["hours_spent"] == 2.5
+        assert d1["cost"] == 120
+        assert d1["reason"] == "Peça riscada"
+        assert d1["project_title"] == "Projeto Issues"
+        assert d1["worker_name"] == "Funcionario Issues"
+
+        d2 = iss2.to_dict()
+        assert d2["kind"] == "DESPERDICIO"
+        assert d2["material"] == "MDF"
+        assert d2["quantity"] == 1
+        assert d2["reason"] == "Corte errado"
+
+        d3 = iss3.to_dict()
+        assert d3["kind"] == "PERDA"
+        assert d3["cost"] == 300
+        assert d3["reason"] == "Furto de chapa"
+
+        pid = p.id
+        db.session.delete(p)
+        db.session.commit()
+        assert db.session.query(ProductionIssue).filter_by(project_id=pid).count() == 0
+        assert db.session.query(ProjectEnvironment).filter_by(project_id=pid).count() == 0
+        assert db.session.query(TimeEntry).filter_by(project_id=pid).count() == 0
