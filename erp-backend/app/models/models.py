@@ -1080,6 +1080,12 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Produção: prazos com semáforo e relatório industrial",
      "Datas de início, previsão e conclusão com status verde/laranja/vermelho/concluído, alertas de projeto próximo do prazo e relatório industrial (m², horas, ocorrências, tempo médio).",
      "NOVIDADE", "2026-09-16"),
+    ("Contas bancárias com saldo e projeção",
+     "Cadastro com agência, tipo, saldo inicial e limite de alerta — saldo atual soma entradas pagas e salda saídas; visão de saldo projetado e total consolidado no painel.",
+     "NOVIDADE", "2026-09-16"),
+    ("Financeiro vinculado à conta bancária",
+     "Lançamentos com vínculo à conta — o saldo reflete pagamentos e recebimentos; alerta de saldo baixo na agenda.",
+     "MELHORIA", "2026-09-16"),
 ]
 
 
