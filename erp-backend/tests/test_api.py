@@ -2153,3 +2153,197 @@ def test_project_prazo_status(client):
     # garantir que GET reflete CONCLUIDO
     r = client.get(f"/api/projects/{pid}", headers=h)
     assert r.get_json()["deadline_status"] == "CONCLUIDO"
+
+
+def test_report_production(client):
+    h = _login(client)
+    import datetime as _dt
+
+    today = _dt.date.today().isoformat()
+
+    # 1 Client + 2 Projects (PRODUCAO e MONTAGEM)
+    r = client.post("/api/clients", headers=h, json={"name": "Cliente Producao", "cpf_cnpj": "prodreport01"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    cid = r.get_json()["id"]
+
+    r = client.post("/api/projects", headers=h, json={"title": "Projeto A Producao", "client_id": cid, "status": "PRODUCAO"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    pid_a = r.get_json()["id"]
+
+    r = client.post("/api/projects", headers=h, json={"title": "Projeto B Montagem", "client_id": cid, "status": "MONTAGEM"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    pid_b = r.get_json()["id"]
+
+    # Para cada projeto cria 2 environments (Cozinha 32m2 value 15000, Quarto 21m2 value 9000)
+    env_payloads = [
+        {"name": "Cozinha", "env_type": "COZINHA", "area_m2": 32, "value": 15000},
+        {"name": "Quarto", "env_type": "QUARTO", "area_m2": 21, "value": 9000},
+    ]
+    created_envs = []
+    for pid in (pid_a, pid_b):
+        for payload in env_payloads:
+            r = client.post(f"/api/projects/{pid}/environments", headers=h, json=payload)
+            assert r.status_code == 201, r.get_data(as_text=True)
+            created_envs.append(r.get_json())
+
+    # Cria Worker Carlos e Machine Serra
+    r = client.post("/api/workers", headers=h, json={"name": "Carlos"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    wid = r.get_json()["id"]
+
+    r = client.post("/api/machines", headers=h, json={"name": "Serra"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    mid = r.get_json()["id"]
+
+    # Cria TimeEntry: 8h PRODUTIVA e 2h IMPRODUTIVA em cada projeto (total 16h prod + 4h improd)
+    expected_horas_prod = 0
+    expected_horas_improd = 0
+    for pid in (pid_a, pid_b):
+        r = client.post(f"/api/projects/{pid}/time", headers=h, json={"hours": 8, "hours_type": "PRODUTIVA", "work_date": today, "worker_id": wid, "machine_id": mid})
+        assert r.status_code == 201, r.get_data(as_text=True)
+        expected_horas_prod += 8
+        r = client.post(f"/api/projects/{pid}/time", headers=h, json={"hours": 2, "hours_type": "IMPRODUTIVA", "work_date": today, "worker_id": wid})
+        assert r.status_code == 201, r.get_data(as_text=True)
+        expected_horas_improd += 2
+    expected_total_horas = expected_horas_prod + expected_horas_improd
+
+    # Cria ProductionIssue: RETRABALHO cost 120 hours_spent 2, DESPERDICIO material MDF quantity 1, PERDA cost 300
+    r = client.post(f"/api/projects/{pid_a}/issues", headers=h, json={"kind": "RETRABALHO", "cost": 120, "hours_spent": 2, "reason": "Teste retrabalho", "issue_date": today, "worker_id": wid})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.post(f"/api/projects/{pid_a}/issues", headers=h, json={"kind": "DESPERDICIO", "material": "MDF", "quantity": 1, "reason": "Corte errado", "issue_date": today})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.post(f"/api/projects/{pid_b}/issues", headers=h, json={"kind": "PERDA", "cost": 300, "reason": "Perda teste", "issue_date": today})
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    expected_total_m2 = sum(float(e.get("area_m2") or 0) for e in created_envs)
+    expected_total_ambientes = len(created_envs)
+    expected_retrabalho = 1
+    expected_desperdicio = 1
+    expected_perda = 1
+    expected_custo_retrabalho = 120
+    expected_custo_perdas = 300
+
+    # Chama GET /api/reports/production e GET /api/reports/production/export?format=json
+    r = client.get("/api/reports/production", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body is not None, "body json vazio"
+    title = body.get("title", "")
+    assert "Producao" in title or "Produção" in title or "Industrial" in title, f"title unexpected: {title}"
+    summary = body.get("summary", [])
+    assert isinstance(summary, list) and len(summary) > 0, f"summary vazio: {summary}"
+    columns = body.get("columns", [])
+    assert isinstance(columns, list) and len(columns) > 0
+    rows = body.get("rows", [])
+    assert isinstance(rows, list) and len(rows) > 0, f"rows vazio: {rows}"
+
+    # helpers para buscar summary
+    def find_summary(substr):
+        for s in summary:
+            if substr.lower() in s.get("label", "").lower():
+                return s
+        return None
+
+    def parse_val_to_float(v):
+        if v is None:
+            return None
+        s = str(v)
+        # remove R$, h, m2, etc
+        s = s.replace("R$", "").replace("h", "").replace("m²", "").replace("m2", "").strip()
+        # trata formato brasileiro 1.234,56 -> 1234.56
+        # se tem ',' e '.' -> remove '.' milhar, troca ',' por '.'
+        s = s.strip()
+        # remove espacos
+        s = s.replace(" ", "")
+        if "," in s and "." in s:
+            s = s.replace(".", "").replace(",", ".")
+        elif "," in s:
+            s = s.replace(",", ".")
+        try:
+            return float(s)
+        except Exception:
+            # extrai numero com regex
+            import re
+            m = re.search(r"[-+]?\d*\.?\d+", s)
+            if m:
+                try:
+                    return float(m.group(0))
+                except Exception:
+                    return None
+            return None
+
+    # Asserts no json: summary contem pelo menos os labels/valores esperados
+    total_m2_item = find_summary("Total m2") or find_summary("m2")
+    assert total_m2_item is not None, f"summary sem Total m2: {summary}"
+    val_m2 = parse_val_to_float(total_m2_item.get("value"))
+    assert val_m2 is not None and abs(val_m2 - expected_total_m2) < 0.01, f"Total m2 {val_m2} != {expected_total_m2} summary={total_m2_item}"
+
+    total_amb = find_summary("Total Ambientes")
+    assert total_amb is not None, f"summary sem Total Ambientes: {summary}"
+    assert total_amb.get("value") == str(expected_total_ambientes) or parse_val_to_float(total_amb.get("value")) == expected_total_ambientes
+
+    horas_prod_item = find_summary("Horas Produtivas")
+    assert horas_prod_item is not None, f"summary sem Horas Produtivas: {summary}"
+    val_prod = parse_val_to_float(horas_prod_item.get("value"))
+    assert val_prod is not None and abs(val_prod - expected_horas_prod) < 0.01, f"Horas Produtivas {val_prod} != {expected_horas_prod}"
+
+    horas_improd_item = find_summary("Horas Improdutivas")
+    assert horas_improd_item is not None, f"summary sem Horas Improdutivas: {summary}"
+    val_improd = parse_val_to_float(horas_improd_item.get("value"))
+    assert val_improd is not None and abs(val_improd - expected_horas_improd) < 0.01, f"Horas Improdutivas {val_improd} != {expected_horas_improd}"
+
+    total_horas_item = find_summary("Total Horas")
+    assert total_horas_item is not None, f"summary sem Total Horas: {summary}"
+    val_total_horas = parse_val_to_float(total_horas_item.get("value"))
+    assert val_total_horas is not None and abs(val_total_horas - expected_total_horas) < 0.01, f"Total Horas {val_total_horas} != {expected_total_horas}"
+
+    ret_item = find_summary("Retrabalho")
+    assert ret_item is not None, f"summary sem Retrabalho: {summary}"
+    assert parse_val_to_float(ret_item.get("value")) == expected_retrabalho or ret_item.get("value") == str(expected_retrabalho)
+
+    desp_item = find_summary("Desperdicio") or find_summary("Desperdício")
+    assert desp_item is not None, f"summary sem Desperdicio: {summary}"
+    assert parse_val_to_float(desp_item.get("value")) == expected_desperdicio or desp_item.get("value") == str(expected_desperdicio)
+
+    perda_item = find_summary("Perda")
+    assert perda_item is not None, f"summary sem Perdas: {summary}"
+    # pega o que contem Perdas (evita confundir com Custo Perdas)
+    # filtra labels que nao contenham Custo
+    perdas_count_item = None
+    for s in summary:
+        lbl = s.get("label", "")
+        if "perda" in lbl.lower() and "custo" not in lbl.lower():
+            perdas_count_item = s
+            break
+    assert perdas_count_item is not None
+    assert parse_val_to_float(perdas_count_item.get("value")) == expected_perda or perdas_count_item.get("value") == str(expected_perda)
+
+    custo_ret_item = find_summary("Custo Retrabalho")
+    assert custo_ret_item is not None, f"summary sem Custo Retrabalho: {summary}"
+    assert "120" in str(custo_ret_item.get("value")), f"Custo Retrabalho {custo_ret_item.get('value')} nao contem 120"
+
+    custo_perdas_item = find_summary("Custo Perdas")
+    assert custo_perdas_item is not None, f"summary sem Custo Perdas: {summary}"
+    assert "300" in str(custo_perdas_item.get("value")), f"Custo Perdas {custo_perdas_item.get('value')} nao contem 300"
+
+    # columns contem chaves relevantes
+    keys = [c.get("key") for c in columns]
+    assert any(k in keys for k in ["metric", "value", "detail", "project", "title", "total"]), f"columns keys inesperadas: {keys}"
+
+    # rows nao vazias e contem pelo menos um projeto ou metrica relacionada
+    rows_str = str(rows)
+    assert "Projeto A" in rows_str or "Projeto B" in rows_str or "Total" in rows_str or "Horas" in rows_str or "Retrabalho" in rows_str, f"rows nao contem projeto/metrica: {rows}"
+
+    # export json
+    r2 = client.get("/api/reports/production/export?format=json", headers=h)
+    assert r2.status_code == 200, r2.get_data(as_text=True)
+    body2 = r2.get_json()
+    assert body2 is not None
+    # compara title ou summary similar
+    assert body2.get("title") == body.get("title") or "Producao" in body2.get("title", "") or "Industrial" in body2.get("title", "")
+    assert len(body2.get("summary", [])) > 0
+    assert len(body2.get("rows", [])) > 0
+
+    # tambem verifica /api/reports/production?format=json nao quebre
+    r3 = client.get("/api/reports/production?format=json", headers=h)
+    assert r3.status_code == 200, r3.get_data(as_text=True)

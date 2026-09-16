@@ -20,7 +20,8 @@ from app.helpers import iso, num, parse_date
 from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
-    CalendarEvent, Client, FinancialRecord, Project, ServiceTicket, StockItem, StockMovement,
+    CalendarEvent, Client, FinancialRecord, Machine, ProductionIssue, Project,
+    ProjectEnvironment, ServiceTicket, StockItem, StockMovement, TimeEntry, Worker,
 )
 
 bp = Blueprint("reports", __name__)
@@ -897,6 +898,115 @@ def _build_tickets():
     }
 
 
+# ── Produção Industrial ───────────────────────────────────────
+
+def _build_production():
+    df = parse_date(request.args.get("date_from"))
+    dt = parse_date(request.args.get("date_to"))
+    project_id = request.args.get("project_id") or None
+    worker_id = request.args.get("worker_id") or None
+
+    envs = db.session.query(ProjectEnvironment).all()
+    time_entries = db.session.query(TimeEntry).all()
+    issues = db.session.query(ProductionIssue).all()
+    projects_q = db.session.query(Project).all()
+
+    # filtros opcionais por projeto
+    if project_id:
+        envs = [e for e in envs if str(e.project_id) == str(project_id)]
+        time_entries = [t for t in time_entries if str(t.project_id) == str(project_id)]
+        issues = [i for i in issues if str(i.project_id) == str(project_id)]
+        projects_q = [p for p in projects_q if str(p.id) == str(project_id)]
+    # filtro por worker
+    if worker_id:
+        time_entries = [t for t in time_entries if str(t.worker_id) == str(worker_id)]
+        issues = [i for i in issues if str(i.worker_id) == str(worker_id)]
+
+    # filtro por periodo (apenas time_entries e issues; envs/projects sem filtro temporal)
+    if df:
+        time_entries = [t for t in time_entries if t.work_date and t.work_date >= df]
+        issues = [i for i in issues if i.issue_date and i.issue_date >= df]
+    if dt:
+        time_entries = [t for t in time_entries if t.work_date and t.work_date <= dt]
+        issues = [i for i in issues if i.issue_date and i.issue_date <= dt]
+
+    total_m2 = sum(float(e.area_m2 or 0) for e in envs)
+    total_environments = len(envs)
+    total_projects = len(projects_q)
+
+    horas_produtivas = sum(float(t.hours or 0) for t in time_entries if (t.hours_type or "").upper() == "PRODUTIVA")
+    horas_improdutivas = sum(float(t.hours or 0) for t in time_entries if (t.hours_type or "").upper() == "IMPRODUTIVA")
+    total_horas = horas_produtivas + horas_improdutivas
+
+    retrabalho_count = sum(1 for i in issues if (i.kind or "").upper() == "RETRABALHO")
+    desperdicio_count = sum(1 for i in issues if (i.kind or "").upper() == "DESPERDICIO")
+    perda_count = sum(1 for i in issues if (i.kind or "").upper() == "PERDA")
+
+    custo_retrabalho = sum(float(i.cost or 0) for i in issues if (i.kind or "").upper() == "RETRABALHO")
+    custo_perdas = sum(float(i.cost or 0) for i in issues if (i.kind or "").upper() == "PERDA")
+    custo_desperdicio = sum(float(i.cost or 0) for i in issues if (i.kind or "").upper() == "DESPERDICIO")
+    custo_total_ocorrencias = custo_retrabalho + custo_perdas + custo_desperdicio
+
+    tempo_medio_por_projeto = (total_horas / total_projects) if total_projects else 0
+
+    summary = [
+        {"label": "Total m2", "value": f"{total_m2:.1f}", "tone": "positive"},
+        {"label": "Total Ambientes", "value": str(total_environments), "tone": "neutral"},
+        {"label": "Total Projetos", "value": str(total_projects), "tone": "neutral"},
+        {"label": "Horas Produtivas", "value": f"{horas_produtivas:.1f}h", "tone": "positive"},
+        {"label": "Horas Improdutivas", "value": f"{horas_improdutivas:.1f}h", "tone": "negative" if horas_improdutivas > 0 else "neutral"},
+        {"label": "Total Horas", "value": f"{total_horas:.1f}h", "tone": "neutral"},
+        {"label": "Retrabalhos", "value": str(retrabalho_count), "tone": "negative" if retrabalho_count > 0 else "neutral"},
+        {"label": "Desperdicios", "value": str(desperdicio_count), "tone": "negative" if desperdicio_count > 0 else "neutral"},
+        {"label": "Perdas", "value": str(perda_count), "tone": "negative" if perda_count > 0 else "neutral"},
+        {"label": "Custo Retrabalho", "value": _fmt_brl(custo_retrabalho), "tone": "negative" if custo_retrabalho > 0 else "neutral"},
+        {"label": "Custo Perdas", "value": _fmt_brl(custo_perdas), "tone": "negative" if custo_perdas > 0 else "neutral"},
+        {"label": "Tempo Medio por Projeto", "value": f"{tempo_medio_por_projeto:.1f}h", "tone": "neutral"},
+    ]
+
+    columns = [
+        {"key": "metric", "label": "Metrica"},
+        {"key": "value", "label": "Valor"},
+        {"key": "detail", "label": "Detalhe"},
+    ]
+
+    rows = []
+    for s in summary:
+        rows.append({"metric": s["label"], "value": s["value"], "detail": ""})
+
+    # linhas detalhadas por projeto
+    # agrupa envs por projeto para detalhe
+    from collections import defaultdict
+    envs_by_project = defaultdict(list)
+    for e in envs:
+        envs_by_project[str(e.project_id)].append(e)
+    for p in projects_q:
+        proj_envs = envs_by_project.get(str(p.id), [])
+        if proj_envs:
+            total_area = sum(float(e.area_m2 or 0) for e in proj_envs)
+            rows.append({
+                "metric": p.title,
+                "value": f"{total_area:.1f}",
+                "detail": f"{len(proj_envs)} ambientes",
+            })
+        else:
+            # mesmo sem ambientes, inclui linha do projeto para garantir visibilidade
+            rows.append({
+                "metric": p.title,
+                "value": "0.0",
+                "detail": "0 ambientes",
+            })
+
+    return {
+        "title": "Relatorio Industrial de Producao",
+        "generated_at": _now_iso(),
+        "filters_applied": {"date_from": iso(df), "date_to": iso(dt), "project_id": project_id, "worker_id": worker_id},
+        "summary": summary,
+        "columns": columns,
+        "rows": rows,
+    }
+
+
 _BUILDERS = {
     "financial": (_build_financial, "relatorio-financeiro"),
     "cash-flow": (_build_cash_flow, "fluxo-caixa-mensal"),
@@ -906,6 +1016,7 @@ _BUILDERS = {
     "stock": (_build_stock, "relatorio-estoque"),
     "lead-sources": (_build_lead_sources, "relatorio-leads-fontes"),
     "tickets": (_build_tickets, "relatorio-tickets"),
+    "production": (_build_production, "relatorio-producao"),
 }
 
 
@@ -1008,3 +1119,15 @@ def r_tickets():
 @token_required()
 def r_tickets_export():
     return _serve("tickets")
+
+
+@bp.get("/api/reports/production")
+@token_required()
+def r_production():
+    return _serve("production")
+
+
+@bp.get("/api/reports/production/export")
+@token_required()
+def r_production_export():
+    return _serve("production")
