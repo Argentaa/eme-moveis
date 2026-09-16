@@ -91,7 +91,9 @@ html[data-theme="light"] body {
   [class*="bg-zinc-955"],
   [class*="bg-zinc-900"],
   [class*="bg-zinc-850"],
-  [class*="bg-zinc-805"]
+  [class*="bg-zinc-805"],
+  [class*="bg-zinc-800"],
+  [class*="bg-zinc-700"]
 ) {
   background-color: #ffffff !important;
 }
@@ -112,6 +114,36 @@ html[data-theme="light"] body {
   [class*="text-zinc-300"]
 ) {
   color: #1f2937 !important;
+}
+
+/* Botões vermelhos mantêm texto branco no modo claro — evita texto escuro sobre fundo vermelho */
+.theme-light :is([class*="bg-red-600"], [class*="bg-red-650"], [class*="bg-red-700"])[class*="text-white"] {
+  color: #ffffff !important;
+}
+
+/* Hover dos botões +Adicionar (bg-zinc-800 → vermelho) precisa voltar a branco no claro */
+.theme-light [class*="bg-zinc-800"]:hover,
+.theme-light [class*="hover:bg-red-600"]:hover {
+  background-color: #dc2626 !important;
+  color: #ffffff !important;
+  border-color: #dc2626 !important;
+}
+
+/* Badges de prazo/status — versão clara legível (fundo claro + texto escuro) */
+.theme-light [class*="bg-red-900"] {
+  background-color: #fee2e2 !important;
+  border-color: #fecaca !important;
+  color: #991b1b !important;
+}
+.theme-light [class*="bg-amber-900"] {
+  background-color: #fef3c7 !important;
+  border-color: #fde68a !important;
+  color: #92400e !important;
+}
+.theme-light [class*="bg-emerald-900"] {
+  background-color: #d1fae5 !important;
+  border-color: #a7f3d0 !important;
+  color: #065f46 !important;
 }
 
 .theme-light :is(
