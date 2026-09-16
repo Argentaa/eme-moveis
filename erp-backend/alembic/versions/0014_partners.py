@@ -31,7 +31,7 @@ def upgrade():
             sa.Column("email", sa.String(160), nullable=True, server_default=""),
             sa.Column("city", sa.String(120), nullable=True, server_default=""),
             sa.Column("notes", sa.Text(), nullable=True, server_default=""),
-            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
             sa.Column("created_at", sa.DateTime(), nullable=False),
         )
         tables.add("partners")

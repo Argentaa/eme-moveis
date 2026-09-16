@@ -25,7 +25,7 @@ def upgrade():
             sa.Column("account_type", sa.String(20), nullable=False, server_default="CORRENTE"),
             sa.Column("opening_balance", sa.Numeric(14, 2), nullable=False, server_default=sa.text("0")),
             sa.Column("opening_date", sa.Date(), nullable=True),
-            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
             sa.Column("low_balance_threshold", sa.Numeric(14, 2), nullable=True),
             sa.Column("notes", sa.Text(), nullable=True, server_default=""),
             sa.Column("created_at", sa.DateTime(), nullable=False),

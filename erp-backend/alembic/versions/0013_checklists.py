@@ -29,7 +29,7 @@ def upgrade():
             sa.Column("project_id", sa.String(36), sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False),
             sa.Column("step_id", sa.String(60), nullable=False),
             sa.Column("label", sa.String(200), nullable=False),
-            sa.Column("completed", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+            sa.Column("completed", sa.Boolean(), nullable=False, server_default=sa.false()),
             sa.Column("assigned_user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
             sa.Column("completed_at", sa.DateTime(), nullable=True),
             sa.Column("notes", sa.Text(), nullable=True, server_default=""),

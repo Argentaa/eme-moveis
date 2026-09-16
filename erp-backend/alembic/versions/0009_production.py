@@ -42,7 +42,7 @@ def upgrade():
             "workers",
             sa.Column("id", sa.String(36), primary_key=True),
             sa.Column("name", sa.String(160), nullable=False, unique=True),
-            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
             sa.Column("created_at", sa.DateTime(), nullable=False),
         )
     # workers name unique: already via unique=True; ensure index if needed
@@ -51,7 +51,7 @@ def upgrade():
             "machines",
             sa.Column("id", sa.String(36), primary_key=True),
             sa.Column("name", sa.String(160), nullable=False, unique=True),
-            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
             sa.Column("created_at", sa.DateTime(), nullable=False),
         )
 
