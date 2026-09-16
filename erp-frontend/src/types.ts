@@ -436,3 +436,18 @@ export interface ServiceTicket {
   created_by: string;
   photos: TicketPhoto[];
 }
+
+export interface ChecklistItem {
+  id: string;
+  project_id: string;
+  project_title: string | null;
+  label: string;
+  step_id: string;
+  completed: boolean;
+  assigned_user_id: string | null;
+  assigned_user_name: string | null;
+  completed_at: string | null;
+  notes: string;
+  position: number;
+  created_at: string;
+}

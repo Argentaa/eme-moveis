@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -317,6 +317,31 @@ export const projectService = {
     const response = await api.delete(`/api/projects/${id}`);
     return response.data;
   },
+
+  // ── Checklists por etapa ──
+  async getChecklists(projectId: string): Promise<ChecklistItem[]> {
+    const response = await api.get('/api/projects/' + projectId + '/checklists');
+    return response.data;
+  },
+  async createChecklist(projectId: string, data: { step_id: string; label: string; notes?: string; assigned_user_id?: string | null; completed?: boolean }): Promise<ChecklistItem> {
+    const response = await api.post('/api/projects/' + projectId + '/checklists', data);
+    return response.data;
+  },
+  async updateChecklist(itemId: string, data: Partial<ChecklistItem> & { label?: string; step_id?: string; completed?: boolean; notes?: string; assigned_user_id?: string | null }): Promise<ChecklistItem> {
+    const response = await api.put('/api/checklist-items/' + itemId, data);
+    return response.data;
+  },
+  async deleteChecklist(itemId: string): Promise<any> {
+    const response = await api.delete('/api/checklist-items/' + itemId);
+    return response.data;
+  },
+};
+
+export const checklistService = {
+  getChecklists: (projectId: string): Promise<ChecklistItem[]> => api.get('/api/projects/' + projectId + '/checklists').then(r => r.data),
+  createChecklist: (projectId: string, data: { step_id: string; label: string; notes?: string; assigned_user_id?: string | null; completed?: boolean }): Promise<ChecklistItem> => api.post('/api/projects/' + projectId + '/checklists', data).then(r => r.data),
+  updateChecklist: (itemId: string, data: any): Promise<ChecklistItem> => api.put('/api/checklist-items/' + itemId, data).then(r => r.data),
+  deleteChecklist: (itemId: string): Promise<any> => api.delete('/api/checklist-items/' + itemId).then(r => r.data),
 };
 
 // ── Production Services ─────────────────────────────────────────

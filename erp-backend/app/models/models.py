@@ -800,6 +800,46 @@ class TicketPhoto(db.Model):
         }
 
 
+class ChecklistItem(db.Model):
+    __tablename__ = "checklist_items"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    step_id = db.Column(String(60), nullable=False)
+    label = db.Column(String(200), nullable=False)
+    completed = db.Column(Boolean, nullable=False, default=False)
+    assigned_user_id = db.Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    completed_at = db.Column(DateTime, nullable=True)
+    notes = db.Column(Text, nullable=True, default="")
+    position = db.Column(Integer, nullable=False, default=0)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    project = db.relationship(
+        "Project",
+        backref=db.backref(
+            "checklist_items",
+            cascade="all, delete-orphan",
+            passive_deletes=False,
+            order_by="ChecklistItem.position",
+        ),
+    )
+    assigned_user = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "project_title": self.project.title if getattr(self, "project", None) and getattr(self.project, "title", None) else None,
+            "label": self.label,
+            "step_id": self.step_id,
+            "completed": bool(self.completed),
+            "assigned_user_id": self.assigned_user_id,
+            "assigned_user_name": self.assigned_user.name if getattr(self, "assigned_user", None) else None,
+            "completed_at": iso(self.completed_at),
+            "notes": self.notes or "",
+            "position": self.position,
+            "created_at": iso(self.created_at),
+        }
+
+
 class ProjectEnvironment(db.Model):
     __tablename__ = "project_environments"
     id = db.Column(String(36), primary_key=True, default=new_uuid)

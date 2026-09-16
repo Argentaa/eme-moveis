@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import {
-  BarChart, Layers, ListTodo, Plus, Search, Calendar, Landmark,
+  BarChart, Layers, ListTodo, Plus, Check, Search, Calendar, Landmark,
   Trash2, ArrowRight, ArrowLeft, CheckCircle, RefreshCw, Eye, Edit3, Edit2,
   Hammer, Clock, AlertTriangle, FileText, Paperclip, Download,
 } from 'lucide-react';
-import { projectService, clientService, funnelService, productionService, workerService, machineService, attachmentService, getApiErrorMessage } from '../services/api';
-import { Project, Client, ProjectStatus, ProjectStep, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, Attachment } from '../types';
+import { projectService, clientService, funnelService, productionService, workerService, machineService, attachmentService, checklistService, getApiErrorMessage } from '../services/api';
+import { Project, Client, ProjectStatus, ProjectStep, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, Attachment, ChecklistItem } from '../types';
 
 interface ProjectsViewProps {
   userRole: string;
@@ -82,6 +82,14 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
   const [attLoading, setAttLoading] = useState(false);
   const [attError, setAttError] = useState('');
   const [attUploading, setAttUploading] = useState(false);
+  // Checklists por etapa
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
+  const [checklistLoading, setChecklistLoading] = useState(false);
+  const [checklistError, setChecklistError] = useState('');
+  const [newLabelByStep, setNewLabelByStep] = useState<Record<string, string>>({});
+  const [editingChecklistId, setEditingChecklistId] = useState<string | null>(null);
+  const [editChecklistLabel, setEditChecklistLabel] = useState('');
+  const [editChecklistNotes, setEditChecklistNotes] = useState('');
 
   // GERAL tab edit fields (when in detail modal)
   const [geralEdit, setGeralEdit] = useState<{ start_date: string; planned_end_date: string; actual_end_date: string }>({ start_date: '', planned_end_date: '', actual_end_date: '' });
@@ -256,6 +264,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
     loadTimeEntries(proj.id);
     loadIssues(proj.id);
     loadWorkersMachines();
+    loadChecklists(proj.id);
   };
 
   // Sync geralEdit when selectedProject changes externally
@@ -315,6 +324,17 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
       setAttError(getApiErrorMessage(err, 'Erro ao carregar arquivos.'));
     } finally { setAttLoading(false); }
   };
+  const loadChecklists = async (projectId: string) => {
+    setChecklistLoading(true);
+    setChecklistError('');
+    try {
+      const data = await checklistService.getChecklists(projectId);
+      setChecklistItems(data || []);
+    } catch (err) {
+      setChecklistError(getApiErrorMessage(err, 'Erro ao carregar checklists.'));
+      setChecklistItems([]);
+    } finally { setChecklistLoading(false); }
+  };
   const handleProjectFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !selectedProject) return;
@@ -347,6 +367,11 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
       loadProjectAttachments(selectedProject.id);
     }
   }, [activeDetailTab, selectedProject?.id]);
+  useEffect(() => {
+    if (isStepsModalOpen && activeDetailTab === 'GERAL' && selectedProject) {
+      loadChecklists(selectedProject.id);
+    }
+  }, [activeDetailTab, selectedProject?.id, isStepsModalOpen]);
   const handleSaveGeralDates = async () => {
     if (!selectedProject) return;
     setGeralSaving(true);
@@ -466,6 +491,43 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
     try { await productionService.deleteIssue(id); await loadIssues(selectedProject.id); } catch (err) { alert(getApiErrorMessage(err, 'Erro ao remover.')); }
   };
 
+  const handleCreateChecklist = async (stepId: string) => {
+    if (!selectedProject) return;
+    const label = (newLabelByStep[stepId] || '').trim();
+    if (!label) { setChecklistError('Informe o título do item.'); return; }
+    setChecklistError('');
+    try {
+      await checklistService.createChecklist(selectedProject.id, { step_id: stepId, label });
+      setNewLabelByStep(prev => ({ ...prev, [stepId]: '' }));
+      await loadChecklists(selectedProject.id);
+    } catch (err) { setChecklistError(getApiErrorMessage(err, 'Erro ao criar item.')); }
+  };
+  const handleToggleChecklist = async (item: ChecklistItem) => {
+    try {
+      await checklistService.updateChecklist(item.id, { completed: !item.completed });
+      await loadChecklists(selectedProject!.id);
+    } catch (err) { setChecklistError(getApiErrorMessage(err, 'Erro ao atualizar item.')); }
+  };
+  const handleDeleteChecklist = async (id: string) => {
+    if (!confirm('Remover este item?')) return;
+    try {
+      await checklistService.deleteChecklist(id);
+      if (selectedProject) await loadChecklists(selectedProject.id);
+    } catch (err) { setChecklistError(getApiErrorMessage(err, 'Erro ao remover item.')); alert(getApiErrorMessage(err, 'Erro ao remover item.')); }
+  };
+  const handleSaveEditChecklist = async () => {
+    if (!editingChecklistId) return;
+    const label = editChecklistLabel.trim();
+    if (!label) { setChecklistError('Título é obrigatório.'); return; }
+    setChecklistError('');
+    try {
+      await checklistService.updateChecklist(editingChecklistId, { label, notes: editChecklistNotes });
+      setEditingChecklistId(null);
+      setEditChecklistLabel('');
+      setEditChecklistNotes('');
+      if (selectedProject) await loadChecklists(selectedProject.id);
+    } catch (err) { setChecklistError(getApiErrorMessage(err, 'Erro ao salvar item.')); }
+  };
   const toggleStepCheckbox = async (stepId: string) => {
     if (!selectedProject) return;
     const updatedSteps = selectedProject.steps.map(step =>
@@ -1023,30 +1085,97 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                     <div className="text-zinc-500 line-clamp-3">{selectedProject.description || 'Sem observações.'}</div>
                   </div>
 
-                  <div className="text-xs text-zinc-400 font-mono mb-1 bg-zinc-900/40 p-3 rounded border border-zinc-850">
-                    Checklist operacional — marque apenas as etapas já concluídas.
-                  </div>
-                  <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                  <div className="text-xs text-zinc-400 font-mono mb-1 bg-zinc-900/40 p-3 rounded border border-zinc-850 flex items-center gap-2"><ListTodo className="w-3.5 h-3.5" /> Checklist operacional — marque apenas as etapas já concluídas.</div>
+                  {checklistError && <div className="p-2 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">{checklistError}</div>}
+                  {checklistLoading ? (
+                    <div className="flex items-center gap-2 text-xs font-mono text-zinc-500 py-4"><RefreshCw className="w-4 h-4 animate-spin" /> Carregando checklists...</div>
+                  ) : (
+                  <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
                     {selectedProject.steps.map((step) => (
-                      <label
+                      <div
                         key={step.id}
-                        className="flex items-center gap-3 p-3 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-850/60 rounded cursor-pointer transition select-none"
+                        className="p-3 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 rounded transition space-y-2"
                       >
-                        <input
-                          type="checkbox"
-                          checked={step.completed}
-                          onChange={() => toggleStepCheckbox(step.id)}
-                          className="w-4.5 h-4.5 text-red-600 bg-zinc-950 border-zinc-800 rounded focus:ring-opacity-0 focus:outline-none focus:ring-0 checked:bg-red-600 cursor-pointer accent-red-600"
-                        />
-                        <span className={`text-sm font-sans font-medium transition ${step.completed ? 'text-zinc-500 line-through' : 'text-zinc-200'}`}>
-                          {step.label}
-                        </span>
-                      </label>
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={step.completed}
+                            onChange={() => toggleStepCheckbox(step.id)}
+                            className="w-4.5 h-4.5 text-red-600 bg-zinc-950 border-zinc-800 rounded focus:ring-opacity-0 focus:outline-none focus:ring-0 checked:bg-red-600 cursor-pointer accent-red-600 shrink-0"
+                          />
+                          <span className={`text-sm font-sans font-medium transition ${step.completed ? 'text-zinc-500 line-through' : 'text-zinc-200'}`}>
+                            {step.label}
+                          </span>
+                          <span className="ml-auto text-[10px] font-mono text-zinc-500 bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800">{(checklistItems || []).filter(c => c.step_id === String(step.id)).length} itens</span>
+                        </label>
+                        <div className="ml-7 space-y-1.5">
+                          {(checklistItems || []).filter(c => c.step_id === String(step.id)).map((item) => (
+                            <div key={item.id} className="flex items-start gap-2 p-2.5 bg-zinc-950/80 border border-zinc-800 rounded glass-panel">
+                              <input
+                                type="checkbox"
+                                checked={item.completed}
+                                onChange={() => handleToggleChecklist(item)}
+                                className="mt-0.5 w-4 h-4 text-red-600 bg-zinc-950 border-zinc-800 rounded focus:ring-0 cursor-pointer accent-red-600 shrink-0"
+                              />
+                              {editingChecklistId === item.id ? (
+                                <div className="flex-1 space-y-1.5 min-w-0">
+                                  <input
+                                    type="text"
+                                    value={editChecklistLabel}
+                                    onChange={e => setEditChecklistLabel(e.target.value)}
+                                    className="w-full bg-zinc-900 border border-zinc-700 text-white rounded px-2 py-1.5 text-xs focus:outline-none focus:border-red-600"
+                                    placeholder="Título"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={editChecklistNotes}
+                                    onChange={e => setEditChecklistNotes(e.target.value)}
+                                    className="w-full bg-zinc-900 border border-zinc-700 text-zinc-300 rounded px-2 py-1.5 text-xs focus:outline-none"
+                                    placeholder="Notas (opcional)"
+                                  />
+                                  <div className="flex gap-1.5">
+                                    <button onClick={handleSaveEditChecklist} className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs font-mono cursor-pointer">Salvar</button>
+                                    <button onClick={() => { setEditingChecklistId(null); setEditChecklistLabel(''); setEditChecklistNotes(''); }} className="px-3 py-1 bg-zinc-800 text-zinc-300 rounded text-xs font-mono cursor-pointer">Cancelar</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex-1 min-w-0">
+                                  <div className={`text-xs font-sans font-medium break-words ${item.completed ? 'text-zinc-500 line-through' : 'text-zinc-200'}`}>{item.label}</div>
+                                  {item.notes ? <div className="text-[11px] text-zinc-500 font-mono mt-0.5 break-words">{item.notes}</div> : null}
+                                  <div className="flex flex-wrap gap-2 text-[10px] font-mono text-zinc-500 mt-1">
+                                    {item.assigned_user_name ? <span className="inline-flex items-center gap-1">👤 {item.assigned_user_name}</span> : null}
+                                    {item.completed_at ? <span className="inline-flex items-center gap-1 text-emerald-400"><Check className="w-3 h-3" /> {new Date(item.completed_at).toLocaleString('pt-BR')}</span> : null}
+                                    <span className="text-zinc-600">#{item.position}</span>
+                                  </div>
+                                </div>
+                              )}
+                              {editingChecklistId !== item.id && (
+                                <div className="flex gap-1 shrink-0">
+                                  <button onClick={() => { setEditingChecklistId(item.id); setEditChecklistLabel(item.label); setEditChecklistNotes(item.notes || ''); }} className="p-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded border border-zinc-800 cursor-pointer" title="Editar"><Edit3 className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => handleDeleteChecklist(item.id)} className="p-1.5 bg-zinc-900 hover:bg-red-950 text-zinc-500 hover:text-red-400 rounded border border-zinc-800 cursor-pointer" title="Excluir"><Trash2 className="w-3.5 h-3.5" /></button>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                          <div className="flex gap-1.5 mt-1.5">
+                            <input
+                              type="text"
+                              placeholder="Novo item para esta etapa"
+                              value={newLabelByStep[String(step.id)] || ''}
+                              onChange={e => setNewLabelByStep(prev => ({ ...prev, [String(step.id)]: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleCreateChecklist(String(step.id)); }}
+                              className="flex-1 bg-zinc-950 border border-zinc-800 text-white rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-red-600 placeholder:text-zinc-600"
+                            />
+                            <button onClick={() => handleCreateChecklist(String(step.id))} className="px-3 py-1.5 bg-zinc-800 hover:bg-red-600 text-white rounded text-xs font-mono flex items-center gap-1 cursor-pointer border border-zinc-700 hover:border-red-600 shrink-0"><Plus className="w-3 h-3" /> Adicionar</button>
+                          </div>
+                        </div>
+                      </div>
                     ))}
                     {selectedProject.steps.length === 0 && (
                       <p className="text-zinc-500 font-mono text-xs text-center py-4">Nenhuma etapa cadastrada no cronograma.</p>
                     )}
                   </div>
+                  )}
                 </div>
               )}
 

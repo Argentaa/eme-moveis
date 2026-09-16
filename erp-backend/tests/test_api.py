@@ -2948,3 +2948,111 @@ def test_project_attachments_api(client, tmp_path):
     assert len(lst2) == 0
     # sem token -> 401
     assert client.get(f"/api/projects/{pid}/attachments").status_code == 401
+
+def test_checklists_api(client):
+    h = _login(client)
+    # 404 projeto inexistente
+    assert client.get("/api/projects/id-inexistente/checklists", headers=h).status_code == 404
+    assert client.post("/api/projects/id-inexistente/checklists", headers=h, json={"step_id": "1", "label": "x"}).status_code == 404
+
+    cid = client.post("/api/clients", headers=h, json={"name": "Cli Checklist", "cpf_cnpj": "chk-1"}).get_json()["id"]
+    steps = [{"id": "1", "label": "Etapa 1", "completed": False}, {"id": "2", "label": "Etapa 2", "completed": False}]
+    r = client.post(
+        "/api/projects",
+        headers=h,
+        json={"title": "Proj Checklist", "client_id": cid, "status": "ORCAMENTO", "value": 1000, "deadline": "2030-01-01", "steps": steps},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    pid = r.get_json()["id"]
+
+    # sem token -> 401
+    assert client.get(f"/api/projects/{pid}/checklists").status_code == 401
+
+    # GET inicial vazio
+    r = client.get(f"/api/projects/{pid}/checklists", headers=h)
+    assert r.status_code == 200 and len(r.get_json()) == 0
+
+    # validacoes POST
+    assert client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "", "label": "x"}).status_code == 400
+    assert client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "1", "label": "   "}).status_code == 400
+    assert client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "99", "label": "Conferir"}).status_code == 400
+    assert client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "1", "label": "Teste", "assigned_user_id": "nao-existe"}).status_code == 404
+
+    # POST ok -> 201
+    r = client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "1", "label": "Conferir medidas", "notes": "usar trena"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["label"] == "Conferir medidas" and body["step_id"] == "1" and body["completed"] is False
+    assert body["notes"] == "usar trena"
+    assert body["project_id"] == pid
+    iid = body["id"]
+
+    # GET retorna 1
+    r = client.get(f"/api/projects/{pid}/checklists", headers=h)
+    assert r.status_code == 200
+    lst = r.get_json()
+    assert len(lst) == 1 and lst[0]["id"] == iid
+
+    # POST segunda etapa com position incrementa
+    r2 = client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "2", "label": "Item 2"})
+    assert r2.status_code == 201
+    assert r2.get_json()["position"] == 1
+    iid2 = r2.get_json()["id"]
+
+    # GET retorna 2 ordenado
+    lst2 = client.get(f"/api/projects/{pid}/checklists", headers=h).get_json()
+    assert len(lst2) == 2
+    assert [c["position"] for c in lst2] == sorted([c["position"] for c in lst2])
+
+    # PUT completed True deve preencher completed_at e assigned_user_name
+    r = client.put(f"/api/checklist-items/{iid}", headers=h, json={"completed": True})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    d = r.get_json()
+    assert d["completed"] is True
+    assert d["completed_at"] is not None
+    assert d["assigned_user_name"] == "Admin"
+
+    # PUT com step_id invalido 400
+    assert client.put(f"/api/checklist-items/{iid}", headers=h, json={"step_id": "99"}).status_code == 400
+    # PUT label vazio 400
+    assert client.put(f"/api/checklist-items/{iid}", headers=h, json={"label": "   "}).status_code == 400
+
+    # PUT notes e label ok
+    r = client.put(f"/api/checklist-items/{iid}", headers=h, json={"label": "Conferir medidas OK", "notes": "obs"})
+    assert r.status_code == 200 and r.get_json()["label"] == "Conferir medidas OK"
+
+    # PUT completed False limpa completed_at
+    r = client.put(f"/api/checklist-items/{iid}", headers=h, json={"completed": False})
+    assert r.status_code == 200
+    assert r.get_json()["completed"] is False
+    assert r.get_json()["completed_at"] is None
+
+    # PUT assigned_user_id invalido 404
+    assert client.put(f"/api/checklist-items/{iid}", headers=h, json={"assigned_user_id": "nope"}).status_code == 404
+    # DELETE 404 invalido
+    assert client.delete("/api/checklist-items/nao-existe", headers=h).status_code == 404
+
+    # DELETE retorna 200
+    assert client.delete(f"/api/checklist-items/{iid}", headers=h).status_code == 200
+    assert client.delete(f"/api/checklist-items/{iid2}", headers=h).status_code == 200
+
+    # GET apos delete 0
+    lst3 = client.get(f"/api/projects/{pid}/checklists", headers=h).get_json()
+    assert len(lst3) == 0
+
+    # sem token DELETE 401 e PUT 401
+    r = client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "1", "label": "Temp"}).get_json()
+    tmp_id = r["id"]
+    assert client.delete(f"/api/checklist-items/{tmp_id}").status_code == 401
+    assert client.delete(f"/api/checklist-items/{tmp_id}", headers=h).status_code == 200
+
+    r = client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "1", "label": "Temp2"}).get_json()
+    tmp2 = r["id"]
+    assert client.put(f"/api/checklist-items/{tmp2}", json={"label": "x"}).status_code == 401
+    assert client.delete(f"/api/checklist-items/{tmp2}", headers=h).status_code == 200
+
+    # cascade project delete limpa checklists
+    r = client.post(f"/api/projects/{pid}/checklists", headers=h, json={"step_id": "1", "label": "Cascade"}).get_json()
+    cascade_id = r["id"]
+    assert client.delete(f"/api/projects/{pid}", headers=h).status_code == 200
+    assert client.delete(f"/api/checklist-items/{cascade_id}", headers=h).status_code == 404
