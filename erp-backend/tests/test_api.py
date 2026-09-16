@@ -2478,3 +2478,291 @@ def test_financial_record_bank_account_fk(client):
         assert len(fks) == 1
         assert fks[0].ondelete == "SET NULL"
         assert col.nullable is True
+
+
+def test_bank_accounts_api_crud(client):
+    h = _login(client)
+    import datetime
+
+    today = datetime.date.today().isoformat()
+
+    # criar conta valida
+    r = client.post(
+        "/api/bank-accounts",
+        headers=h,
+        json={
+            "name": "Principal",
+            "bank": "Bradesco",
+            "agency": "1234",
+            "account_number": "56789-0",
+            "account_type": "CORRENTE",
+            "opening_balance": 5000,
+            "opening_date": today,
+            "low_balance_threshold": 1000,
+            "active": True,
+        },
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert "id" in body
+    assert body["name"] == "Principal"
+    # current_balance deve ser 5000 (opening sem lancamentos)
+    assert body["current_balance"] == 5000 or body["current_balance"] == 5000.0
+    bid = body["id"]
+
+    # listar
+    r = client.get("/api/bank-accounts", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    lst = r.get_json()
+    assert isinstance(lst, list)
+    assert len(lst) == 1
+    assert any(x["id"] == bid for x in lst)
+
+    # get por id
+    r = client.get(f"/api/bank-accounts/{bid}", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j["id"] == bid
+    assert j["name"] == "Principal"
+    assert "current_balance" in j
+    assert j["current_balance"] == 5000 or j["current_balance"] == 5000.0
+
+    # put altera name e opening_balance
+    r = client.put(f"/api/bank-accounts/{bid}", headers=h, json={"name": "Secundaria", "opening_balance": 6000})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j["name"] == "Secundaria"
+    # apos alterar opening para 6000, current deve refletir 6000
+    assert j["current_balance"] == 6000 or j["current_balance"] == 6000.0
+    assert j["opening_balance"] == 6000 or j["opening_balance"] == 6000.0
+
+    # validacoes: sem name
+    r = client.post("/api/bank-accounts", headers=h, json={"bank": "Bradesco"})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    # account_type invalido
+    r = client.post("/api/bank-accounts", headers=h, json={"name": "Invalida", "account_type": "INVALIDO"})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert "account_type" in r.get_data(as_text=True).lower()
+
+    # delete sem vinculados -> 200 ok True
+    r = client.delete(f"/api/bank-accounts/{bid}", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json().get("ok") is True
+    # confirma 404 apos delete
+    assert client.get(f"/api/bank-accounts/{bid}", headers=h).status_code == 404
+
+    # delete bloqueado quando ha lancamentos vinculados
+    r = client.post("/api/bank-accounts", headers=h, json={"name": "Conta Bloqueio", "opening_balance": 100})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    bid2 = r.get_json()["id"]
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Venda vinculada", "type": "ENTRADA", "amount": 100, "date": today, "status": "PAGO", "bank_account_id": bid2},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.delete(f"/api/bank-accounts/{bid2}", headers=h)
+    assert r.status_code == 400, r.get_data(as_text=True)
+    txt = r.get_data(as_text=True).lower()
+    assert "conta em uso" in txt or "em uso" in txt
+
+
+def test_bank_balance_e_overview(client):
+    h = _login(client)
+    import datetime
+
+    today = datetime.date.today().isoformat()
+
+    # cria conta opening 1000
+    r = client.post("/api/bank-accounts", headers=h, json={"name": "Conta Teste Balance", "opening_balance": 1000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    bid = r.get_json()["id"]
+
+    # 2 lancamentos pagos + 1 pendente ENTRADA 200
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Entrada paga", "type": "ENTRADA", "amount": 500, "date": today, "status": "PAGO", "bank_account_id": bid},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Saida paga", "type": "SAIDA", "amount": 300, "date": today, "status": "PAGO", "bank_account_id": bid},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Entrada pendente", "type": "ENTRADA", "amount": 200, "date": today, "status": "PENDENTE", "bank_account_id": bid},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    # GET balance -> current 1200, opening 1000, entradas 500, saidas 300, projected 1400
+    r = client.get(f"/api/bank-accounts/{bid}/balance", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    b = r.get_json()
+    assert b["current_balance"] == 1200 or b["current_balance"] == 1200.0
+    assert b["opening_balance"] == 1000 or b["opening_balance"] == 1000.0
+    # entradas/saidas pagas
+    assert b.get("entradas_pagas") == 500 or b.get("entradas_pagas") == 500.0
+    assert b.get("saidas_pagas") == 300 or b.get("saidas_pagas") == 300.0
+    # projected = current + entradas pendentes - saidas pendentes = 1200+200 =1400
+    assert b["projected_balance"] == 1400 or b["projected_balance"] == 1400.0
+    # pendentes detalhados
+    assert b.get("entradas_pendentes") == 200 or b.get("entradas_pendentes") == 200.0
+    assert b.get("saidas_pendentes") == 0 or b.get("saidas_pendentes") == 0.0
+
+    # overview consolidado
+    r = client.get("/api/bank-accounts/overview", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    ov = r.get_json()
+    assert "total_balance" in ov
+    assert ov["total_balance"] == 1200 or ov["total_balance"] == 1200.0
+    assert "accounts" in ov
+    assert any(a["id"] == bid for a in ov["accounts"])
+    # total_projected deve ser 1400 (se houver campo)
+    if "total_projected" in ov:
+        assert ov["total_projected"] == 1400 or ov["total_projected"] == 1400.0
+
+    # projecao com SAIDA pendente: cria SAIDA 150 pendente -> projected 1250
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Saida pendente", "type": "SAIDA", "amount": 150, "date": today, "status": "PENDENTE", "bank_account_id": bid},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.get(f"/api/bank-accounts/{bid}/balance", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    b2 = r.get_json()
+    # current continua 1200, projected agora 1200+200-150 =1250
+    assert b2["current_balance"] == 1200 or b2["current_balance"] == 1200.0
+    assert b2["projected_balance"] == 1250 or b2["projected_balance"] == 1250.0
+    assert b2.get("saidas_pendentes") == 150 or b2.get("saidas_pendentes") == 150.0
+
+    # overview atualizado
+    r = client.get("/api/bank-accounts/overview", headers=h)
+    assert r.status_code == 200
+    ov2 = r.get_json()
+    if "total_projected" in ov2:
+        assert ov2["total_projected"] == 1250 or ov2["total_projected"] == 1250.0
+
+
+def test_financial_com_bank_account_id(client):
+    h = _login(client)
+    import datetime
+
+    today = datetime.date.today().isoformat()
+
+    # cria duas contas
+    r = client.post("/api/bank-accounts", headers=h, json={"name": "Conta 01", "opening_balance": 1000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    acc1 = r.get_json()
+    id1 = acc1["id"]
+    r = client.post("/api/bank-accounts", headers=h, json={"name": "Conta 02", "opening_balance": 2000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    acc2 = r.get_json()
+    id2 = acc2["id"]
+
+    # POST com bank_account_id valido
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Venda com conta", "type": "ENTRADA", "amount": 300, "date": today, "status": "PAGO", "bank_account_id": id1},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    j = r.get_json()
+    fid = j["id"]
+    assert j["bank_account_id"] == id1
+    assert j["bank_account_name"] == "Conta 01"
+
+    # verifica via listagem
+    r = client.get("/api/financial", headers=h)
+    assert r.status_code == 200
+    lst = r.get_json()
+    found = next((x for x in lst if x["id"] == fid), None)
+    assert found is not None
+    assert found["bank_account_id"] == id1
+    assert found["bank_account_name"] == "Conta 01"
+
+    # POST com bank_account_id inexistente -> 404 ou 400 contendo bank_account
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Invalida", "type": "ENTRADA", "amount": 100, "date": today, "bank_account_id": "id-inexistente-xyz"},
+    )
+    assert r.status_code in (400, 404), r.get_data(as_text=True)
+    assert "bank_account" in r.get_data(as_text=True).lower()
+
+    # PUT alterar para outra conta valida
+    r = client.put(f"/api/financial/{fid}", headers=h, json={"bank_account_id": id2})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    pj = r.get_json()
+    assert pj["bank_account_id"] == id2
+    # to_dict deve refletir nome da nova conta
+    assert pj.get("bank_account_name") == "Conta 02" or pj.get("bank_account_name") is not None
+
+    # compat: POST sem bank_account_id continua funcionando e retorna null
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Sem conta", "type": "SAIDA", "amount": 50, "date": today, "status": "PENDENTE"},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    j2 = r.get_json()
+    assert j2["bank_account_id"] is None
+    # bank_account_name deve ser None
+    assert j2.get("bank_account_name") is None
+
+    # PUT para remover vinculo (None ou "")
+    r = client.put(f"/api/financial/{fid}", headers=h, json={"bank_account_id": None})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["bank_account_id"] is None
+
+
+def test_saldo_baixo_alerta(client):
+    h = _login(client)
+    import datetime
+
+    today = datetime.date.today().isoformat()
+
+    # cria conta com saldo baixo
+    r = client.post("/api/bank-accounts", headers=h, json={"name": "Conta Alerta", "opening_balance": 500, "low_balance_threshold": 1000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    bid = r.get_json()["id"]
+
+    # cria SAIDA PAGO 400 -> saldo 100 < 1000
+    r = client.post(
+        "/api/financial",
+        headers=h,
+        json={"description": "Saida grande", "type": "SAIDA", "amount": 400, "date": today, "status": "PAGO", "bank_account_id": bid},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    # confirma saldo via balance
+    r = client.get(f"/api/bank-accounts/{bid}/balance", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["current_balance"] == 100 or r.get_json()["current_balance"] == 100.0
+
+    # gera alertas - tenta ambas as rotas por compat
+    r = client.post("/api/calendar/notifications/generate-alerts", headers=h)
+    if r.status_code == 404:
+        r = client.post("/api/calendar/generate-alerts", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+    # verifica notificacao SALDO_BAIXO
+    r = client.get("/api/calendar/notifications", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    notifs = r.get_json()
+    assert any(n["type"] == "SALDO_BAIXO" for n in notifs), f"notifs: {notifs}"
+    assert any("Conta Alerta" in n["title"] for n in notifs if n["type"] == "SALDO_BAIXO")
+
+    # segunda geracao nao deve duplicar por conta
+    before = len([n for n in notifs if n["type"] == "SALDO_BAIXO"])
+    r = client.post("/api/calendar/notifications/generate-alerts", headers=h)
+    if r.status_code == 404:
+        r = client.post("/api/calendar/generate-alerts", headers=h)
+    assert r.status_code == 200
+    r = client.get("/api/calendar/notifications", headers=h)
+    after = len([n for n in r.get_json() if n["type"] == "SALDO_BAIXO"])
+    assert after == before

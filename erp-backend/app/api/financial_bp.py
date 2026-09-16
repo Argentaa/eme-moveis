@@ -7,14 +7,14 @@ from flask import Blueprint, jsonify, request, send_file
 from app.helpers import body_json, iso, num, parse_date
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import FinancialRecord, RecurringFinancial, Supplier
+from app.models.models import BankAccount, FinancialRecord, RecurringFinancial, Supplier
 
 bp = Blueprint("financial", __name__)
 
 FIN_FIELDS = (
     "description", "type", "category", "amount", "date", "project_id", "status", "due_date",
     "doc_number", "issue_date", "doc_type", "bank", "account_plan", "item_description",
-    "installments", "client_id", "supplier_id", "is_recurring",
+    "installments", "client_id", "supplier_id", "is_recurring", "bank_account_id",
 )
 
 FREQ_DAYS = {"SEMANAL": 7, "QUINZENAL": 15, "MENSAL": 30, "ANUAL": 365}
@@ -33,6 +33,13 @@ def _validate_fin(data):
             return jsonify({"detail": "installments invalido"}), 400
         if n < 1:
             return jsonify({"detail": "installments deve ser maior ou igual a 1"}), 400
+    if "bank_account_id" in data and data.get("bank_account_id") not in (None, ""):
+        raw = data.get("bank_account_id")
+        bid = str(raw).strip() if isinstance(raw, str) else str(raw).strip()
+        if bid:
+            acc = db.session.get(BankAccount, bid)
+            if not acc:
+                return jsonify({"detail": "Conta bancaria nao encontrada: bank_account_id invalido"}), 404
     return None
 
 
@@ -58,8 +65,27 @@ def _apply(data, rec):
         v = data[f]
         if f in ("date", "due_date", "issue_date"):
             v = parse_date(v)
-        if f in ("project_id", "client_id", "supplier_id") and v == "":
+        if f in ("project_id", "client_id", "supplier_id", "bank_account_id") and v == "":
             v = None
+        if f == "bank_account_id":
+            if v is None or v == "":
+                v = None
+            else:
+                # keep as string id, trim
+                if isinstance(v, str):
+                    v = v.strip()
+                    if v == "":
+                        v = None
+                else:
+                    # if not string (e.g. None handled, otherwise convert)
+                    try:
+                        v = str(v).strip()
+                        if v == "":
+                            v = None
+                    except Exception:
+                        v = None
+            setattr(rec, f, v)
+            continue
         if f == "installments":
             try:
                 v = int(v)

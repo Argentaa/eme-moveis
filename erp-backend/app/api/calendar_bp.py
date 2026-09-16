@@ -6,7 +6,7 @@ from flask import Blueprint, g, jsonify, request
 from app.helpers import body_json, parse_date, parse_time
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import CalendarEvent, Notification, Project, StockItem
+from app.models.models import BankAccount, CalendarEvent, FinancialRecord, Notification, Project, StockItem
 
 bp = Blueprint("calendar", __name__)
 
@@ -210,5 +210,21 @@ def generate_alerts():
     if pending > 0 and not exists('CHAMADO_PENDENTE'):
         db.session.add(Notification(title=f'{pending} chamados pendentes', message=f'Existem {pending} chamados de assistência pendentes.', type='CHAMADO_PENDENTE'))
         created += 1
+    # SALDO_BAIXO: contas ativas com saldo abaixo do threshold
+    for acc in db.session.query(BankAccount).filter(BankAccount.active.is_(True), BankAccount.low_balance_threshold.isnot(None)).all():
+        try:
+            cur = float(acc.current_balance)
+        except Exception:
+            continue
+        try:
+            thr = float(acc.low_balance_threshold or 0)
+        except Exception:
+            continue
+        if cur < thr:
+            # dedup por conta via title contendo nome
+            q = db.session.query(Notification).filter(Notification.type == "SALDO_BAIXO", Notification.title.contains(acc.name)).first()
+            if not q:
+                db.session.add(Notification(title=f"Saldo baixo: {acc.name}", message=f"Conta {acc.name} com saldo {cur:.2f} abaixo de {thr:.2f}.", type="SALDO_BAIXO"))
+                created += 1
     db.session.commit()
     return jsonify({"ok": True, "generated": created})
