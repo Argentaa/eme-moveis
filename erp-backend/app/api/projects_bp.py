@@ -10,7 +10,7 @@ from app.models.models import Funnel, Project
 
 bp = Blueprint("projects", __name__)
 
-PROJECT_FIELDS = ("title", "client_id", "description", "status", "value", "deadline", "steps", "funnel_id")
+PROJECT_FIELDS = ("title", "client_id", "description", "status", "value", "deadline", "start_date", "planned_end_date", "actual_end_date", "steps", "funnel_id")
 
 
 def _apply(data, project, partial=True):
@@ -19,7 +19,7 @@ def _apply(data, project, partial=True):
             continue
         if f in data:
             v = data[f]
-            if f == "deadline":
+            if f in ("deadline", "start_date", "planned_end_date", "actual_end_date"):
                 v = parse_date(v)
             setattr(project, f, v)
     if "funnel_id" in data:
@@ -33,6 +33,9 @@ def _apply(data, project, partial=True):
             if not funnel or funnel.kind != "PROJECTS" or not funnel.active:
                 return "invalid"
             project.funnel_id = fid
+    # auto-preenche actual_end_date ao concluir
+    if getattr(project, "status", None) == "CONCLUIDO" and getattr(project, "actual_end_date", None) is None:
+        project.actual_end_date = date.today()
     return None
 
 
@@ -93,13 +96,20 @@ def create_project():
     funnel_resolved = _resolve_funnel_for_create(data)
     if funnel_resolved == "invalid":
         return jsonify({"detail": "funnel_id invalido"}), 400
+    status_val = data.get("status") or "ORCAMENTO"
+    actual = parse_date(data.get("actual_end_date"))
+    if status_val == "CONCLUIDO" and actual is None:
+        actual = date.today()
     project = Project(
         title=data["title"].strip(),
         client_id=data["client_id"],
         description=data.get("description") or "",
-        status=data.get("status") or "ORCAMENTO",
+        status=status_val,
         value=data.get("value") or 0,
         deadline=parse_date(data.get("deadline")),
+        start_date=parse_date(data.get("start_date")),
+        planned_end_date=parse_date(data.get("planned_end_date")),
+        actual_end_date=actual,
         steps=data.get("steps") or [],
         funnel_id=funnel_resolved,
     )
@@ -144,6 +154,15 @@ def update_project_status(project_id):
     project.status = status
     if "steps" in data:
         project.steps = data["steps"]
+    # permitir actual_end_date (e outras datas) também via rota de status
+    if "actual_end_date" in data:
+        project.actual_end_date = parse_date(data.get("actual_end_date"))
+    if "start_date" in data:
+        project.start_date = parse_date(data.get("start_date"))
+    if "planned_end_date" in data:
+        project.planned_end_date = parse_date(data.get("planned_end_date"))
+    if project.status == "CONCLUIDO" and project.actual_end_date is None:
+        project.actual_end_date = date.today()
     db.session.commit()
     return jsonify(project.to_dict())
 

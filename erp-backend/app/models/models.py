@@ -1,6 +1,8 @@
 """Modelos ERP EME Moveis. Todos os IDs sao String(36) UUID."""
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+
+DEADLINE_WARNING_DAYS = 7
 
 from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, Numeric, String, Text, Time
 from sqlalchemy import ForeignKey, UniqueConstraint
@@ -173,11 +175,30 @@ class Project(db.Model):
     status = db.Column(String(20), nullable=False, default="ORCAMENTO")
     value = db.Column(Numeric(14, 2), nullable=True, default=0)
     deadline = db.Column(Date, nullable=True)
+    start_date = db.Column(Date, nullable=True)
+    planned_end_date = db.Column(Date, nullable=True)
+    actual_end_date = db.Column(Date, nullable=True)
     steps = db.Column(JSON, nullable=True, default=list)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
     funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True, index=True)
 
     client = db.relationship("Client", backref=db.backref("projects", cascade="all, delete-orphan", passive_deletes=True))
+
+    @property
+    def deadline_status(self):
+        if self.status == "CONCLUIDO":
+            return "CONCLUIDO"
+        if not self.deadline:
+            return "VERDE"
+        try:
+            delta = (self.deadline - date.today()).days
+        except Exception:
+            return "VERDE"
+        if delta < 0:
+            return "VERMELHO"
+        if delta <= DEADLINE_WARNING_DAYS:
+            return "LARANJA"
+        return "VERDE"
     # NOTA: relationships Project.environments / time_entries / production_issues sao
     # criados via backref nas classes ProjectEnvironment / TimeEntry / ProductionIssue
     # definidas ao fim do arquivo. Nao duplicar aqui para nao conflitar (sqlalchemy
@@ -194,6 +215,10 @@ class Project(db.Model):
             "status": self.status,
             "value": num(self.value),
             "deadline": iso(self.deadline),
+            "start_date": iso(self.start_date),
+            "planned_end_date": iso(self.planned_end_date),
+            "actual_end_date": iso(self.actual_end_date),
+            "deadline_status": self.deadline_status,
             "steps": self.steps or [],
             "created_at": iso(self.created_at),
             "funnel_id": self.funnel_id,

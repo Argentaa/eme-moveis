@@ -2072,3 +2072,84 @@ def test_production_issues_api(client):
     assert r.status_code == 201, r.get_data(as_text=True)
     assert r.get_json()["issue_date"] == today
 
+
+def test_project_prazo_status(client):
+    h = _login(client)
+    import datetime as _dt
+    today = _dt.date.today()
+    # cria Client via API
+    r = client.post("/api/clients", headers=h, json={"name": "Cliente Prazo", "cpf_cnpj": "prazo01"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    cid = r.get_json()["id"]
+
+    deadline_3 = (today + _dt.timedelta(days=3)).isoformat()
+    start_iso = today.isoformat()
+    planned_iso = (today + _dt.timedelta(days=10)).isoformat()
+
+    # CENARIO PRINCIPAL: deadline em 3 dias -> LARANJA
+    r = client.post("/api/projects", headers=h, json={
+        "title": "Projeto X", "client_id": cid, "status": "ORCAMENTO",
+        "deadline": deadline_3, "start_date": start_iso, "planned_end_date": planned_iso
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["start_date"] == start_iso, f"start_date {body.get('start_date')} != {start_iso}"
+    assert body["planned_end_date"] == planned_iso
+    assert body["actual_end_date"] is None
+    assert body["deadline_status"] == "LARANJA", f"expected LARANJA got {body.get('deadline_status')}"
+    pid = body["id"]
+
+    # GET deve refletir mesmo semaforo
+    r2 = client.get(f"/api/projects/{pid}", headers=h)
+    assert r2.status_code == 200
+    gbody = r2.get_json()
+    assert gbody["start_date"] == start_iso
+    assert gbody["planned_end_date"] == planned_iso
+    assert gbody["actual_end_date"] is None
+    assert gbody["deadline_status"] == "LARANJA"
+    assert gbody["deadline"] == deadline_3
+
+    # CENARIO VERMELHO: deadline ontem + PRODUCAO
+    deadline_yesterday = (today - _dt.timedelta(days=1)).isoformat()
+    r = client.post("/api/projects", headers=h, json={
+        "title": "Projeto Atrasado", "client_id": cid, "status": "PRODUCAO", "deadline": deadline_yesterday
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["deadline_status"] == "VERMELHO"
+
+    # CENARIO VERDE: deadline em 20 dias
+    deadline_20 = (today + _dt.timedelta(days=20)).isoformat()
+    r = client.post("/api/projects", headers=h, json={
+        "title": "Projeto Verde Longe", "client_id": cid, "status": "ORCAMENTO", "deadline": deadline_20
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["deadline_status"] == "VERDE"
+
+    # CENARIO VERDE: deadline null
+    r = client.post("/api/projects", headers=h, json={
+        "title": "Projeto Sem Prazo", "client_id": cid, "status": "ORCAMENTO"
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j["deadline"] is None
+    assert j["deadline_status"] == "VERDE"
+
+    # CENARIO CONCLUIDO: status CONCLUIDO com actual_end_date preenchido -> CONCLUIDO independente do prazo
+    r = client.post("/api/projects", headers=h, json={
+        "title": "Projeto Concluido", "client_id": cid, "status": "CONCLUIDO",
+        "deadline": deadline_yesterday, "actual_end_date": start_iso
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j["actual_end_date"] == start_iso
+    assert j["deadline_status"] == "CONCLUIDO"
+
+    # Atualizacao via PUT para CONCLUIDO com actual_end_date -> CONCLUIDO
+    r = client.put(f"/api/projects/{pid}", headers=h, json={"status": "CONCLUIDO", "actual_end_date": start_iso})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    upd = r.get_json()
+    assert upd["actual_end_date"] == start_iso
+    assert upd["deadline_status"] == "CONCLUIDO"
+    # garantir que GET reflete CONCLUIDO
+    r = client.get(f"/api/projects/{pid}", headers=h)
+    assert r.get_json()["deadline_status"] == "CONCLUIDO"

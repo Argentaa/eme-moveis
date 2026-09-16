@@ -188,6 +188,14 @@ def generate_alerts():
         if not exists("PROJETO_ATRASADO", project_id=p.id):
             db.session.add(Notification(title=f"Projeto atrasado: {p.title}", message=f"O projeto {p.title} esta com prazo vencido.", type="PROJETO_ATRASADO", project_id=p.id))
             created += 1
+    for p in db.session.query(Project).filter(Project.deadline != None, Project.status != "CONCLUIDO").all():
+        try:
+            delta = (p.deadline - date.today()).days
+        except Exception:
+            continue
+        if 0 <= delta <= 7 and not exists("PROJETO_PROXIMO", project_id=p.id):
+            db.session.add(Notification(title=f"Projeto proximo do prazo: {p.title}", message=f"O projeto {p.title} vence em {delta} dias.", type="PROJETO_PROXIMO", project_id=p.id))
+            created += 1
     for item in db.session.query(StockItem).all():
         try:
             low = float(item.quantity or 0) <= float(item.min_quantity or 0)
