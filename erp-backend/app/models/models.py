@@ -1015,6 +1015,18 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Relatório de pós-venda com indicadores",
      "Chamados por status, custo total e médio, dentro vs fora da garantia e tempo médio de resolução, com filtros e exportação em PDF/Excel.",
      "NOVIDADE", "2026-09-16"),
+    ("Produção: ambientes e m² por projeto",
+     "Ambientes com tipo (Cozinha, Quarto, Sala, Painel), m², valor e status — totalizadores por projeto e base para indicadores industriais.",
+     "NOVIDADE", "2026-09-16"),
+    ("Produção: apontamento de horas com funcionários e máquinas",
+     "Registro de horas produtivas e improdutivas por projeto, ambiente, funcionário e máquina — alimenta produtividade e capacidade.",
+     "NOVIDADE", "2026-09-16"),
+    ("Produção: retrabalho, desperdício e perdas",
+     "Ocorrências com custo, material e motivo — indicadores de eficiência e custo de não-qualidade.",
+     "NOVIDADE", "2026-09-16"),
+    ("Produção: prazos com semáforo e relatório industrial",
+     "Datas de início, previsão e conclusão com status verde/laranja/vermelho/concluído, alertas de projeto próximo do prazo e relatório industrial (m², horas, ocorrências, tempo médio).",
+     "NOVIDADE", "2026-09-16"),
 ]
 
 
