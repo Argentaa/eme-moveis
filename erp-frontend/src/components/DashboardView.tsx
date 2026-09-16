@@ -8,8 +8,10 @@ import {
 import { 
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend 
 } from 'recharts';
-import { clientService, projectService, financialService, stockService } from '../services/api';
-import { Client, Project, FinancialRecord, StockItem, StockMovement } from '../types';
+import {
+  clientService, projectService, financialService, stockService, reportService
+} from '../services/api';
+import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResult } from '../types';
 import OverdueProjectsCard from './OverdueProjectsCard';
 import UpcomingEventsCard from './UpcomingEventsCard';
 import UpcomingPaymentsCard from './UpcomingPaymentsCard';
@@ -25,6 +27,7 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
   const [financials, setFinancials] = useState<FinancialRecord[]>([]);
   const [stock, setStock] = useState<StockItem[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [productionReport, setProductionReport] = useState<ReportResult | null>(null);
 
   const today = new Date();
   const [selectedMonth, setSelectedMonth] = useState(today.getMonth() + 1);
@@ -65,6 +68,11 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         setFinancials(fins);
         setStock(st);
         setMovements(movs);
+        // Produção industrial (silencioso se falhar)
+        try {
+          const prod = await reportService.getReport('production', {});
+          setProductionReport(prod);
+        } catch { /* ignore */ }
       }
     } catch (err) {
       console.error('Error fetching dashboard statistics:', err);
@@ -515,6 +523,64 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
           </div>
         </div>
 
+      </div>
+
+      {/* Produção Industrial */}
+      <div className="glass-panel p-5 rounded-lg">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-base font-medium text-white flex items-center gap-2">
+            <Hammer className="w-5 h-5 text-red-600" /> Produção Industrial
+          </h3>
+          <span className="text-xs text-zinc-500 font-mono">{productionReport ? productionReport.title : 'm², ambientes, horas e ocorrências'}</span>
+        </div>
+        {productionReport ? (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {(() => {
+              const findVal = (labelPart: string) => {
+                const it = productionReport.summary.find(s => s.label.toLowerCase().includes(labelPart.toLowerCase()));
+                return it ? it.value : '-';
+              };
+              // Ocorrências = soma retrabalhos+perdas se disponível, senão busca item que contenha ocorrência/retrabalho
+              const ocorrenciasItem = productionReport.summary.find(s => /ocorr/i.test(s.label));
+              const retrabItem = productionReport.summary.find(s => /retrabalho/i.test(s.label));
+              const perdaItem = productionReport.summary.find(s => /perda/i.test(s.label));
+              let ocorrenciasVal = '-';
+              if (ocorrenciasItem) ocorrenciasVal = ocorrenciasItem.value;
+              else if (retrabItem || perdaItem) {
+                const r = retrabItem ? parseInt(String(retrabItem.value).replace(/\D/g,'')) || 0 : 0;
+                const p = perdaItem ? parseInt(String(perdaItem.value).replace(/\D/g,'')) || 0 : 0;
+                ocorrenciasVal = String(r + p);
+              }
+              const cards = [
+                { label: 'Total m²', value: findVal('m2') || findVal('m²') || findVal('area'), tone: 'text-white' },
+                { label: 'Ambientes', value: findVal('ambiente'), tone: 'text-white' },
+                { label: 'Horas produtivas', value: findVal('hora') || findVal('produtiva'), tone: 'text-emerald-400' },
+                { label: 'Ocorrências', value: ocorrenciasVal, tone: 'text-amber-400' },
+              ];
+              return cards.map((c, idx) => (
+                <div key={idx} className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4">
+                  <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">{c.label}</p>
+                  <p className={`text-2xl font-bold mt-1 font-sans ${c.tone}`}>{c.value}</p>
+                </div>
+              ));
+            })()}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 opacity-60">
+            <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 animate-pulse">
+              <p className="text-[10px] text-zinc-500 font-mono">Total m²</p><div className="h-6 bg-zinc-800 rounded mt-2" />
+            </div>
+            <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 animate-pulse">
+              <p className="text-[10px] text-zinc-500 font-mono">Ambientes</p><div className="h-6 bg-zinc-800 rounded mt-2" />
+            </div>
+            <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 animate-pulse">
+              <p className="text-[10px] text-zinc-500 font-mono">Horas produtivas</p><div className="h-6 bg-zinc-800 rounded mt-2" />
+            </div>
+            <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 animate-pulse">
+              <p className="text-[10px] text-zinc-500 font-mono">Ocorrências</p><div className="h-6 bg-zinc-800 rounded mt-2" />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Próximos Vencimentos */}

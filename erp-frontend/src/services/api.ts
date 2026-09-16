@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -284,7 +284,7 @@ export const projectService = {
     return response.data;
   },
 
-  async create(data: Omit<Project, 'id' | 'created_at' | 'client_name'>): Promise<Project> {
+  async create(data: Partial<Project> & Pick<Project, 'title' | 'client_id' | 'status' | 'value' | 'deadline' | 'steps'>): Promise<Project> {
     const response = await api.post('/api/projects', data);
     return response.data;
   },
@@ -301,6 +301,97 @@ export const projectService = {
 
   async delete(id: string): Promise<any> {
     const response = await api.delete(`/api/projects/${id}`);
+    return response.data;
+  },
+};
+
+// ── Production Services ─────────────────────────────────────────
+
+export const workerService = {
+  async getAll(): Promise<Worker[]> {
+    const response = await api.get('/api/workers');
+    return response.data;
+  },
+  async create(data: { name: string }): Promise<Worker> {
+    const response = await api.post('/api/workers', data);
+    return response.data;
+  },
+  async update(id: string, data: Partial<Worker>): Promise<Worker> {
+    const response = await api.put('/api/workers/' + id, data);
+    return response.data;
+  },
+  async remove(id: string): Promise<any> {
+    const response = await api.delete('/api/workers/' + id);
+    return response.data;
+  },
+};
+
+export const machineService = {
+  async getAll(): Promise<Machine[]> {
+    const response = await api.get('/api/machines');
+    return response.data;
+  },
+  async create(data: { name: string }): Promise<Machine> {
+    const response = await api.post('/api/machines', data);
+    return response.data;
+  },
+  async update(id: string, data: Partial<Machine>): Promise<Machine> {
+    const response = await api.put('/api/machines/' + id, data);
+    return response.data;
+  },
+  async remove(id: string): Promise<any> {
+    const response = await api.delete('/api/machines/' + id);
+    return response.data;
+  },
+};
+
+export const productionService = {
+  async getEnvironments(projectId: string): Promise<ProjectEnvironment[]> {
+    const response = await api.get('/api/projects/' + projectId + '/environments');
+    return response.data;
+  },
+  async createEnvironment(projectId: string, data: any): Promise<ProjectEnvironment> {
+    const response = await api.post('/api/projects/' + projectId + '/environments', data);
+    return response.data;
+  },
+  async updateEnvironment(envId: string, data: any): Promise<ProjectEnvironment> {
+    const response = await api.put('/api/environments/' + envId, data);
+    return response.data;
+  },
+  async deleteEnvironment(envId: string): Promise<any> {
+    const response = await api.delete('/api/environments/' + envId);
+    return response.data;
+  },
+  async getTime(projectId: string): Promise<TimeEntry[]> {
+    const response = await api.get('/api/projects/' + projectId + '/time');
+    return response.data;
+  },
+  async createTime(projectId: string, data: any): Promise<TimeEntry> {
+    const response = await api.post('/api/projects/' + projectId + '/time', data);
+    return response.data;
+  },
+  async updateTime(entryId: string, data: any): Promise<TimeEntry> {
+    const response = await api.put('/api/time-entries/' + entryId, data);
+    return response.data;
+  },
+  async deleteTime(entryId: string): Promise<any> {
+    const response = await api.delete('/api/time-entries/' + entryId);
+    return response.data;
+  },
+  async getIssues(projectId: string): Promise<ProductionIssue[]> {
+    const response = await api.get('/api/projects/' + projectId + '/issues');
+    return response.data;
+  },
+  async createIssue(projectId: string, data: any): Promise<ProductionIssue> {
+    const response = await api.post('/api/projects/' + projectId + '/issues', data);
+    return response.data;
+  },
+  async updateIssue(issueId: string, data: any): Promise<ProductionIssue> {
+    const response = await api.put('/api/issues/' + issueId, data);
+    return response.data;
+  },
+  async deleteIssue(issueId: string): Promise<any> {
+    const response = await api.delete('/api/issues/' + issueId);
     return response.data;
   },
 };

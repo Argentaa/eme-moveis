@@ -53,6 +53,74 @@ export interface Project {
   steps: ProjectStep[];
   created_at: string;
   funnel_id?: string | null;
+  start_date: string | null;
+  planned_end_date: string | null;
+  actual_end_date: string | null;
+  deadline_status: string;
+  environments?: ProjectEnvironment[];
+  total_area_m2?: number;
+  total_environments?: number;
+}
+
+export interface ProjectEnvironment {
+  id: string;
+  project_id: string;
+  project_title: string | null;
+  name: string;
+  env_type: string;
+  area_m2: number | null;
+  value: number | null;
+  status: string;
+  created_at: string;
+}
+
+export interface Worker {
+  id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+}
+
+export interface Machine {
+  id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+}
+
+export interface TimeEntry {
+  id: string;
+  project_id: string;
+  project_title: string | null;
+  environment_id: string | null;
+  environment_name: string | null;
+  worker_id: string | null;
+  worker_name: string | null;
+  machine_id: string | null;
+  machine_name: string | null;
+  hours: number;
+  hours_type: string;
+  work_date: string;
+  notes: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ProductionIssue {
+  id: string;
+  project_id: string;
+  project_title: string | null;
+  kind: string;
+  worker_id: string | null;
+  worker_name: string | null;
+  material: string;
+  quantity: number | null;
+  hours_spent: number | null;
+  cost: number | null;
+  reason: string;
+  issue_date: string;
+  notes: string;
+  created_at: string;
 }
 
 export type FinancialType = 'ENTRADA' | 'SAIDA';
@@ -182,7 +250,7 @@ export interface StockMovement {
 
 // ── Relatórios ──────────────────────────────────────────────────
 
-export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'tickets';
+export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'tickets' | 'production';
 
 export interface ReportColumn {
   key: string;

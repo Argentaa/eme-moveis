@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   FileBarChart, Landmark, Users, Building2, Package, Filter, RefreshCw,
-  FileText, FileSpreadsheet, Search, Loader2, Target, Wrench
+  FileText, FileSpreadsheet, Search, Loader2, Target, Wrench, Hammer
 } from 'lucide-react';
 import { reportService, clientService, projectService, stockService, getApiErrorMessage } from '../services/api';
 import { ReportArea, ReportResult, Client, Project, Category } from '../types';
@@ -36,6 +36,7 @@ const AREAS: { id: ReportArea; label: string; icon: React.ComponentType<any>; de
   { id: 'crm', label: 'CRM', icon: Users, description: 'Negociações, conversão, ticket médio e fluxo de caixa' },
   { id: 'lead-sources', label: 'Origem dos Leads', icon: Target, description: 'Leads por fonte ou campanha com conversão e valores' },
   { id: 'tickets', label: 'Pós-venda', icon: Wrench, description: 'Chamados, causas, garantia e custos' },
+  { id: 'production', label: 'Produção Industrial', icon: Hammer, description: 'm², ambientes, horas e ocorrências' },
 ];
 
 const TONE_CLASSES: Record<string, string> = {
@@ -815,6 +816,17 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
                 <option value="true">Dentro da Garantia</option>
                 <option value="false">Fora da Garantia</option>
               </select>
+            </FilterField>
+          </div>
+        )}
+
+        {activeArea === 'production' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <FilterField label="De">
+              <input type="date" value={(filters.date_from as string) || ''} onChange={e => updateFilter('date_from', e.target.value)} className={inputClass} />
+            </FilterField>
+            <FilterField label="Até">
+              <input type="date" value={(filters.date_to as string) || ''} onChange={e => updateFilter('date_to', e.target.value)} className={inputClass} />
             </FilterField>
           </div>
         )}
