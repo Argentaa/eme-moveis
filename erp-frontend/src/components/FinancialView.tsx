@@ -5,15 +5,15 @@ import {
   Receipt, FileText, FileType, X, Loader2, ChevronDown, ChevronRight, UserX,
   Target, Truck, BarChart3, TrendingUp
 } from 'lucide-react';
-import { financialService, projectService, stockService, recurringService, clientService, supplierService, budgetService, reportService, getApiErrorMessage } from '../services/api';
-import { FinancialRecord, Project, Category, Supplier, BudgetGoal, BudgetAnalysis, Client, ReportResult } from '../types';
+import { financialService, projectService, stockService, recurringService, clientService, supplierService, budgetService, reportService, bankAccountService, getApiErrorMessage } from '../services/api';
+import { FinancialRecord, Project, Category, Supplier, BudgetGoal, BudgetAnalysis, Client, ReportResult, BankAccount, BankOverview } from '../types';
 
 interface FinancialViewProps {
   userRole: string;
 }
 
 export default function FinancialView({ userRole }: FinancialViewProps) {
-  const [activeTab, setActiveTab] = useState<'records' | 'overdue'>('records');
+  const [activeTab, setActiveTab] = useState<'records' | 'overdue' | 'banks'>('records');
   const [records, setRecords] = useState<FinancialRecord[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -54,6 +54,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
     issue_date: '',
     doc_type: '',
     bank: '',
+    bank_account_id: '',
     account_plan: '',
     item_description: '',
     client_id: '',
@@ -90,6 +91,16 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
   const [newSupplierName, setNewSupplierName] = useState('');
   const [supplierError, setSupplierError] = useState('');
+
+  // Contas bancárias
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [bankOverview, setBankOverview] = useState<BankOverview | null>(null);
+  const [bankLoading, setBankLoading] = useState(false);
+  const [bankModalOpen, setBankModalOpen] = useState(false);
+  const [editingBankId, setEditingBankId] = useState<string | null>(null);
+  const [bankFormData, setBankFormData] = useState({ name: '', bank: '', agency: '', account_number: '', account_type: 'CORRENTE', opening_balance: '', opening_date: '', low_balance_threshold: '', notes: '', active: true });
+  const [bankError, setBankError] = useState('');
+  const [bankSaving, setBankSaving] = useState(false);
 
   const canEditOrDelete = ['ADMIN', 'GERENTE'].includes(userRole);
 
@@ -176,6 +187,88 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
     }
   };
 
+  // ── Contas bancárias helpers ──────────────────────────────────
+  const reloadBanks = async () => {
+    try {
+      setBankLoading(true);
+      const [banks, overview] = await Promise.all([
+        bankAccountService.list().catch(() => [] as BankAccount[]),
+        bankAccountService.overview().catch(() => null as unknown as BankOverview),
+      ]);
+      setBankAccounts(banks as BankAccount[]);
+      if (overview) setBankOverview(overview as BankOverview);
+    } catch { /* ignore */ } finally { setBankLoading(false); }
+  };
+
+  const handleOpenBankModal = (bank?: BankAccount) => {
+    if (bank) {
+      setEditingBankId(bank.id);
+      setBankFormData({
+        name: bank.name || '',
+        bank: bank.bank || '',
+        agency: bank.agency || '',
+        account_number: bank.account_number || '',
+        account_type: bank.account_type || 'CORRENTE',
+        opening_balance: String(bank.opening_balance ?? ''),
+        opening_date: bank.opening_date ? bank.opening_date.substring(0, 10) : '',
+        low_balance_threshold: bank.low_balance_threshold != null ? String(bank.low_balance_threshold) : '',
+        notes: bank.notes || '',
+        active: bank.active,
+      });
+    } else {
+      setEditingBankId(null);
+      setBankFormData({ name: '', bank: '', agency: '', account_number: '', account_type: 'CORRENTE', opening_balance: '', opening_date: '', low_balance_threshold: '', notes: '', active: true });
+    }
+    setBankError('');
+    setBankModalOpen(true);
+  };
+
+  const handleSubmitBank = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBankError('');
+    if (!bankFormData.name.trim()) {
+      setBankError('Nome da conta é obrigatório.');
+      return;
+    }
+    setBankSaving(true);
+    try {
+      const payload: any = {
+        name: bankFormData.name.trim(),
+        bank: bankFormData.bank.trim(),
+        agency: bankFormData.agency.trim(),
+        account_number: bankFormData.account_number.trim(),
+        account_type: bankFormData.account_type,
+        opening_balance: bankFormData.opening_balance ? Number(bankFormData.opening_balance) : 0,
+        opening_date: bankFormData.opening_date || null,
+        low_balance_threshold: bankFormData.low_balance_threshold ? Number(bankFormData.low_balance_threshold) : null,
+        notes: bankFormData.notes.trim(),
+        active: bankFormData.active,
+      };
+      if (editingBankId) {
+        await bankAccountService.update(editingBankId, payload);
+      } else {
+        await bankAccountService.create(payload);
+      }
+      setBankModalOpen(false);
+      setEditingBankId(null);
+      reloadBanks();
+    } catch (err) {
+      setBankError(getApiErrorMessage(err, 'Erro ao salvar conta bancária.'));
+    } finally {
+      setBankSaving(false);
+    }
+  };
+
+  const handleDeleteBank = async (id: string, name: string) => {
+    if (!window.confirm(`Excluir a conta "${name}"? Esta ação só é permitida se não houver lançamentos vinculados.`)) return;
+    try {
+      await bankAccountService.remove(id);
+      reloadBanks();
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao excluir conta bancária.'));
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -196,6 +289,16 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
     } finally {
       setLoading(false);
     }
+    // Contas bancárias (silencioso se falhar)
+    try {
+      setBankLoading(true);
+      const [banks, overview] = await Promise.all([
+        bankAccountService.list().catch(() => [] as BankAccount[]),
+        bankAccountService.overview().catch(() => null as unknown as BankOverview),
+      ]);
+      setBankAccounts(banks as BankAccount[]);
+      if (overview) setBankOverview(overview as BankOverview);
+    } catch { /* ignore */ } finally { setBankLoading(false); }
   };
 
   useEffect(() => {
@@ -288,11 +391,13 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       due_date: new Date().toISOString().substring(0, 10),
       project_id: '',
       status: 'PAGO',
+      mode: 'NORMAL',
       installments: '1',
       doc_number: '',
       issue_date: '',
       doc_type: '',
       bank: '',
+      bank_account_id: '',
       account_plan: '',
       item_description: '',
       client_id: '',
@@ -314,11 +419,13 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       due_date: record.due_date ? record.due_date.substring(0, 10) : record.date.substring(0, 10),
       project_id: record.project_id || '',
       status: record.status,
+      mode: 'NORMAL',
       installments: record.installments ? String(record.installments) : '1',
       doc_number: record.doc_number || '',
       issue_date: record.issue_date ? record.issue_date.substring(0, 10) : '',
       doc_type: record.doc_type || '',
       bank: record.bank || '',
+      bank_account_id: record.bank_account_id || '',
       account_plan: record.account_plan || '',
       item_description: record.item_description || '',
       client_id: record.client_id || '',
@@ -357,6 +464,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         issue_date: formData.issue_date || undefined,
         doc_type: formData.doc_type || undefined,
         bank: formData.bank || undefined,
+        bank_account_id: formData.bank_account_id || null,
         account_plan: formData.account_plan || undefined,
         item_description: formData.item_description || undefined,
         installments: Number(formData.installments) || 1,
@@ -498,6 +606,16 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
           }`}
         >
           <AlertTriangle className="w-4 h-4" /> Pendências
+        </button>
+        <button
+          onClick={() => setActiveTab('banks')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-mono uppercase tracking-wide transition cursor-pointer border-b-2 ${
+            activeTab === 'banks'
+              ? 'text-white border-red-600'
+              : 'text-zinc-500 border-transparent hover:text-zinc-300'
+          }`}
+        >
+          <Wallet className="w-4 h-4" /> Contas Bancárias
         </button>
       </div>
 
@@ -710,6 +828,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                   <th className="py-4 px-6 font-normal">Descrição do Lançamento</th>
                   <th className="py-4 px-6 font-normal">Categoria</th>
                   <th className="py-4 px-6 font-normal">Ambiente/Projeto</th>
+                  <th className="py-4 px-6 font-normal">Conta</th>
                   <th className="py-4 px-6 font-normal text-right">Valor</th>
                   <th className="py-4 px-6 font-normal text-center">Status Recibo</th>
                   <th className="py-4 px-6 font-normal text-right">Ações</th>
@@ -741,6 +860,9 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                       </td>
                       <td className="py-4 px-6 text-xs text-zinc-400 font-sans">
                         {correlatedProj ? correlatedProj.title : <span className="text-zinc-650 font-mono">-</span>}
+                      </td>
+                      <td className="py-4 px-6 text-xs text-zinc-400 font-mono">
+                        {record.bank_account_name || record.bank || <span className="text-zinc-600">—</span>}
                       </td>
                       <td className={`py-4 px-6 text-right font-mono font-bold text-sm ${record.type === 'ENTRADA' ? 'text-emerald-400' : 'text-rose-500'}`}>
                         {record.type === 'ENTRADA' ? '+' : '-'} {record.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
@@ -819,7 +941,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
                 {filteredRecords.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-zinc-500 font-mono">
+                    <td colSpan={8} className="py-12 text-center text-zinc-500 font-mono">
                       Nenhum lançamento corresponde aos filtros.
                     </td>
                   </tr>
@@ -941,6 +1063,144 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       </div>
 
       </>
+      )}
+
+      {activeTab === 'banks' && (
+        <div className="space-y-5">
+          {/* Overview */}
+          {bankOverview ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="glass-panel p-5 rounded-lg flex justify-between items-center border-l-4 border-l-emerald-600">
+                <div>
+                  <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">Total em Contas</span>
+                  <p className="text-xl font-bold font-sans text-emerald-400 mt-1">
+                    {bankOverview.total_balance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </p>
+                  <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">Saldo consolidado atual</span>
+                </div>
+                <div className="p-3 bg-zinc-950 rounded text-emerald-500 border border-zinc-900">
+                  <Wallet className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="glass-panel p-5 rounded-lg flex justify-between items-center border-l-4 border-l-sky-600">
+                <div>
+                  <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">Total Projetado</span>
+                  <p className="text-xl font-bold font-sans text-sky-400 mt-1">
+                    {bankOverview.total_projected.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </p>
+                  <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">Com pendentes reconciliados</span>
+                </div>
+                <div className="p-3 bg-zinc-950 rounded text-sky-500 border border-zinc-900">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+              </div>
+            </div>
+          ) : bankLoading ? (
+            <div className="flex justify-center py-6"><RefreshCw className="w-6 h-6 text-red-600 animate-spin" /></div>
+          ) : null}
+
+          <div className="flex justify-between items-center">
+            <h3 className="text-base font-semibold text-white flex items-center gap-2">
+              <Landmark className="w-5 h-5 text-red-600" /> Contas Bancárias
+            </h3>
+            {canEditOrDelete && (
+              <button
+                onClick={() => handleOpenBankModal()}
+                className="bg-red-600 hover:bg-red-700 text-white text-xs font-medium px-3 py-2 rounded flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" /> Nova Conta
+              </button>
+            )}
+          </div>
+
+          {bankLoading ? (
+            <div className="flex flex-col items-center justify-center py-12">
+              <RefreshCw className="w-8 h-8 text-red-600 animate-spin mb-3" />
+              <p className="text-zinc-400 font-mono text-xs">Carregando contas...</p>
+            </div>
+          ) : bankAccounts.length === 0 ? (
+            <div className="glass-panel rounded-lg py-12 flex flex-col items-center justify-center text-center px-6">
+              <Landmark className="w-8 h-8 text-zinc-600 mb-3" />
+              <p className="text-zinc-400 text-sm font-mono">Nenhuma conta bancária cadastrada.</p>
+              <p className="text-zinc-500 text-xs font-mono mt-1">Cadastre sua primeira conta para vincular lançamentos.</p>
+            </div>
+          ) : (
+            <>
+              {/* Cards grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {bankAccounts.map(acc => (
+                  <div key={acc.id} className="glass-panel p-5 rounded-lg border border-zinc-800">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="text-sm font-semibold text-white font-sans">{acc.name}</h4>
+                        <p className="text-xs text-zinc-400 font-mono mt-0.5">{acc.bank || '—'} {acc.agency ? `· Ag ${acc.agency}` : ''} {acc.account_number ? `· ${acc.account_number}` : ''}</p>
+                      </div>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${acc.active ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/30' : 'bg-zinc-900 text-zinc-500 border-zinc-800'}`}>
+                        {acc.active ? 'Ativa' : 'Inativa'}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <span className={`text-lg font-bold font-mono ${acc.current_balance >= 0 ? 'text-emerald-400' : 'text-red-500'}`}>
+                        {acc.current_balance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-900 text-zinc-400 border border-zinc-800">{acc.account_type}</span>
+                    </div>
+                    <div className="mt-2 text-[11px] font-mono text-zinc-500 space-y-0.5">
+                      <div>Abertura: {acc.opening_balance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} {acc.opening_date ? `· ${new Date(acc.opening_date).toLocaleDateString('pt-BR')}` : ''}</div>
+                      {acc.low_balance_threshold != null && (
+                        <div>Alerta saldo baixo: {Number(acc.low_balance_threshold).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
+                      )}
+                      {acc.notes && <div className="text-zinc-400 truncate">{acc.notes}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Tabela */}
+              <div className="glass-panel rounded-lg overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm text-zinc-300">
+                    <thead className="text-xs uppercase font-mono text-zinc-500 bg-zinc-950/70 border-b border-zinc-900">
+                      <tr>
+                        <th className="py-3 px-4 font-normal">Conta</th>
+                        <th className="py-3 px-4 font-normal">Banco</th>
+                        <th className="py-3 px-4 font-normal">Agência / Número</th>
+                        <th className="py-3 px-4 font-normal">Tipo</th>
+                        <th className="py-3 px-4 font-normal text-right">Saldo Atual</th>
+                        <th className="py-3 px-4 font-normal text-center">Status</th>
+                        {canEditOrDelete && <th className="py-3 px-4 font-normal text-right">Ações</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-900">
+                      {bankAccounts.map(acc => (
+                        <tr key={acc.id} className="hover:bg-zinc-900/40">
+                          <td className="py-3 px-4 font-sans font-medium text-white">{acc.name}</td>
+                          <td className="py-3 px-4 text-zinc-400 font-mono text-xs">{acc.bank || '—'}</td>
+                          <td className="py-3 px-4 text-zinc-400 font-mono text-xs">{acc.agency || '—'} / {acc.account_number || '—'}</td>
+                          <td className="py-3 px-4"><span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-900 text-zinc-300 border border-zinc-800">{acc.account_type}</span></td>
+                          <td className={`py-3 px-4 text-right font-mono font-bold text-sm ${acc.current_balance >= 0 ? 'text-emerald-400' : 'text-red-500'}`}>
+                            {acc.current_balance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span className={`text-[11px] font-mono px-2 py-0.5 rounded border ${acc.active ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/30' : 'bg-zinc-900 text-zinc-500 border-zinc-800'}`}>
+                              {acc.active ? 'Ativa' : 'Inativa'}
+                            </span>
+                          </td>
+                          {canEditOrDelete && (
+                            <td className="py-3 px-4 text-right space-x-1">
+                              <button onClick={() => handleOpenBankModal(acc)} className="p-2 bg-zinc-900 hover:bg-blue-950/40 text-zinc-400 hover:text-blue-400 rounded border border-zinc-800 transition cursor-pointer" title="Editar"><Edit3 className="w-3.5 h-3.5" /></button>
+                              <button onClick={() => handleDeleteBank(acc.id, acc.name)} className="p-2 bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-400 rounded border border-zinc-800 transition cursor-pointer" title="Excluir"><Trash2 className="w-3.5 h-3.5" /></button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       {activeTab === 'overdue' && (
@@ -1172,7 +1432,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Banco / Conta</label>
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Banco / Conta (legado)</label>
                   <input
                     type="text"
                     value={formData.bank}
@@ -1181,6 +1441,31 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                     className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
                   />
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Conta Bancária</label>
+                <select
+                  value={formData.bank_account_id}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const acc = bankAccounts.find(b => b.id === val);
+                    setFormData(prev => ({
+                      ...prev,
+                      bank_account_id: val,
+                      bank: acc?.bank ? acc.bank : prev.bank,
+                    }));
+                  }}
+                  className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                >
+                  <option value="">Nenhuma (usar bank texto)</option>
+                  {bankAccounts.filter(b => b.active).map(b => (
+                    <option key={b.id} value={b.id}>{b.name} — {b.bank || 'sem banco'}</option>
+                  ))}
+                </select>
+                {bankAccounts.length === 0 && (
+                  <p className="text-[11px] text-zinc-500 font-mono">Cadastre contas na aba Contas Bancárias para vincular.</p>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
@@ -1499,6 +1784,84 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         </div>
       )}
 
+      {/* Bank Account Modal — nova/editar conta */}
+      {bankModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="bg-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-serif font-bold text-white">
+                  {editingBankId ? 'Editar Conta Bancária' : 'Nova Conta Bancária'}
+                </h3>
+                <p className="text-xs text-zinc-400 font-mono">Cadastro de conta para vincular lançamentos.</p>
+              </div>
+              <button onClick={() => setBankModalOpen(false)} className="text-zinc-500 hover:text-white cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSubmitBank} className="p-6 space-y-4 font-sans">
+              {bankError && (
+                <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">{bankError}</div>
+              )}
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Nome da Conta *</label>
+                <input type="text" required value={bankFormData.name} onChange={e => setBankFormData({ ...bankFormData, name: e.target.value })} placeholder="Ex: Conta Principal" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600" />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Banco</label>
+                  <input type="text" value={bankFormData.bank} onChange={e => setBankFormData({ ...bankFormData, bank: e.target.value })} placeholder="Ex: Sicredi" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Tipo</label>
+                  <select value={bankFormData.account_type} onChange={e => setBankFormData({ ...bankFormData, account_type: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono">
+                    <option value="CORRENTE">CORRENTE</option>
+                    <option value="POUPANCA">POUPANCA</option>
+                    <option value="APLICACAO">APLICACAO</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Agência</label>
+                  <input type="text" value={bankFormData.agency} onChange={e => setBankFormData({ ...bankFormData, agency: e.target.value })} placeholder="Ex: 1234" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Número da Conta</label>
+                  <input type="text" value={bankFormData.account_number} onChange={e => setBankFormData({ ...bankFormData, account_number: e.target.value })} placeholder="Ex: 56789-0" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono" />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Saldo Inicial (R$)</label>
+                  <input type="number" step="0.01" value={bankFormData.opening_balance} onChange={e => setBankFormData({ ...bankFormData, opening_balance: e.target.value })} placeholder="0" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Data de Abertura</label>
+                  <input type="date" value={bankFormData.opening_date} onChange={e => setBankFormData({ ...bankFormData, opening_date: e.target.value })} className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono" />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Alerta Saldo Baixo (R$)</label>
+                <input type="number" step="0.01" value={bankFormData.low_balance_threshold} onChange={e => setBankFormData({ ...bankFormData, low_balance_threshold: e.target.value })} placeholder="Opcional" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Observações</label>
+                <textarea value={bankFormData.notes} onChange={e => setBankFormData({ ...bankFormData, notes: e.target.value })} rows={2} placeholder="Opcional" className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 resize-none" />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
+                <input type="checkbox" checked={bankFormData.active} onChange={e => setBankFormData({ ...bankFormData, active: e.target.checked })} className="accent-red-600 w-4 h-4" />
+                Conta ativa
+              </label>
+              <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800">
+                <button type="button" onClick={() => setBankModalOpen(false)} className="px-4 py-2 text-xs bg-zinc-900 text-zinc-300 hover:text-white rounded border border-zinc-800 cursor-pointer font-mono">Cancelar</button>
+                <button type="submit" disabled={bankSaving} className="px-5 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer disabled:opacity-50">{bankSaving ? 'Salvando...' : editingBankId ? 'Salvar Alterações' : 'Criar Conta'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Detail Modal — view record + generate receipt */}
       {detailRecord && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -1562,8 +1925,8 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                   </p>
                 </div>
                 <div>
-                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">Banco / Conta</span>
-                  <p className="text-zinc-300 text-sm mt-0.5">{detailRecord.bank || '—'}</p>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">Conta Bancária</span>
+                  <p className="text-zinc-300 text-sm mt-0.5">{detailRecord.bank_account_name || detailRecord.bank || '—'}</p>
                 </div>
                 <div>
                   <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider block">Fornecedor</span>

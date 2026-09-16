@@ -9,9 +9,9 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend 
 } from 'recharts';
 import {
-  clientService, projectService, financialService, stockService, reportService
+  clientService, projectService, financialService, stockService, reportService, bankAccountService
 } from '../services/api';
-import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResult } from '../types';
+import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResult, BankOverview } from '../types';
 import OverdueProjectsCard from './OverdueProjectsCard';
 import UpcomingEventsCard from './UpcomingEventsCard';
 import UpcomingPaymentsCard from './UpcomingPaymentsCard';
@@ -28,6 +28,7 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
   const [stock, setStock] = useState<StockItem[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [productionReport, setProductionReport] = useState<ReportResult | null>(null);
+  const [bankOverview, setBankOverview] = useState<BankOverview | null>(null);
 
   const today = new Date();
   const [selectedMonth, setSelectedMonth] = useState(today.getMonth() + 1);
@@ -72,6 +73,11 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         try {
           const prod = await reportService.getReport('production', {});
           setProductionReport(prod);
+        } catch { /* ignore */ }
+        // Saldo consolidado bancário (silencioso se falhar)
+        try {
+          const overview = await bankAccountService.overview();
+          setBankOverview(overview);
         } catch { /* ignore */ }
       }
     } catch (err) {
@@ -334,22 +340,54 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
           </div>
         </div>
 
-        {/* Metric 3 */}
+         {/* Metric 3 — Saldo Consolidado ou fallback */}
         <div className="glass-panel p-5 rounded-lg relative overflow-hidden">
-          <div className="flex justify-between items-start">
+          {bankOverview && bankOverview.accounts && bankOverview.accounts.length > 0 ? (
             <div>
-              <p className="text-xs text-zinc-400 uppercase tracking-widest font-mono">Saldo em Caixa</p>
-              <p className={`text-2xl font-bold mt-2 font-sans ${netBalance >= 0 ? 'text-white' : 'text-red-500'}`}>
-                {netBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-              </p>
-              <div className="flex items-center gap-1 text-zinc-400 text-xs mt-2 font-mono">
-                <span>Resultado Operacional Líquido</span>
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase tracking-widest font-mono">Saldo Consolidado</p>
+                  <p className={`text-2xl font-bold mt-2 font-sans ${bankOverview.total_balance >= 0 ? 'text-white' : 'text-red-500'}`}>
+                    {bankOverview.total_balance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </p>
+                  <div className="flex items-center gap-1 text-zinc-400 text-xs mt-2 font-mono">
+                    <span>{bankOverview.accounts.length} conta(s) · Projetado {bankOverview.total_projected.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</span>
+                  </div>
+                </div>
+                <div className="p-3 bg-zinc-950 rounded-lg text-emerald-500 border border-zinc-900">
+                  <Layers className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-1.5">
+                {bankOverview.accounts.slice(0, 3).map((acc) => (
+                  <div key={acc.id} className="flex justify-between items-center text-xs font-mono">
+                    <span className="text-zinc-400 truncate pr-2">{acc.name}</span>
+                    <span className={`font-bold ${(acc.current_balance ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {Number(acc.current_balance ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                ))}
+                {bankOverview.accounts.length > 3 && (
+                  <span className="text-[11px] text-zinc-500 font-mono">+{bankOverview.accounts.length - 3} outra(s) conta(s)</span>
+                )}
               </div>
             </div>
-            <div className="p-3 bg-zinc-950 rounded-lg text-red-600 border border-zinc-900">
-              <Layers className="w-5 h-5" />
+          ) : (
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-xs text-zinc-400 uppercase tracking-widest font-mono">Saldo em Caixa</p>
+                <p className={`text-2xl font-bold mt-2 font-sans ${netBalance >= 0 ? 'text-white' : 'text-red-500'}`}>
+                  {netBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </p>
+                <div className="flex items-center gap-1 text-zinc-400 text-xs mt-2 font-mono">
+                  <span>Resultado Operacional Liquido</span>
+                </div>
+              </div>
+              <div className="p-3 bg-zinc-950 rounded-lg text-red-600 border border-zinc-900">
+                <Layers className="w-5 h-5" />
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Metric 4 */}

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -397,6 +397,16 @@ export const productionService = {
 };
 
 // Financial Services
+export const bankAccountService = {
+  list: (): Promise<BankAccount[]> => api.get('/api/bank-accounts').then(r => r.data),
+  get: (id: string): Promise<BankAccount> => api.get('/api/bank-accounts/' + id).then(r => r.data),
+  create: (data: any): Promise<BankAccount> => api.post('/api/bank-accounts', data).then(r => r.data),
+  update: (id: string, data: any): Promise<BankAccount> => api.put('/api/bank-accounts/' + id, data).then(r => r.data),
+  remove: (id: string): Promise<any> => api.delete('/api/bank-accounts/' + id).then(r => r.data),
+  balance: (id: string): Promise<BankBalance> => api.get('/api/bank-accounts/' + id + '/balance').then(r => r.data),
+  overview: (): Promise<BankOverview> => api.get('/api/bank-accounts/overview').then(r => r.data),
+};
+
 export const financialService = {
   async getAll(): Promise<FinancialRecord[]> {
     const response = await api.get('/api/financial');

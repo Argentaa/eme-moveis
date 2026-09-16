@@ -148,6 +148,42 @@ export interface FinancialRecord {
   item_description?: string;
   installments?: number;
   is_recurring?: boolean;
+  bank_account_id?: string | null;
+  bank_account_name?: string | null;
+}
+
+export interface BankAccount {
+  id: string;
+  name: string;
+  bank: string;
+  agency: string;
+  account_number: string;
+  account_type: string;
+  opening_balance: number;
+  opening_date: string | null;
+  active: boolean;
+  low_balance_threshold: number | null;
+  notes: string;
+  created_at: string;
+  current_balance: number;
+}
+
+export interface BankBalance {
+  id: string;
+  name: string;
+  current_balance: number;
+  projected_balance: number;
+  opening_balance: number;
+  entradas_pagas: number;
+  saidas_pagas: number;
+  entradas_pendentes: number;
+  saidas_pendentes: number;
+}
+
+export interface BankOverview {
+  total_balance: number;
+  total_projected: number;
+  accounts: BankAccount[];
 }
 
 export interface Supplier {
