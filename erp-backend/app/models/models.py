@@ -228,6 +228,55 @@ class Project(db.Model):
         }
 
 
+class BankAccount(db.Model):
+    __tablename__ = "bank_accounts"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(120), nullable=False)
+    bank = db.Column(String(80), nullable=False, default="")
+    agency = db.Column(String(40), nullable=True, default="")
+    account_number = db.Column(String(60), nullable=True, default="")
+    account_type = db.Column(String(20), nullable=False, default="CORRENTE")  # CORRENTE|POUPANCA|APLICACAO
+    opening_balance = db.Column(Numeric(14, 2), nullable=False, default=0)
+    opening_date = db.Column(Date, nullable=True)
+    active = db.Column(Boolean, nullable=False, default=True)
+    low_balance_threshold = db.Column(Numeric(14, 2), nullable=True)
+    notes = db.Column(Text, nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "bank": self.bank or "",
+            "agency": self.agency or "",
+            "account_number": self.account_number or "",
+            "account_type": self.account_type,
+            "opening_balance": num(self.opening_balance),
+            "opening_date": iso(self.opening_date),
+            "active": bool(self.active),
+            "low_balance_threshold": num(self.low_balance_threshold) if self.low_balance_threshold is not None else None,
+            "notes": self.notes or "",
+            "created_at": iso(self.created_at),
+            "current_balance": self.current_balance,
+        }
+
+    @property
+    def current_balance(self):
+        from app.extensions import db as _db
+        from sqlalchemy import func as _func
+
+        try:
+            from app.models.models import FinancialRecord as _FR
+        except ImportError:
+            return float(self.opening_balance or 0)
+        try:
+            entradas = _db.session.query(_func.coalesce(_func.sum(_FR.amount), 0)).filter(_FR.bank_account_id == self.id, _FR.type == "ENTRADA", _FR.status == "PAGO").scalar() or 0
+            saidas = _db.session.query(_func.coalesce(_func.sum(_FR.amount), 0)).filter(_FR.bank_account_id == self.id, _FR.type == "SAIDA", _FR.status == "PAGO").scalar() or 0
+        except Exception:
+            return float(self.opening_balance or 0)
+        return float(self.opening_balance or 0) + float(entradas) - float(saidas)
+
+
 class FinancialRecord(db.Model):
     __tablename__ = "financial_records"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -253,6 +302,8 @@ class FinancialRecord(db.Model):
         String(36), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
     )
     is_recurring = db.Column(Boolean, nullable=False, default=False)
+    bank_account_id = db.Column(String(36), ForeignKey("bank_accounts.id", ondelete="SET NULL"), nullable=True, index=True)
+    bank_account = db.relationship("BankAccount")
 
     project = db.relationship("Project")
     supplier = db.relationship("Supplier")
@@ -278,6 +329,8 @@ class FinancialRecord(db.Model):
             "client_id": self.client_id,
             "supplier_id": self.supplier_id,
             "is_recurring": self.is_recurring,
+            "bank_account_id": self.bank_account_id,
+            "bank_account_name": self.bank_account.name if self.bank_account else None,
         }
 
 

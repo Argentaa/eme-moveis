@@ -2347,3 +2347,134 @@ def test_report_production(client):
     # tambem verifica /api/reports/production?format=json nao quebre
     r3 = client.get("/api/reports/production?format=json", headers=h)
     assert r3.status_code == 200, r3.get_data(as_text=True)
+
+
+def test_bank_account_model(client):
+    _login(client)
+    import datetime
+
+    from app.models.models import BankAccount
+
+    with client.application.app_context():
+        acc = BankAccount(
+            name="Principal",
+            bank="Bradesco",
+            agency="1234",
+            account_number="56789-0",
+            account_type="CORRENTE",
+            opening_balance=5000,
+            opening_date=datetime.date.today(),
+            active=True,
+            low_balance_threshold=1000,
+        )
+        db.session.add(acc)
+        db.session.commit()
+        d = acc.to_dict()
+        assert d["name"] == "Principal"
+        assert d["bank"] == "Bradesco"
+        assert d["agency"] == "1234"
+        assert d["account_number"] == "56789-0"
+        assert d["account_type"] == "CORRENTE"
+        assert d["opening_balance"] == 5000
+        assert d["active"] is True
+        assert d["low_balance_threshold"] == 1000
+        assert d["current_balance"] == 5000
+        assert "current_balance" in d
+        # verifica que current_balance é computed property
+        assert isinstance(type(acc).current_balance, property)
+
+
+def test_bank_account_balance_com_lancamentos(client):
+    _login(client)
+    import datetime
+
+    from app.models.models import BankAccount, FinancialRecord
+
+    with client.application.app_context():
+        acc = BankAccount(
+            name="Conta Teste",
+            bank="Banco X",
+            opening_balance=1000,
+            opening_date=datetime.date.today(),
+            active=True,
+        )
+        db.session.add(acc)
+        db.session.commit()
+        acc_id = acc.id
+        fr1 = FinancialRecord(
+            description="Entrada paga",
+            type="ENTRADA",
+            category="Vendas",
+            amount=500,
+            date=datetime.date.today(),
+            status="PAGO",
+            bank_account_id=acc_id,
+        )
+        fr2 = FinancialRecord(
+            description="Saida paga",
+            type="SAIDA",
+            category="Despesa",
+            amount=300,
+            date=datetime.date.today(),
+            status="PAGO",
+            bank_account_id=acc_id,
+        )
+        fr3 = FinancialRecord(
+            description="Pendente nao conta",
+            type="ENTRADA",
+            category="Vendas",
+            amount=200,
+            date=datetime.date.today(),
+            status="PENDENTE",
+            bank_account_id=acc_id,
+        )
+        db.session.add_all([fr1, fr2, fr3])
+        db.session.commit()
+        # refresh
+        acc_ref = db.session.get(BankAccount, acc_id)
+        db.session.refresh(acc_ref)
+        assert acc_ref.current_balance == 1200
+        assert acc_ref.to_dict()["current_balance"] == 1200
+        # financial_record to_dict inclui bank_account_id e bank_account_name
+        d1 = fr1.to_dict()
+        assert d1["bank_account_id"] == acc_id
+        assert d1["bank_account_name"] == "Conta Teste"
+        # pendente ainda tem bank_account_id mas nao afeta saldo
+        assert fr3.to_dict()["bank_account_id"] == acc_id
+        assert fr3.to_dict()["bank_account_name"] == "Conta Teste"
+
+
+def test_financial_record_bank_account_fk(client):
+    _login(client)
+    import datetime
+
+    from app.models.models import BankAccount, FinancialRecord
+
+    with client.application.app_context():
+        # FinancialRecord sem conta bancaria deve ter None nos novos campos
+        fr = FinancialRecord(
+            description="Sem conta",
+            type="ENTRADA",
+            amount=100,
+            date=datetime.date.today(),
+            status="PENDENTE",
+        )
+        db.session.add(fr)
+        db.session.commit()
+        d = fr.to_dict()
+        assert "bank_account_id" in d
+        assert "bank_account_name" in d
+        assert d["bank_account_id"] is None
+        assert d["bank_account_name"] is None
+        # BankAccount com opening_balance None deve retornar 0 no property sem quebrar
+        acc = BankAccount(name="Conta Vazia", bank="Banco Y", opening_balance=None)
+        db.session.add(acc)
+        db.session.commit()
+        # deve lidar com None sem excecao
+        assert acc.current_balance == 0 or acc.current_balance == 0.0
+        # verifica FK SET NULL existe no modelo
+        col = FinancialRecord.__table__.c.bank_account_id
+        fks = list(col.foreign_keys)
+        assert len(fks) == 1
+        assert fks[0].ondelete == "SET NULL"
+        assert col.nullable is True
