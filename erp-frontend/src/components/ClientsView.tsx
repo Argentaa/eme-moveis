@@ -53,6 +53,14 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [detailClient, setDetailClient] = useState<Client | null>(null);
   const [events, setEvents] = useState<any[]>([]);
+  // Vincular cliente do cadastro central ao funil (padrao Producao: busca + select)
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [linkSearch, setLinkSearch] = useState('');
+  const [linkClientId, setLinkClientId] = useState('');
+  const [linkStage, setLinkStage] = useState('');
+  const [linkValue, setLinkValue] = useState('');
+  const [linkError, setLinkError] = useState('');
+  const [linkSaving, setLinkSaving] = useState(false);
 
   // Lead Options (fonte e campanha)
   const [campaigns, setCampaigns] = useState<LeadOption[]>([]);
@@ -154,28 +162,41 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   }, [selectedFunnel?.id, selectedFunnel?.name, showFunnelManager]);
 
   const handleOpenCreateModal = () => {
-    partnerService.list().then(setPartners).catch(() => {});
-    setEditingClient(null);
-    setFormData({
-      name: '',
-      email: '',
-      phone: '',
-      cpf_cnpj: '',
-      address: '',
-      funnel_status: 'PROSPECCAO' as string,
-      funnel_id: selectedFunnel ? selectedFunnel.id : (funnels[0]?.id || ''),
-      estimated_value: '',
-      lead_source: '',
-      campaign: '',
-      partner_id: '',
-      is_supplier: false,
-    });
-    setSubmitError('');
-    setAddingSource(false);
-    setAddingCampaign(false);
-    setNewSourceName('');
-    setNewCampaignName('');
-    setIsModalOpen(true);
+    // Legado: criacao direta foi substituida por "Vincular Cliente".
+    // Todo cadastro nasce em Clientes/Fornecedores; aqui so se importa pro funil.
+    setLinkSearch('');
+    setLinkClientId('');
+    setLinkStage('');
+    setLinkValue('');
+    setLinkError('');
+    setShowLinkModal(true);
+  };
+
+  const handleLinkClient = async () => {
+    setLinkError('');
+    if (!linkClientId) {
+      setLinkError('Selecione o cliente do cadastro central.');
+      return;
+    }
+    if (!selectedFunnel) {
+      setLinkError('Nenhum funil disponivel.');
+      return;
+    }
+    setLinkSaving(true);
+    try {
+      const payload: any = {
+        funnel_id: selectedFunnel.id,
+        funnel_status: linkStage || funnelColumns[0]?.column_key || 'PROSPECCAO',
+      };
+      if (linkValue.trim() !== '') payload.estimated_value = Number(linkValue);
+      await clientService.update(linkClientId, payload);
+      setShowLinkModal(false);
+      loadClients();
+    } catch (err: any) {
+      setLinkError(getApiErrorMessage(err, 'Erro ao vincular cliente ao funil.'));
+    } finally {
+      setLinkSaving(false);
+    }
   };
 
   const handleOpenEditModal = (client: Client) => {
@@ -249,8 +270,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
-  // Filter clients
-  const filteredClients = clients.filter(c => {
+  // Filter clients — o Comercial mostra SO vinculados ao funil.
+  // Quem esta so no cadastro central (funnel_id null) entra via "Vincular Cliente".
+  const funnelClients = clients.filter(c => !!(c as any).funnel_id);
+  const filteredClients = funnelClients.filter(c => {
     if (supplierFilter === 'SUPPLIERS' && !(c as any).is_supplier) return false;
     if (supplierFilter === 'CLIENTS' && (c as any).is_supplier) return false;
     return c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -636,8 +659,9 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
               id="btn-add-client"
               onClick={handleOpenCreateModal}
               className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-4 py-2 rounded shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer font-sans h-[38px]"
+              title="Vincular cliente do cadastro central ao funil"
             >
-              <Plus className="w-4 h-4" /> Novo Cliente
+              <Plus className="w-4 h-4" /> Vincular Cliente
             </button>
           )}
         </div>
@@ -666,7 +690,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
           <option value="SUPPLIERS">Só fornecedores</option>
         </select>
         <div className="text-xs text-zinc-400 font-mono w-full md:w-auto text-right">
-          Exibindo {filteredClients.length} de {clients.length} corporativos
+          Exibindo {filteredClients.length} de {funnelClients.length} no funil
         </div>
       </div>
 
@@ -680,7 +704,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         /* KANBAN FUNIL DE VENDAS */
         <div className="grid grid-cols-1 gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, funnelColumns.length)}, minmax(200px, 1fr))` }}>
           {funnelColumns.map((col, idx) => {
-            const colClients = filteredClients.filter(c => (c.funnel_id === selectedFunnel?.id || (!c.funnel_id && !!selectedFunnel?.is_default)) && c.funnel_status === col.column_key);
+            const colClients = filteredClients.filter(c => c.funnel_id === selectedFunnel?.id && c.funnel_status === col.column_key);
             const colTotal = colClients.reduce((acc, c) => acc + clientDisplayValue(c, projects).value, 0);
             const borderColor = getColumnColor(col.column_key, idx);
             return (
@@ -1211,6 +1235,90 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
           </div>
         </div>
       )}
+
+      {/* Modal Vincular Cliente — importa do cadastro central pro funil (padrao Producao) */}
+      {showLinkModal && (() => {
+        const available = clients.filter(c => !(c as any).funnel_id);
+        const q = linkSearch.trim().toLowerCase();
+        const options = available.filter(c =>
+          !q || c.name.toLowerCase().includes(q) ||
+          (c.email || '').toLowerCase().includes(q) ||
+          (c.cpf_cnpj || '').toLowerCase().includes(q)
+        );
+        return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowLinkModal(false)}>
+          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800/80 shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center shrink-0">
+              <div>
+                <h3 className="text-lg font-serif font-semibold text-white">Vincular Cliente</h3>
+                <p className="text-xs text-zinc-400 font-mono">Do cadastro central para o funil {selectedFunnel ? `“${selectedFunnel.name}”` : ''}</p>
+              </div>
+              <button onClick={() => setShowLinkModal(false)} className="text-zinc-500 hover:text-white transition font-mono text-sm uppercase px-2 py-1 rounded hover:bg-zinc-900">Sair</button>
+            </div>
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              {linkError && <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">{linkError}</div>}
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase block">Cliente do cadastro *</label>
+                <input
+                  type="text"
+                  value={linkSearch}
+                  onChange={e => setLinkSearch(e.target.value)}
+                  placeholder="Buscar cliente... (digite para filtrar)"
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white px-3 py-2 text-xs rounded focus:outline-none focus:border-red-600 font-sans mb-1"
+                />
+                <select
+                  value={linkClientId}
+                  onChange={e => setLinkClientId(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600"
+                >
+                  <option value="">-- Selecione o Cliente --</option>
+                  {options.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}{(c as any).is_supplier ? '  🏭' : ''}</option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-zinc-500 font-mono mt-1">
+                  {available.length === 0
+                    ? 'Nenhum cliente fora do funil. Cadastre em Clientes/Fornecedores.'
+                    : `${available.length} cliente(s) no cadastro central fora do funil · Cadastre novos em Clientes/Fornecedores.`}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase block">Etapa inicial</label>
+                  <select
+                    value={linkStage}
+                    onChange={e => setLinkStage(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600"
+                  >
+                    <option value="">{funnelColumns[0] ? `Padrão (${funnelColumns[0].label})` : 'Padrão'}</option>
+                    {funnelColumns.map(col => (
+                      <option key={col.column_key} value={col.column_key}>{col.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase block">Valor Estimado (R$)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={linkValue}
+                    onChange={e => setLinkValue(e.target.value)}
+                    placeholder="Opcional"
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button onClick={() => setShowLinkModal(false)} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-sm rounded border border-zinc-700 cursor-pointer">Cancelar</button>
+                <button onClick={handleLinkClient} disabled={linkSaving} className="px-6 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded disabled:opacity-50 cursor-pointer">
+                  {linkSaving ? 'Vinculando...' : 'Vincular ao funil'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
 
       {/* Slideout Side Modal for Client Action */}
       {isModalOpen && (

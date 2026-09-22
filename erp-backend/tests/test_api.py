@@ -404,6 +404,26 @@ def test_client_supplier_mirror_sync(client):
     assert mirror2["contact"] == "Ana Nova" and mirror2["phone"] == "999"
 
 
+def test_client_central_sem_funil_e_importacao(client):
+    # Cadastro central: funnel_id null explicito cria cliente fora do funil.
+    h = _login(client)
+    c = client.post(
+        "/api/clients", headers=h,
+        json={"name": "Cadastro Central", "cpf_cnpj": "44.444", "funnel_id": None},
+    ).get_json()
+    assert c["funnel_id"] is None
+    # Sem funnel_id (legado/Comercial) continua caindo no funil padrao.
+    c2 = client.post(
+        "/api/clients", headers=h,
+        json={"name": "Via Comercial", "cpf_cnpj": "55.555"},
+    ).get_json()
+    assert c2["funnel_id"] is not None
+    # Importacao pro funil: update com funnel real.
+    r = client.put(f"/api/clients/{c['id']}", headers=h, json={"funnel_id": c2["funnel_id"], "funnel_status": "PROSPECCAO"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["funnel_id"] == c2["funnel_id"]
+
+
 def test_seeds_fontes_e_campanhas_idempotente(client):
     with client.application.app_context():
         from app.extensions import db

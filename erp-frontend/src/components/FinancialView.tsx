@@ -1530,8 +1530,8 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
-                  {clients.length === 0 && <p className="text-[11px] text-zinc-500 font-mono">Nenhum cliente cadastrado — use o Comercial.</p>}
-                  <p className="text-[11px] text-zinc-500 font-mono">Cadastro prévio no Comercial.</p>
+                  {clients.length === 0 && <p className="text-[11px] text-zinc-500 font-mono">Nenhum cliente cadastrado — use Clientes/Fornecedores.</p>}
+                  <p className="text-[11px] text-zinc-500 font-mono">Cadastro prévio em Clientes/Fornecedores.</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Fornecedor (Opcional)</label>

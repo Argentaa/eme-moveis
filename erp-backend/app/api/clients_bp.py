@@ -136,8 +136,16 @@ def _log_interaction(client_id, itype, content):
 
 
 def _resolve_funnel_id_for_create(data):
-    raw = data.get("funnel_id") if "funnel_id" in data else None
-    if "funnel_id" not in data or raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+    # Cadastro central pode criar cliente SEM funil: funnel_id explicitamente
+    # null significa "só cadastro" (o Comercial importa depois). Ausente ou
+    # string vazia mantem o comportamento legado (funil CRM padrao).
+    if "funnel_id" not in data:
+        funnel = db.session.query(Funnel).filter_by(kind="CRM", is_default=True).first()
+        return funnel.id if funnel else None
+    raw = data.get("funnel_id")
+    if raw is None:
+        return None
+    if isinstance(raw, str) and str(raw).strip() == "":
         funnel = db.session.query(Funnel).filter_by(kind="CRM", is_default=True).first()
         return funnel.id if funnel else None
     fid = str(raw).strip()
