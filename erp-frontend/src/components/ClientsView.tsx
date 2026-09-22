@@ -164,6 +164,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const handleOpenCreateModal = () => {
     // Legado: criacao direta foi substituida por "Vincular Cliente".
     // Todo cadastro nasce em Clientes/Fornecedores; aqui so se importa pro funil.
+    // Recarrega para trazer cadastros centrais criados recentemente.
+    loadClients();
     setLinkSearch('');
     setLinkClientId('');
     setLinkStage('');
@@ -702,7 +704,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         </div>
       ) : viewMode === 'KANBAN' ? (
         /* KANBAN FUNIL DE VENDAS */
-        <div className="grid grid-cols-1 gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, funnelColumns.length)}, minmax(200px, 1fr))` }}>
+        <div className="grid grid-cols-1 gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, funnelColumns.length)}, minmax(300px, 1fr))` }}>
           {funnelColumns.map((col, idx) => {
             const colClients = filteredClients.filter(c => c.funnel_id === selectedFunnel?.id && c.funnel_status === col.column_key);
             const colTotal = colClients.reduce((acc, c) => acc + clientDisplayValue(c, projects).value, 0);
@@ -717,7 +719,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                   const id = e.dataTransfer.getData('text/plain') || draggingClientId;
                   if (id) handleDropFunnel(id, col.column_key);
                 }}
-                className={`glass-panel rounded-xl flex flex-col min-h-[500px] overflow-hidden border-t-2 ${borderColor} ${dragOverColumn === col.column_key ? 'ring-2 ring-red-600/70' : ''}`}
+                className={`glass-panel rounded-xl flex flex-col min-h-[500px] min-w-[280px] overflow-hidden border-t-2 ${borderColor} ${dragOverColumn === col.column_key ? 'ring-2 ring-red-600/70' : ''}`}
               >
                 <div className="p-4 bg-zinc-950/60 border-b border-zinc-900">
                   <div className="flex justify-between items-start">
@@ -801,8 +803,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             {pendingTasks}
                           </span>
                         )}
-                      <div className="mt-3 flex justify-between items-center border-t border-zinc-900 pt-2.5">
-                        <div className="flex gap-1">
+                      <div className="mt-3 flex flex-wrap justify-between items-center gap-2 border-t border-zinc-900 pt-2.5">
+                        <div className="flex gap-1 shrink-0">
                           <button
                             onClick={(e) => { e.stopPropagation(); handleShiftFunnel(client, 'LEFT'); }}
                             disabled={funnelColumns.findIndex(fc => fc.column_key === client.funnel_status) === 0}
@@ -821,7 +823,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                           </button>
                         </div>
                         {['ADMIN', 'GERENTE', 'PROJETISTA'].includes(userRole) && (
-                          <div className="flex gap-1">
+                          <div className="flex gap-1 flex-wrap justify-end">
                             <button
                               onClick={(e) => { e.stopPropagation(); handleOpenEditModal(client); }}
                               className="p-1 text-zinc-500 hover:text-blue-400 cursor-pointer"
@@ -1238,7 +1240,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       {/* Modal Vincular Cliente — importa do cadastro central pro funil (padrao Producao) */}
       {showLinkModal && (() => {
-        const available = clients.filter(c => !(c as any).funnel_id);
+        // Lista quem NAO esta no funil atual (fora do funil + de outros funis).
+        // So filtrar por funnel_id null deixava o select vazio: os clientes
+        // antigos ja tem funil (backfill) e nunca apareceriam aqui.
+        const available = clients.filter(c => (c as any).funnel_id !== selectedFunnel?.id);
         const q = linkSearch.trim().toLowerCase();
         const options = available.filter(c =>
           !q || c.name.toLowerCase().includes(q) ||
@@ -1278,8 +1283,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 </select>
                 <p className="text-[11px] text-zinc-500 font-mono mt-1">
                   {available.length === 0
-                    ? 'Nenhum cliente fora do funil. Cadastre em Clientes/Fornecedores.'
-                    : `${available.length} cliente(s) no cadastro central fora do funil · Cadastre novos em Clientes/Fornecedores.`}
+                    ? 'Todos os clientes já estão neste funil. Cadastre novos em Clientes/Fornecedores.'
+                    : `${available.length} cliente(s) fora deste funil · Cadastre novos em Clientes/Fornecedores.`}
                 </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

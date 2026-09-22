@@ -831,7 +831,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
           <p className="text-zinc-400 font-mono text-xs">Carregando andamento fabril...</p>
         </div>
       ) : viewMode === 'KANBAN' ? (
-        <div className="grid gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, COLUMNS.length)}, minmax(200px, 1fr))` } as any}>
+        <div className="grid gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, COLUMNS.length)}, minmax(300px, 1fr))` } as any}>
           {COLUMNS.map((col) => {
             const colProjects = filteredProjects.filter(p => ((p as any).funnel_id === selectedFunnel?.id || (!(p as any).funnel_id && !!selectedFunnel?.is_default)) && p.status === col.id);
             const colValue = colProjects.reduce((acc, p) => acc + p.value, 0);
@@ -845,7 +845,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                   const id = e.dataTransfer.getData('text/plain') || draggingProjectId;
                   if (id) handleDropStatus(id, col.id);
                 }}
-                className={`glass-panel rounded-xl flex flex-col min-h-[550px] overflow-hidden border-t-2 ${col.color} ${dragOverColumn === col.id ? 'ring-2 ring-red-600/70' : ''}`}
+                className={`glass-panel rounded-xl flex flex-col min-h-[550px] min-w-[280px] overflow-hidden border-t-2 ${col.color} ${dragOverColumn === col.id ? 'ring-2 ring-red-600/70' : ''}`}
               >
                 <div className="p-4 bg-zinc-950/60 border-b border-zinc-900">
                   <div className="flex justify-between items-start">
@@ -958,8 +958,8 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                             <div className="bg-red-650 h-full" style={{ width: `${progressPct}%` }}></div>
                           </div>
                         </div>
-                        <div className="mt-4 flex justify-between gap-1 border-t border-zinc-900 pt-3">
-                          <div className="flex gap-1">
+                        <div className="mt-4 flex flex-wrap justify-between gap-2 border-t border-zinc-900 pt-3">
+                          <div className="flex gap-1 shrink-0">
                             <button
                               onClick={() => shiftStatus(p.id, 'LEFT')}
                               disabled={(() => { const projF = funnels.find(f=>f.id===(p as any).funnel_id) || selectedFunnel; const cols = projF ? sortColumns(projF.columns||[]) : COLUMNS; return cols.length ? cols[0].column_key === p.status : p.status === 'ORCAMENTO'; })()}
@@ -977,7 +977,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                               <ArrowRight className="w-3.5 h-3.5" />
                             </button>
                           </div>
-                          <div className="flex gap-1.5">
+                          <div className="flex gap-1.5 flex-wrap justify-end">
                             <button
                               onClick={() => handleOpenSteps(p)}
                               className="p-1 text-zinc-400 hover:text-red-500 flex items-center gap-0.5 text-[10px] font-mono py-0.5 px-1.5 bg-zinc-900 rounded border border-zinc-800 cursor-pointer"
