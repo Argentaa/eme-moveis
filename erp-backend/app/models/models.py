@@ -81,7 +81,7 @@ class Client(db.Model):
     cpf_cnpj = db.Column(String(30), unique=True, nullable=True, index=True)
     address = db.Column(Text, nullable=True, default="")
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
-    funnel_status = db.Column(String(20), nullable=False, default="PROSPECCAO")
+    funnel_status = db.Column(String(60), nullable=False, default="PROSPECCAO")  # recebe column_key do funil (ate 60)
     lost_reason = db.Column(Text, nullable=True)
     estimated_value = db.Column(Numeric(14, 2), nullable=True)
     lead_source = db.Column(String(120), nullable=True)
@@ -220,7 +220,7 @@ class Project(db.Model):
         String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True
     )
     description = db.Column(Text, nullable=True, default="")
-    status = db.Column(String(20), nullable=False, default="ORCAMENTO")
+    status = db.Column(String(60), nullable=False, default="ORCAMENTO")  # recebe column_key do funil (ate 60)
     value = db.Column(Numeric(14, 2), nullable=True, default=0)
     deadline = db.Column(Date, nullable=True)
     start_date = db.Column(Date, nullable=True)

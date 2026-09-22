@@ -424,6 +424,24 @@ def test_client_central_sem_funil_e_importacao(client):
     assert r.get_json()["funnel_id"] == c2["funnel_id"]
 
 
+def test_status_largo_cabe_no_banco(client):
+    # Regressao: etapa com chave > 20 chars (ex.: PROPOSTA_EM_ELABORACAO, 22)
+    # estourava VARCHAR(20) no Postgres (500). Modelo e migracao 0019 alargam p/ 60.
+    from app.models.models import Client, Project
+    assert Client.__table__.c.funnel_status.type.length == 60
+    assert Project.__table__.c.status.type.length == 60
+    h = _login(client)
+    c = client.post(
+        "/api/clients", headers=h,
+        json={"name": "Chave Longa", "cpf_cnpj": "66.666", "funnel_id": None},
+    ).get_json()
+    long_key = "PROPOSTA_EM_ELABORACAO"
+    assert len(long_key) > 20
+    r = client.put(f"/api/clients/{c['id']}", headers=h, json={"funnel_status": long_key})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["funnel_status"] == long_key
+
+
 def test_seeds_fontes_e_campanhas_idempotente(client):
     with client.application.app_context():
         from app.extensions import db
