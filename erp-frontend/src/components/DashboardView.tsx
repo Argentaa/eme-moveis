@@ -57,28 +57,25 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         setStock(st);
         setMovements(movs);
       } else {
-        const [cls, projs, fins, st, movs] = await Promise.all([
+        const [cls, projs, fins, st, movs, prod, overview] = await Promise.all([
           clientService.getAll(),
           projectService.getAll(),
           financialService.getAll(),
           stockService.getAll(),
-          stockService.getMovements()
+          stockService.getMovements(),
+          // Extras silenciosos: entram no MESMO lote. Antes eram 2 idas ao servidor
+          // em sequencia depois do primeiro lote, o que somava o tempo de resposta
+          // ao carregamento do painel inteiro.
+          reportService.getReport('production', {}).catch(() => null),
+          bankAccountService.overview().catch(() => null),
         ]);
         setClients(cls);
         setProjects(projs);
         setFinancials(fins);
         setStock(st);
         setMovements(movs);
-        // Produção industrial (silencioso se falhar)
-        try {
-          const prod = await reportService.getReport('production', {});
-          setProductionReport(prod);
-        } catch { /* ignore */ }
-        // Saldo consolidado bancário (silencioso se falhar)
-        try {
-          const overview = await bankAccountService.overview();
-          setBankOverview(overview);
-        } catch { /* ignore */ }
+        if (prod) setProductionReport(prod);
+        if (overview) setBankOverview(overview);
       }
     } catch (err) {
       console.error('Error fetching dashboard statistics:', err);

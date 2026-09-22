@@ -476,7 +476,7 @@ export default function StockView({ userRole }: StockViewProps) {
 
       {/* Slideout Item Modal */}
       {isItemModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
           <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
             <div className="bg-zinc-950 p-6 border-b border-zinc-850 flex justify-between items-center">
               <div>
@@ -636,7 +636,7 @@ export default function StockView({ userRole }: StockViewProps) {
 
       {/* Slideout Movement Modal */}
       {isMovementModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
           <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-805 shadow-2xl">
             <div className="bg-zinc-950 p-6 border-b border-zinc-850 flex justify-between items-center">
               <div>
@@ -732,7 +732,7 @@ export default function StockView({ userRole }: StockViewProps) {
 
       {/* New Category Modal */}
       {isCategoryModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
           <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-805 shadow-2xl">
             <div className="bg-zinc-950 p-6 border-b border-zinc-850 flex justify-between items-center">
               <div>

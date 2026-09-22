@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Building2, Layers, Users, Landmark, Package, Shield, FileBarChart, CalendarDays, Sparkles,
-  Power, Menu, X, User, ArrowRight, HelpCircle, Eye, EyeOff, Moon, Sun, ShoppingCart, Wrench
+  Power, Menu, X, User, ArrowRight, HelpCircle, Eye, EyeOff, Moon, Sun, ShoppingCart, Wrench, Truck
 } from 'lucide-react';
 
 // Assets
@@ -20,14 +20,33 @@ import ProjectsView from './components/ProjectsView';
 import FinancialView from './components/FinancialView';
 import StockView from './components/StockView';
 import PurchasesView from './components/PurchasesView';
+import SuppliersView from './components/SuppliersView';
 import TicketsView from './components/TicketsView';
 import UsersView from './components/UsersView';
 import ReportsView from './components/ReportsView';
 import CalendarView from './components/CalendarView';
 import NovidadesView from './components/NovidadesView';
 
-type TabId = 'dashboard' | 'clients' | 'projects' | 'financial' | 'stock' | 'purchases' | 'tickets' | 'users' | 'reports' | 'calendar' | 'novidades';
+type TabId = 'dashboard' | 'clients' | 'suppliers' | 'projects' | 'financial' | 'stock' | 'purchases' | 'tickets' | 'users' | 'reports' | 'calendar' | 'novidades';
 type ThemeMode = 'dark' | 'light';
+
+const TAB_STORAGE_KEY = 'eme_tab';
+
+/** Leitura tolerante do localStorage: um valor corrompido nao pode derrubar o app no boot. */
+function readStoredUser(): UserType | null {
+  const raw = localStorage.getItem('eme_user');
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as UserType;
+  } catch {
+    localStorage.removeItem('eme_user');
+    return null;
+  }
+}
+
+function isTabId(value: string | null): value is TabId {
+  return !!value && TABS.some(t => t.id === value);
+}
 
 interface TabItem {
   id: TabId;
@@ -38,8 +57,9 @@ interface TabItem {
 
 const TABS: TabItem[] = [
   { id: 'dashboard', label: 'Painel Geral', icon: Layers, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
-  { id: 'clients', label: 'Clientes (CRM)', icon: Users, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
-  { id: 'projects', label: 'Projetos (Kanban)', icon: Building2, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
+  { id: 'clients', label: 'Clientes', icon: Users, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
+  { id: 'suppliers', label: 'Fornecedores', icon: Truck, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
+  { id: 'projects', label: 'Produção', icon: Building2, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
   { id: 'financial', label: 'Financeiro Caixa', icon: Landmark, roles: ['ADMIN', 'GERENTE'] },
   { id: 'stock', label: 'Estoque', icon: Package, roles: ['ADMIN', 'GERENTE', 'ESTOQUE', 'PROJETISTA'] },
   { id: 'purchases', label: 'Compras', icon: ShoppingCart, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
@@ -52,10 +72,7 @@ const TABS: TabItem[] = [
 
 export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('eme_token'));
-  const [currentUser, setCurrentUser] = useState<UserType | null>(() => {
-    const raw = localStorage.getItem('eme_user');
-    return raw ? JSON.parse(raw) : null;
-  });
+  const [currentUser, setCurrentUser] = useState<UserType | null>(() => readStoredUser());
 
   // Login form state
   const [username, setUsername] = useState('');
@@ -66,12 +83,12 @@ export default function App() {
 
   // Layout navigation states
   const [activeTab, setActiveTab] = useState<TabId>(() => {
-    // Determine default tab based on role if logged in
-    const raw = localStorage.getItem('eme_user');
-    if (raw) {
-      const u = JSON.parse(raw) as UserType;
-      if (u.role === 'ESTOQUE') return 'stock';
-    }
+    // Restaura a ultima aba usada (sobrevive a reload / nova aba).
+    const stored = localStorage.getItem(TAB_STORAGE_KEY);
+    if (isTabId(stored)) return stored;
+    // Sem aba salva: default por perfil
+    const u = readStoredUser();
+    if (u?.role === 'ESTOQUE') return 'stock';
     return 'dashboard';
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -85,6 +102,10 @@ export default function App() {
     localStorage.setItem('eme_theme', theme);
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem(TAB_STORAGE_KEY, activeTab);
+  }, [activeTab]);
 
   const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   const ThemeIcon = theme === 'dark' ? Sun : Moon;
@@ -172,7 +193,7 @@ export default function App() {
           </div>
 
           {/* Login Card Form */}
-          <div className="glass-panel p-8 rounded-xl border border-zinc-900/80 shadow-2xl relative overflow-hidden backdrop-blur-md">
+          <div className="glass-panel p-8 rounded-xl border border-zinc-900/80 shadow-2xl relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-red-600/5 blur-3xl rounded-full"></div>
 
             <div className="mb-6">
@@ -328,7 +349,7 @@ export default function App() {
       </div>
 
       {/* Main Panel Content Container */}
-      <main className="flex-1 bg-neutral-950 flex flex-col min-h-screen">
+      <main className="flex-1 min-w-0 bg-neutral-950 flex flex-col min-h-screen">
         
         {/* Top Operational Status Header */}
         <header className="p-5 border-b border-zinc-900 flex justify-between items-center bg-zinc-950/30">
@@ -349,7 +370,7 @@ export default function App() {
         </header>
 
         {/* Dynamic page rendering section */}
-        <div className="p-6 md:p-8 flex-1">
+        <div className="p-6 md:p-8 flex-1 min-w-0">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -361,6 +382,7 @@ export default function App() {
             >
               {activeTab === 'dashboard' && <DashboardView userRole={currentUser.role} />}
               {activeTab === 'clients' && <ClientsView userRole={currentUser.role} />}
+              {activeTab === 'suppliers' && <SuppliersView userRole={currentUser.role} />}
               {activeTab === 'projects' && <ProjectsView userRole={currentUser.role} />}
               {activeTab === 'financial' && <FinancialView userRole={currentUser.role} />}
               {activeTab === 'stock' && <StockView userRole={currentUser.role} />}

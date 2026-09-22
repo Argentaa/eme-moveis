@@ -3,9 +3,10 @@ import {
   BarChart, Layers, ListTodo, Plus, Check, Search, Calendar, Landmark,
   Trash2, ArrowRight, ArrowLeft, CheckCircle, RefreshCw, Eye, Edit3, Edit2,
   Hammer, Clock, AlertTriangle, FileText, Paperclip, Download,
+  Funnel as FunnelIcon, X,
 } from 'lucide-react';
 import { projectService, clientService, funnelService, productionService, workerService, machineService, attachmentService, checklistService, getApiErrorMessage } from '../services/api';
-import { Project, Client, ProjectStatus, ProjectStep, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, Attachment, ChecklistItem } from '../types';
+import { Project, Client, ProjectStatus, ProjectStep, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, Attachment, ChecklistItem, Funnel, FunnelColumn } from '../types';
 
 interface ProjectsViewProps {
   userRole: string;
@@ -21,6 +22,8 @@ const COLUMNS_DEFAULTS: Array<{ id: ProjectStatus; label: string; color: string;
 
 const ENV_TYPE_OPTIONS = ['COZINHA', 'QUARTO', 'SALA', 'PAINEL', 'ESCRITORIO', 'OUTRO'] as const;
 const ENV_STATUS_OPTIONS = ['PLANEJADO', 'EM_PRODUCAO', 'CONCLUIDO'] as const;
+
+const FUNNEL_COLORS = ['border-t-zinc-700 bg-zinc-900/45','border-t-amber-600 bg-amber-950/5','border-t-red-700 bg-red-950/5','border-t-rose-500 bg-rose-950/5','border-t-emerald-600 bg-emerald-950/5','border-t-sky-600 bg-sky-950/5','border-t-violet-600 bg-violet-950/5','border-t-cyan-600 bg-cyan-950/5'];
 
 function deadlineBadgeClasses(status: string): string {
   switch (status) {
@@ -53,6 +56,26 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'deadline_asc' | 'deadline_desc' | 'client_az' | 'title_az' | 'value_desc' | 'value_asc'>('deadline_asc');
   const [viewMode, setViewMode] = useState<'KANBAN' | 'LIST'>('KANBAN');
+  // Drag and drop do Kanban
+  const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
+  const [clientSearchModal, setClientSearchModal] = useState('');
+
+  // ── Multi-funis Produção (igual Clients CRM) ──────────────────────
+  const [funnels, setFunnels] = useState<Funnel[]>([]);
+  const [selectedFunnelId, setSelectedFunnelId] = useState<string>('');
+  const [funnelColumns, setFunnelColumns] = useState<FunnelColumn[]>([]);
+  const [showFunnelManager, setShowFunnelManager] = useState(false);
+  const [newFunnelName, setNewFunnelName] = useState('');
+  const [managerError, setManagerError] = useState('');
+  const [renameFunnelName, setRenameFunnelName] = useState('');
+  const [newStageLabel, setNewStageLabel] = useState('');
+  const [stageError, setStageError] = useState('');
+  const [stageDrafts, setStageDrafts] = useState<Record<string, string>>({});
+  const [promoteProject, setPromoteProject] = useState<Project | null>(null);
+  const [promoteTargetFunnelId, setPromoteTargetFunnelId] = useState<string>('');
+  const [promoteTargetStatus, setPromoteTargetStatus] = useState<string>('');
+  const [promoteError, setPromoteError] = useState('');
 
   // Modal Control
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -97,7 +120,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
   const [geralError, setGeralError] = useState('');
 
   // Form States for creation
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<any>({
     title: '',
     client_id: '',
     description: '',
@@ -107,9 +130,13 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
     start_date: '',
     planned_end_date: '',
     actual_end_date: '',
+    funnel_id: '',
   });
 
   const [submitError, setSubmitError] = useState('');
+
+  const sortColumns = (cols: FunnelColumn[]) => [...cols].sort((a, b) => a.position - b.position || a.label.localeCompare(b.label));
+  const selectedFunnel = funnels.find(f => f.id === selectedFunnelId) || funnels.find(f => f.is_default) || funnels[0] || null;
 
   const loadData = async () => {
     setLoading(true);
@@ -126,48 +153,92 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
       setLoading(false);
     }
   };
+  const loadFunnels = async () => {
+    try {
+      const data = await funnelService.getFunnels('PROJECTS');
+      if (data && data.length > 0) {
+        setFunnels(data);
+        let targetId = selectedFunnelId;
+        if (!targetId || !data.find((f: Funnel) => f.id === targetId)) {
+          const def = data.find((f: Funnel) => f.is_default);
+          targetId = def ? def.id : data[0].id;
+          setSelectedFunnelId(targetId);
+        }
+        const target = data.find((f: Funnel) => f.id === targetId) || data.find((f: Funnel) => f.is_default) || data[0];
+        const sorted = sortColumns(target.columns || []);
+        setFunnelColumns(sorted);
+      } else {
+        setFunnels([]);
+        setFunnelColumns([]);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar funis de produção:', err);
+    }
+  };
   useEffect(() => {
     loadData();
-    loadProjectColumns();
+    loadFunnels();
   }, []);
-  const loadProjectColumns = async () => {
-    try {
-      const cols = await funnelService.getAll('PROJECTS');
-      if (cols && cols.length > 0) setProjectColumns(cols);
-    } catch (err) {
-      console.error('Erro ao carregar colunas:', err);
+  useEffect(() => {
+    if (selectedFunnel) {
+      setRenameFunnelName(selectedFunnel.name);
+      const drafts: Record<string, string> = {};
+      (selectedFunnel.columns || []).forEach((c: FunnelColumn) => { drafts[c.column_key] = c.label; });
+      setStageDrafts(drafts);
+    }
+  }, [selectedFunnel?.id, selectedFunnel?.name, showFunnelManager]);
+
+  const switchFunnel = (id: string) => {
+    setSelectedFunnelId(id);
+    const target = funnels.find(f => f.id === id);
+    if (target) {
+      const sorted = sortColumns(target.columns || []);
+      setFunnelColumns(sorted);
     }
   };
 
-  const COLUMNS = COLUMNS_DEFAULTS.map(def => {
-    const fromDB = projectColumns.find(c => c.column_key === def.id);
-    return fromDB ? { ...def, label: fromDB.label, desc: fromDB.description || def.desc } : def;
-  });
+  // COLUMNS derivadas do funil selecionado (como no CRM)
+  const COLUMNS: Array<{ id: string; label: string; desc: string; color: string; column_key: string }> = (() => {
+    if (funnelColumns.length > 0) {
+      return funnelColumns.map((col, idx) => ({
+        id: col.column_key,
+        column_key: col.column_key,
+        label: col.label,
+        desc: col.description || '',
+        color: FUNNEL_COLORS[idx % FUNNEL_COLORS.length],
+      }));
+    }
+    return COLUMNS_DEFAULTS.map((def, idx) => ({ id: def.id, column_key: def.id, label: def.label, desc: def.desc, color: FUNNEL_COLORS[idx % FUNNEL_COLORS.length] }));
+  })();
 
   const handleSaveCol = async (colId: string) => {
+    if (!selectedFunnel) return;
     try {
-      await funnelService.update(colId, { label: editingColLabel, description: editingColDesc }, 'PROJECTS');
+      await funnelService.updateFunnelColumn(selectedFunnel.id, colId, { label: editingColLabel, description: editingColDesc });
       setEditingCol(null);
-      loadProjectColumns();
+      await loadFunnels();
     } catch (err) {
       alert(getApiErrorMessage(err, 'Erro ao salvar coluna.'));
     }
   };
 
   const handleOpenCreateModal = () => {
+    const defaultStatus = (selectedFunnel ? sortColumns(selectedFunnel.columns || [])[0]?.column_key : null) || funnelColumns[0]?.column_key || 'ORCAMENTO';
     setFormData({
       title: '',
       client_id: clients[0]?.id || '',
       description: '',
-      status: 'ORCAMENTO',
+      status: defaultStatus as ProjectStatus,
       value: '',
       deadline: '',
       start_date: '',
       planned_end_date: '',
       actual_end_date: '',
-    });
+      funnel_id: selectedFunnel ? selectedFunnel.id : (funnels[0]?.id || ''),
+    } as any);
     setSubmitError('');
     setEditingProjectId(null);
+    setClientSearchModal('');
     setIsModalOpen(true);
   };
 
@@ -183,8 +254,10 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
       start_date: proj.start_date ? proj.start_date.substring(0, 10) : '',
       planned_end_date: proj.planned_end_date ? proj.planned_end_date.substring(0, 10) : '',
       actual_end_date: proj.actual_end_date ? proj.actual_end_date.substring(0, 10) : '',
-    });
+      funnel_id: (proj as any).funnel_id || selectedFunnel?.id || (funnels[0]?.id || ''),
+    } as any);
     setSubmitError('');
+    setClientSearchModal('');
     setIsModalOpen(true);
   };
 
@@ -198,6 +271,16 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
     }
 
     try {
+      let resolvedFunnelId: string | undefined = (formData as any).funnel_id || selectedFunnel?.id || funnels[0]?.id || undefined;
+      if (resolvedFunnelId) {
+        const targetFunnel = funnels.find(f => f.id === resolvedFunnelId);
+        if (targetFunnel) {
+          const cols = sortColumns(targetFunnel.columns || []);
+          if (cols.length && !cols.some(c => c.column_key === formData.status)) {
+            (formData as any).status = cols[0].column_key as any;
+          }
+        }
+      }
       const payload: any = {
         title: formData.title,
         client_id: formData.client_id,
@@ -208,6 +291,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
         start_date: formData.start_date || null,
         planned_end_date: formData.planned_end_date || null,
         actual_end_date: formData.actual_end_date || null,
+        funnel_id: resolvedFunnelId,
       };
       if (editingProjectId) {
         await projectService.update(editingProjectId, payload);
@@ -230,22 +314,88 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
     }
   };
 
+  // Solta o card em outra coluna do Kanban (drag and drop).
+  const handleDropStatus = async (id: string, status: string) => {
+    setDragOverColumn(null);
+    const proj = projects.find(p => p.id === id);
+    if (!proj || proj.status === status) return;
+    try {
+      setProjects(prev => prev.map(p => p.id === id ? { ...p, status: status as ProjectStatus } : p));
+      await projectService.update(id, { status: status as ProjectStatus });
+    } catch (err) {
+      console.error('Falha ao mover projeto no Kanban:', err);
+      alert(getApiErrorMessage(err, 'Falha ao atualizar status do projeto.'));
+      loadData();
+    }
+  };
+
   const shiftStatus = async (id: string, direction: 'LEFT' | 'RIGHT') => {
     const proj = projects.find(p => p.id === id);
     if (!proj) return;
-    const currentIndex = COLUMNS.findIndex(col => col.id === proj.status);
-    let nextIndex = currentIndex;
-    if (direction === 'LEFT' && currentIndex > 0) nextIndex -= 1;
-    else if (direction === 'RIGHT' && currentIndex < COLUMNS.length - 1) nextIndex += 1;
-    if (nextIndex === currentIndex) return;
-    const nextStatus = COLUMNS[nextIndex].id;
+    const projFunnel = funnels.find(f => f.id === (proj as any).funnel_id) || selectedFunnel || funnels[0] || null;
+    const colsForProj = projFunnel ? sortColumns(projFunnel.columns || []) : [];
+    const colKeys = colsForProj.length ? colsForProj.map(c => c.column_key) : COLUMNS.map(c => c.id);
+    const currentIndex = colKeys.indexOf(proj.status);
+    if (direction === 'LEFT') {
+      if (currentIndex > 0) {
+        const nextStatus = colKeys[currentIndex - 1];
+        try {
+          setProjects(prev => prev.map(p => p.id === id ? { ...p, status: nextStatus } : p));
+          await projectService.update(id, { status: nextStatus as ProjectStatus });
+        } catch (err) {
+          console.error('Falha ao redefinir status de produção:', err);
+          alert(getApiErrorMessage(err, 'Falha ao atualizar status do projeto.'));
+          loadData();
+        }
+      }
+      return;
+    }
+    if (currentIndex < colKeys.length - 1) {
+      const nextStatus = colKeys[currentIndex + 1];
+      try {
+        setProjects(prev => prev.map(p => p.id === id ? { ...p, status: nextStatus } : p));
+        await projectService.update(id, { status: nextStatus as ProjectStatus });
+      } catch (err) {
+        console.error('Falha ao avançar status de produção:', err);
+        alert(getApiErrorMessage(err, 'Falha ao atualizar status do projeto.'));
+        loadData();
+      }
+      return;
+    }
+    if (currentIndex === colKeys.length - 1) {
+      if (funnels.length <= 1) return;
+      setPromoteProject(proj);
+      const otherFunnels = funnels.filter(f => f.id !== projFunnel?.id);
+      const suggested = otherFunnels[0];
+      if (suggested) {
+        setPromoteTargetFunnelId(suggested.id);
+        const targetCols = sortColumns(suggested.columns || []);
+        setPromoteTargetStatus(targetCols[0]?.column_key || '');
+      } else {
+        setPromoteTargetFunnelId('');
+        setPromoteTargetStatus('');
+      }
+      setPromoteError('');
+    }
+  };
+  const handleConfirmPromote = async () => {
+    if (!promoteProject || !promoteTargetFunnelId || !promoteTargetStatus) {
+      setPromoteError('Selecione funil e etapa de destino.');
+      return;
+    }
+    setPromoteError('');
     try {
-      setProjects(prev => prev.map(p => p.id === id ? { ...p, status: nextStatus } : p));
-      await projectService.update(id, { status: nextStatus });
+      await projectService.update(promoteProject.id, { funnel_id: promoteTargetFunnelId, status: promoteTargetStatus });
+      const promotedFunnelId = promoteTargetFunnelId;
+      setPromoteProject(null);
+      setPromoteTargetFunnelId('');
+      setPromoteTargetStatus('');
+      await loadData();
+      if (promotedFunnelId !== selectedFunnelId) {
+        switchFunnel(promotedFunnelId);
+      }
     } catch (err) {
-      console.error('Falha ao redefinir status de produção:', err);
-      alert(getApiErrorMessage(err, 'Falha ao atualizar status do projeto.'));
-      loadData();
+      setPromoteError(getApiErrorMessage(err, 'Erro ao promover para próximo funil.'));
     }
   };
 
@@ -581,21 +731,54 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
   const totalM2Ambientes = environments.reduce((acc, e) => acc + (Number(e.area_m2) || 0), 0);
   const totalValorAmbientes = environments.reduce((acc, e) => acc + (Number(e.value) || 0), 0);
 
+  const formFunnel = ((formData as any).funnel_id
+    ? funnels.find(f => f.id === (formData as any).funnel_id)
+    : null) || selectedFunnel || funnels[0] || null;
+  const formFunnelColumns = formFunnel ? sortColumns(formFunnel.columns || []) : [];
+
   return (
     <div className="space-y-6">
-      {/* Header with Visual switcher */}
+      {/* Header with Visual switcher + funil selector */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-serif text-white tracking-wide">Projetos & Kanban</h1>
-          <p className="text-sm text-zinc-400 font-mono mt-1">Acompanhamento da produção dos móveis.</p>
+          <h1 className="text-3xl font-serif text-white tracking-wide">Produção</h1>
+          <p className="text-sm text-zinc-400 font-mono mt-1">Kanban de projetos · múltiplos funis · promova ao final para o próximo funil.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {funnels.length > 0 && (
+            <select
+              value={selectedFunnelId}
+              onChange={e => switchFunnel(e.target.value)}
+              className="bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600 font-sans h-[38px]"
+            >
+              {funnels.map(f => (
+                <option key={f.id} value={f.id}>{f.name}{f.is_default ? ' (padrão)' : ''}</option>
+              ))}
+            </select>
+          )}
+          {['ADMIN', 'GERENTE'].includes(userRole) && (
+            <button
+              onClick={() => {
+                if (selectedFunnel) {
+                  setRenameFunnelName(selectedFunnel.name);
+                  const drafts: Record<string, string> = {};
+                  sortColumns(selectedFunnel.columns || []).forEach((c: FunnelColumn) => { drafts[c.column_key] = c.label; });
+                  setStageDrafts(drafts);
+                }
+                setManagerError(''); setStageError(''); setNewFunnelName(''); setNewStageLabel(''); setShowFunnelManager(true);
+              }}
+              className="bg-zinc-900 hover:bg-zinc-800 text-white text-sm font-medium px-3 py-2 rounded shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer font-sans h-[38px] border border-zinc-800"
+              title="Gerenciar funis de produção"
+            >
+              <FunnelIcon className="w-3.5 h-3.5" /> Funis
+            </button>
+          )}
           <div className="bg-zinc-900 border border-zinc-800 p-1 rounded-md flex">
             <button
               onClick={() => setViewMode('KANBAN')}
               className={`px-3 py-1.5 rounded text-xs font-mono transition-all flex items-center gap-1 cursor-pointer ${viewMode === 'KANBAN' ? 'bg-red-650 text-white font-bold' : 'text-zinc-400 hover:text-white'}`}
             >
-              <Layers className="w-3.5 h-3.5" /> Funil
+              <Layers className="w-3.5 h-3.5" /> Kanban
             </button>
             <button
               onClick={() => setViewMode('LIST')}
@@ -609,7 +792,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
               onClick={handleOpenCreateModal}
               className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-4 py-2 rounded shadow-md flex items-center gap-1.5 transition active:scale-95 cursor-pointer font-sans h-[38px]"
             >
-              <Plus className="w-4 h-4" /> Registrar Projeto
+              <Plus className="w-4 h-4" /> Novo Projeto
             </button>
           )}
         </div>
@@ -648,14 +831,21 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
           <p className="text-zinc-400 font-mono text-xs">Carregando andamento fabril...</p>
         </div>
       ) : viewMode === 'KANBAN' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 overflow-x-auto min-w-[950px] pb-4">
+        <div className="grid gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, COLUMNS.length)}, minmax(200px, 1fr))` } as any}>
           {COLUMNS.map((col) => {
-            const colProjects = filteredProjects.filter(p => p.status === col.id);
+            const colProjects = filteredProjects.filter(p => ((p as any).funnel_id === selectedFunnel?.id || (!(p as any).funnel_id && !!selectedFunnel?.is_default)) && p.status === col.id);
             const colValue = colProjects.reduce((acc, p) => acc + p.value, 0);
             return (
               <div
                 key={col.id}
-                className={`glass-panel rounded-xl flex flex-col min-h-[550px] overflow-hidden border-t-2 ${col.color}`}
+                onDragOver={(e) => { e.preventDefault(); if (dragOverColumn !== col.id) setDragOverColumn(col.id); }}
+                onDragLeave={() => setDragOverColumn(prev => (prev === col.id ? null : prev))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const id = e.dataTransfer.getData('text/plain') || draggingProjectId;
+                  if (id) handleDropStatus(id, col.id);
+                }}
+                className={`glass-panel rounded-xl flex flex-col min-h-[550px] overflow-hidden border-t-2 ${col.color} ${dragOverColumn === col.id ? 'ring-2 ring-red-600/70' : ''}`}
               >
                 <div className="p-4 bg-zinc-950/60 border-b border-zinc-900">
                   <div className="flex justify-between items-start">
@@ -718,7 +908,10 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                     return (
                       <div
                         key={p.id}
-                        className="p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg relative"
+                        draggable
+                        onDragStart={(e) => { e.dataTransfer.setData('text/plain', p.id); e.dataTransfer.effectAllowed = 'move'; setDraggingProjectId(p.id); }}
+                        onDragEnd={() => { setDraggingProjectId(null); setDragOverColumn(null); }}
+                        className={`p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg relative ${draggingProjectId === p.id ? 'opacity-40' : ''}`}
                       >
                         <div>
                           <h4 className="text-sm font-semibold text-zinc-100 line-clamp-2 leading-tight group-hover:text-white">
@@ -769,7 +962,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                           <div className="flex gap-1">
                             <button
                               onClick={() => shiftStatus(p.id, 'LEFT')}
-                              disabled={p.status === 'ORCAMENTO'}
+                              disabled={(() => { const projF = funnels.find(f=>f.id===(p as any).funnel_id) || selectedFunnel; const cols = projF ? sortColumns(projF.columns||[]) : COLUMNS; return cols.length ? cols[0].column_key === p.status : p.status === 'ORCAMENTO'; })()}
                               className="p-1 text-zinc-500 hover:text-white disabled:pointer-events-none disabled:opacity-20 cursor-pointer"
                               title="Recuar Fase"
                             >
@@ -777,9 +970,9 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                             </button>
                             <button
                               onClick={() => shiftStatus(p.id, 'RIGHT')}
-                              disabled={p.status === 'CONCLUIDO'}
+                              disabled={(() => { if (funnels.length > 1) return false; const projF = funnels.find(f=>f.id===(p as any).funnel_id) || selectedFunnel; const cols = projF ? sortColumns(projF.columns||[]) : COLUMNS; return cols.length ? cols[cols.length-1].column_key === p.status : p.status === 'CONCLUIDO'; })()}
                               className="p-1 text-zinc-500 hover:text-white disabled:pointer-events-none disabled:opacity-20 cursor-pointer"
-                              title="Avançar Fase"
+                              title={(() => { const projF = funnels.find(f=>f.id===(p as any).funnel_id) || selectedFunnel; const cols = projF ? sortColumns(projF.columns||[]) : COLUMNS; const isLast = cols.length ? cols[cols.length-1].column_key === p.status : p.status === 'CONCLUIDO'; return isLast && funnels.length > 1 ? 'Promover para próximo funil' : 'Avançar Fase'; })()}
                             >
                               <ArrowRight className="w-3.5 h-3.5" />
                             </button>
@@ -904,7 +1097,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
       )}
       {/* Creation Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
           <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[90vh] flex flex-col">
             <div className="bg-zinc-950/80 p-6 border-b border-zinc-800 flex justify-between items-center shrink-0">
               <div>
@@ -938,26 +1131,57 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div className="space-y-2 font-sans">
                   <label className="text-xs text-zinc-300 font-mono uppercase block">Cliente da Carteira *</label>
+                  <input
+                    type="text"
+                    value={clientSearchModal}
+                    onChange={e => setClientSearchModal(e.target.value)}
+                    placeholder="Buscar cliente... (digite para filtrar)"
+                    className="w-full bg-zinc-800 border border-zinc-700 text-white px-3 py-1.5 text-xs rounded focus:outline-none focus:border-zinc-600 font-sans mb-1"
+                  />
                   <select
                     value={formData.client_id}
                     onChange={(e) => setFormData({ ...formData, client_id: e.target.value })}
                     className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
                   >
                     <option value="">-- Selecione o Cliente --</option>
-                    {clients.map(c => (
+                    {clients.filter(c => !clientSearchModal.trim() || c.name.toLowerCase().includes(clientSearchModal.toLowerCase())).map(c => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
+                  <p className="text-[11px] text-zinc-500 font-mono mt-1">Clientes pré-cadastrados na aba Clientes · {clients.length} cadastrado(s)</p>
                 </div>
+                {funnels.length > 1 && (
+                  <div className="space-y-2 font-sans">
+                    <label className="text-xs text-zinc-300 font-mono uppercase block">Funil de Produção</label>
+                    <select
+                      value={(formData as any).funnel_id}
+                      onChange={e => {
+                        const newId = e.target.value;
+                        const targetFunnel = funnels.find(f => f.id === newId);
+                        const targetCols = targetFunnel ? sortColumns(targetFunnel.columns || []) : [];
+                        let nextStatus: string = formData.status as string;
+                        if (targetCols.length > 0 && !targetCols.some(c => c.column_key === nextStatus)) {
+                          nextStatus = targetCols[0].column_key;
+                        }
+                        setFormData((prev: any) => ({ ...prev, funnel_id: newId, status: nextStatus as any }));
+                      }}
+                      className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                    >
+                      {funnels.map(f => (
+                        <option key={f.id} value={f.id}>{f.name}{f.is_default ? ' (padrão)' : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="space-y-2">
-                  <label className="text-xs text-zinc-300 font-mono uppercase block">Status Inicial</label>
+                  <label className="text-xs text-zinc-300 font-mono uppercase block">Etapa Inicial</label>
                   <select
                     value={formData.status}
                     onChange={(e) => setFormData({ ...formData, status: e.target.value as ProjectStatus })}
                     className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656 font-mono"
                   >
-                    {COLUMNS.map(col => (
-                      <option key={col.id} value={col.id}>{col.label}</option>
+                    {(formFunnelColumns.length ? formFunnelColumns : COLUMNS.map(c=>({ column_key: c.id, label: c.label } as any))).map((col: any) => (
+                      <option key={col.column_key} value={col.column_key}>{col.label}</option>
                     ))}
                   </select>
                 </div>
@@ -1030,7 +1254,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
       )}
       {/* Detail Modal with tabs GERAL / AMBIENTES / TEMPO / OCORRENCIAS */}
       {isStepsModalOpen && selectedProject && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
           <div className="glass-panel w-full max-w-2xl rounded-xl overflow-hidden border border-zinc-800 shadow-2xl flex flex-col max-h-[92vh]">
             <div className="bg-zinc-950 p-5 border-b border-zinc-800/80 flex justify-between items-center shrink-0">
               <div className="min-w-0">
@@ -1419,6 +1643,105 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
           </div>
         </div>
       )}
+
+      {/* Modal Promover para próximo funil (quando atinge última coluna) */}
+      {promoteProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
+            <div className="bg-zinc-950 p-5 border-b border-zinc-850 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <FunnelIcon className="w-5 h-5 text-emerald-500" />
+                <h3 className="text-base font-serif font-semibold text-white">Promover para próximo funil</h3>
+              </div>
+              <button onClick={() => setPromoteProject(null)} className="text-zinc-500 hover:text-white cursor-pointer font-mono text-xs">Sair</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-zinc-400">
+                <strong className="text-white">{promoteProject.title}</strong> chegou ao fim do funil <strong className="text-white">{(funnels.find(f=>f.id===(promoteProject as any).funnel_id)?.name) || selectedFunnel?.name || ''}</strong>. Selecione o próximo funil e a etapa inicial.
+              </p>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase block">Funil de destino</label>
+                <select value={promoteTargetFunnelId} onChange={e=>{ const fid=e.target.value; setPromoteTargetFunnelId(fid); const funnel= funnels.find(f=>f.id===fid); const cols= funnel ? sortColumns(funnel.columns||[]) : []; setPromoteTargetStatus(cols[0]?.column_key || '');}} className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none">
+                  {funnels.filter(f=> f.id !== (promoteProject as any).funnel_id).map(f=> <option key={f.id} value={f.id}>{f.name}</option>)}
+                  {funnels.filter(f=> f.id === (promoteProject as any).funnel_id).length === funnels.length && <option value="">— Nenhum outro funil —</option>}
+                </select>
+              </div>
+              {promoteTargetFunnelId && (
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase block">Etapa inicial no funil destino</label>
+                  <select value={promoteTargetStatus} onChange={e=> setPromoteTargetStatus(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none">
+                    {(funnels.find(f=>f.id===promoteTargetFunnelId) ? sortColumns(funnels.find(f=>f.id===promoteTargetFunnelId)!.columns||[]) : []).map(c=> <option key={c.column_key} value={c.column_key}>{c.label}</option>)}
+                  </select>
+                </div>
+              )}
+              <p className="text-[11px] text-zinc-500 font-mono">Dica: crie novos funis em Funis · cada funil representa uma linha de produção (ex: Marcenaria, Pintura, Montagem).</p>
+              {promoteError && <p className="text-xs text-red-400 font-mono">{promoteError}</p>}
+              <div className="flex justify-end gap-3 pt-2">
+                <button onClick={()=> setPromoteProject(null)} className="px-4 py-2 text-xs bg-zinc-900 text-zinc-400 rounded border border-zinc-800 cursor-pointer font-mono">Cancelar</button>
+                <button onClick={handleConfirmPromote} className="px-5 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold cursor-pointer">Promover</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Gestão de Funis — Produção */}
+      {showFunnelManager && selectedFunnel && ['ADMIN', 'GERENTE'].includes(userRole) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="glass-panel w-full max-w-2xl rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="bg-zinc-950 p-5 border-b border-zinc-800 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2">
+                <FunnelIcon className="w-5 h-5 text-red-500" />
+                <h3 className="text-base font-serif font-semibold text-white">Gestão de Funis — Produção</h3>
+              </div>
+              <button onClick={() => setShowFunnelManager(false)} className="text-zinc-500 hover:text-white cursor-pointer p-1">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-6 space-y-6 overflow-y-auto">
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-white font-sans">Novo funil</h4>
+                <div className="flex gap-2">
+                  <input type="text" value={newFunnelName} onChange={e => setNewFunnelName(e.target.value)} placeholder="Nome do novo funil (ex: Pintura, Montagem)" className="flex-1 bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-2 text-sm focus:outline-none focus:border-red-600" />
+                  <button onClick={async()=>{ const name=newFunnelName.trim(); if(!name){ setManagerError('Nome obrigatório.'); return;} setManagerError(''); try{ const novo= await funnelService.createFunnel({ name, kind: 'PROJECTS' }); setNewFunnelName(''); const data= await funnelService.getFunnels('PROJECTS'); setFunnels(data); const target= data.find((f:Funnel)=>f.id===novo.id)||novo; setSelectedFunnelId(target.id); setFunnelColumns(sortColumns(target.columns||[])); }catch(err: any){ setManagerError(getApiErrorMessage(err,'Erro ao criar funil.'));}}} className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap">Criar</button>
+                </div>
+                {managerError && <p className="text-xs text-red-400 font-mono">{managerError}</p>}
+              </div>
+              <div className="border-t border-zinc-800 pt-6 space-y-4">
+                <h4 className="text-sm font-semibold text-white font-sans">Funil atual</h4>
+                <div className="flex gap-2">
+                  <input type="text" value={renameFunnelName} onChange={e=> setRenameFunnelName(e.target.value)} className="flex-1 bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-2 text-sm focus:outline-none focus:border-red-600" />
+                  <button onClick={async()=>{ if(!selectedFunnel) return; const name=renameFunnelName.trim(); if(!name){ setManagerError('Nome obrigatório.'); return;} setManagerError(''); try{ await funnelService.updateFunnel(selectedFunnel.id,{name}); await loadFunnels(); }catch(err:any){ setManagerError(getApiErrorMessage(err,'Erro ao renomear.'));}}} className="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap border border-zinc-700">Salvar</button>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs text-zinc-400 font-mono uppercase">Etapas</p>
+                  {sortColumns(funnelColumns).map((col, idx, arr)=> (
+                    <div key={col.column_key} className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded px-2 py-2">
+                      <input type="text" value={stageDrafts[col.column_key] ?? col.label} onChange={e=> setStageDrafts(prev=> ({...prev, [col.column_key]: e.target.value}))} className="flex-1 bg-zinc-950 border border-zinc-800 text-white rounded px-2 py-1 text-sm focus:outline-none focus:border-zinc-600" />
+                      <button onClick={async()=>{ if(!selectedFunnel) return; const label=(stageDrafts[col.column_key]||'').trim(); if(!label){ setStageError('Label obrigatório.'); return;} setStageError(''); try{ await funnelService.updateFunnelColumn(selectedFunnel.id, col.column_key, {label}); await loadFunnels(); }catch(err:any){ setStageError(getApiErrorMessage(err,'Erro ao salvar etapa.'));}}} className="px-2 py-1 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white rounded cursor-pointer" title="Salvar label">Salvar</button>
+                      <button onClick={async()=>{ if(!selectedFunnel) return; const sorted= sortColumns(funnelColumns); const i= sorted.findIndex(c=>c.column_key===col.column_key); if(i<=0) return; const reordered=[...sorted]; const tmp=reordered[i]; reordered[i]=reordered[i-1]; reordered[i-1]=tmp; try{ await Promise.all(reordered.map((c:any,pos:number)=> funnelService.updateFunnelColumn(selectedFunnel.id,c.column_key,{position:pos}))); await loadFunnels(); }catch(err:any){ setStageError(getApiErrorMessage(err,'Erro ao reordenar.'));}}} disabled={idx===0} className="p-1 text-zinc-400 hover:text-white disabled:opacity-20 cursor-pointer" title="Mover para cima">↑</button>
+                      <button onClick={async()=>{ if(!selectedFunnel) return; const sorted= sortColumns(funnelColumns); const i= sorted.findIndex(c=>c.column_key===col.column_key); if(i>=sorted.length-1) return; const reordered=[...sorted]; const tmp=reordered[i]; reordered[i]=reordered[i+1]; reordered[i+1]=tmp; try{ await Promise.all(reordered.map((c:any,pos:number)=> funnelService.updateFunnelColumn(selectedFunnel.id,c.column_key,{position:pos}))); await loadFunnels(); }catch(err:any){ setStageError(getApiErrorMessage(err,'Erro ao reordenar.'));}}} disabled={idx===arr.length-1} className="p-1 text-zinc-400 hover:text-white disabled:opacity-20 cursor-pointer" title="Mover para baixo">↓</button>
+                      <button onClick={async()=>{ if(!selectedFunnel) return; if(!confirm('Remover esta etapa?')) return; setStageError(''); try{ await funnelService.removeFunnelColumn(selectedFunnel.id, col.column_key); await loadFunnels(); }catch(err:any){ setStageError(getApiErrorMessage(err,'Erro ao remover etapa.'));}}} className="p-1 text-zinc-500 hover:text-red-400 cursor-pointer" title="Remover etapa">✕</button>
+                    </div>
+                  ))}
+                  {stageError && <p className="text-xs text-red-400 font-mono">{stageError}</p>}
+                  <div className="flex gap-2 pt-2">
+                    <input type="text" value={newStageLabel} onChange={e=> setNewStageLabel(e.target.value)} placeholder="Nova etapa (ex: Corte, Pintura)" className="flex-1 bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-2 text-sm focus:outline-none focus:border-red-600" />
+                    <button onClick={async()=>{ if(!selectedFunnel) return; const label=newStageLabel.trim(); if(!label){ setStageError('Informe o nome da etapa.'); return;} setStageError(''); try{ await funnelService.addFunnelColumn(selectedFunnel.id,{label}); setNewStageLabel(''); await loadFunnels(); }catch(err:any){ setStageError(getApiErrorMessage(err,'Erro ao adicionar etapa.'));}}} className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer whitespace-nowrap">Adicionar etapa</button>
+                  </div>
+                </div>
+              </div>
+              {!selectedFunnel.is_default && (
+                <div className="border-t border-zinc-800 pt-6">
+                  <button onClick={async()=>{ if(!selectedFunnel) return; if(!confirm(`Excluir o funil "${selectedFunnel.name}"?`)) return; setManagerError(''); try{ await funnelService.removeFunnel(selectedFunnel.id); const data= await funnelService.getFunnels('PROJECTS'); setFunnels(data); if(data.length>0){ const def=data.find((f:Funnel)=>f.is_default)||data[0]; setSelectedFunnelId(def.id); setFunnelColumns(sortColumns(def.columns||[])); } else { setSelectedFunnelId(''); setFunnelColumns([]);} setShowFunnelManager(false);}catch(err:any){ setManagerError(getApiErrorMessage(err,'Erro ao excluir funil.'));}}} className="px-4 py-2 text-sm bg-zinc-900 hover:bg-red-950/40 text-red-400 border border-red-900/40 rounded font-mono cursor-pointer">Excluir funil</button>
+                  <p className="text-[11px] text-zinc-500 font-mono mt-2">Só é possível excluir funil sem projetos vinculados.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

@@ -91,6 +91,8 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
   const [newSupplierName, setNewSupplierName] = useState('');
   const [supplierError, setSupplierError] = useState('');
+  const [clientSearch, setClientSearch] = useState('');
+  const [supplierSearch, setSupplierSearch] = useState('');
 
   // Contas bancárias
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
@@ -405,6 +407,8 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       is_recurring: false,
     });
     setSubmitError('');
+    setClientSearch('');
+    setSupplierSearch('');
     setIsModalOpen(true);
   };
 
@@ -433,6 +437,8 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       is_recurring: record.is_recurring || false,
     });
     setSubmitError('');
+    setClientSearch('');
+    setSupplierSearch('');
     setIsModalOpen(true);
   };
 
@@ -1285,9 +1291,9 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
       {/* Creation/Edit Modal form */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
-            <div className="bg-zinc-950 p-6 border-b border-zinc-850 flex justify-between items-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => { setIsModalOpen(false); setEditingRecordId(null); }}>
+          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-zinc-950 p-6 border-b border-zinc-850 flex justify-between items-center shrink-0">
               <div>
                 <h3 className="text-lg font-serif font-bold text-white">
                   {editingRecordId ? 'Editar Lançamento Contábil' : 'Novo Lançamento Contábil'}
@@ -1302,7 +1308,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
               </button>
             </div>
 
-            <form onSubmit={handleSubmitRecord} className="p-7 space-y-6 font-sans">
+            <form onSubmit={handleSubmitRecord} className="p-7 space-y-6 font-sans overflow-y-auto flex-1 overscroll-contain">
               {submitError && (
                 <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">
                   {submitError}
@@ -1471,19 +1477,35 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div className="space-y-2">
                   <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Cliente (Opcional)</label>
+                  <input
+                    type="text"
+                    value={clientSearch}
+                    onChange={e => setClientSearch(e.target.value)}
+                    placeholder="Buscar cliente... (digite para filtrar)"
+                    className="w-full bg-zinc-800 border border-zinc-700 text-white px-3 py-1.5 text-xs rounded focus:outline-none focus:border-zinc-600 font-sans"
+                  />
                   <select
                     value={formData.client_id}
                     onChange={(e) => setFormData({ ...formData, client_id: e.target.value })}
                     className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
                   >
                     <option value="">Nenhum</option>
-                    {clients.map(c => (
+                    {clients.filter(c => !clientSearch.trim() || c.name.toLowerCase().includes(clientSearch.toLowerCase())).map(c => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
+                  {clients.length === 0 && <p className="text-[11px] text-zinc-500 font-mono">Nenhum cliente cadastrado — use a aba Clientes.</p>}
+                  <p className="text-[11px] text-zinc-500 font-mono">Cadastro prévio na aba Clientes.</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Fornecedor (Opcional)</label>
+                  <input
+                    type="text"
+                    value={supplierSearch}
+                    onChange={e => setSupplierSearch(e.target.value)}
+                    placeholder="Buscar fornecedor..."
+                    className="w-full bg-zinc-800 border border-zinc-700 text-white px-3 py-1.5 text-xs rounded focus:outline-none focus:border-zinc-600 font-sans"
+                  />
                   <div className="flex gap-2">
                     <select
                       value={formData.supplier_id}
@@ -1491,7 +1513,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                       className="flex-1 bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
                     >
                       <option value="">Nenhum</option>
-                      {suppliers.map(s => (
+                      {suppliers.filter(s => !supplierSearch.trim() || s.name.toLowerCase().includes(supplierSearch.toLowerCase())).map(s => (
                         <option key={s.id} value={s.id}>{s.name}</option>
                       ))}
                     </select>
@@ -1643,7 +1665,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                 </div>
               )}
 
-              <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800 mt-6">
+              <div className="sticky bottom-0 z-10 -mx-7 px-7 pt-4 pb-4 flex justify-end gap-3 border-t border-zinc-800 mt-6 bg-zinc-950/95">
                 <button 
                   type="button"
                   onClick={() => { setIsModalOpen(false); setEditingRecordId(null); }}
@@ -1665,7 +1687,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
       {/* Goal Modal — nova meta de orçamento */}
       {isGoalModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
             <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-5 border-b border-zinc-800 flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -1745,7 +1767,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
       {/* Supplier Modal — cadastro rápido */}
       {isSupplierModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-sm rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
             <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-5 border-b border-zinc-800 flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -1786,7 +1808,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
       {/* Bank Account Modal — nova/editar conta */}
       {bankModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="bg-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center">
               <div>
@@ -1864,7 +1886,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
       {/* Detail Modal — view record + generate receipt */}
       {detailRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
             <div className="bg-zinc-950 p-6 border-b border-zinc-850 flex justify-between items-center">
               <div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Plus, Search, Edit2, Trash2, Mail, Phone, MapPin,
   ArrowLeft, Send, RefreshCw,
@@ -20,6 +20,9 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
   const [viewMode, setViewMode] = useState<'LIST' | 'KANBAN'>('KANBAN');
+  // Drag and drop do Kanban
+  const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
   const [funnels, setFunnels] = useState<Funnel[]>([]);
   const [selectedFunnelId, setSelectedFunnelId] = useState<string>('');
   const [funnelColumns, setFunnelColumns] = useState<FunnelColumn[]>([]);
@@ -382,6 +385,20 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
+  // Solta o card em outra coluna do funil (drag and drop).
+  const handleDropFunnel = async (clientId: string, columnKey: string) => {
+    setDragOverColumn(null);
+    const client = clients.find(c => c.id === clientId);
+    if (!client || client.funnel_status === columnKey) return;
+    try {
+      setClients(prev => prev.map(c => c.id === clientId ? { ...c, funnel_status: columnKey as FunnelStatus } : c));
+      await clientService.updateFunnel(clientId, columnKey);
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao mover cliente no funil.'));
+      loadClients();
+    }
+  };
+
   const handleCreateFunnel = async () => {
     const name = newFunnelName.trim();
     if (!name) {
@@ -512,6 +529,29 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
+  // Clientes com todos os projetos concluidos ha mais de 30 dias saem do funil ativo
+  // para FECHAMENTO. Antes isso rodava DENTRO do render (escrita de rede a cada
+  // render, inclusive durante o drag); agora roda uma vez por carga de dados.
+  const autoMovedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (loading || clients.length === 0) return;
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const toMove = clients.filter(client => {
+      if (client.funnel_status === 'FECHAMENTO' || client.funnel_status === 'PERDIDO') return false;
+      if (autoMovedRef.current.has(client.id)) return false;
+      const clientProjects = projects.filter(p => p.client_id === client.id);
+      if (clientProjects.length === 0) return false;
+      if (!clientProjects.every(p => p.status === 'CONCLUIDO')) return false;
+      const lastProject = [...clientProjects].sort((a, b) => new Date(b.deadline).getTime() - new Date(a.deadline).getTime())[0];
+      return new Date(lastProject.deadline) < thirtyDaysAgo;
+    });
+    if (toMove.length === 0) return;
+    toMove.forEach(c => autoMovedRef.current.add(c.id));
+    Promise.all(toMove.map(c => clientService.updateFunnel(c.id, 'FECHAMENTO')))
+      .then(() => loadClients())
+      .catch(err => console.error('Falha ao reposicionar clientes concluídos:', err));
+  }, [loading, clients, projects]);
+
   const clientDisplayValue = (c: Client, projects: Project[]) => {
     const real = projects
       .filter(p => p.client_id === c.id && p.status !== 'CONCLUIDO')
@@ -620,32 +660,23 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         </div>
       ) : viewMode === 'KANBAN' ? (
         /* KANBAN FUNIL DE VENDAS */
-        <div className="grid grid-cols-1 gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, funnelColumns.length)}, minmax(0, 1fr))`, minWidth: Math.max(900, funnelColumns.length * 230) as any }}>
-          {(() => {
-            const today = new Date();
-            const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-            // Remove do funil clientes cujos projetos estão todos concluídos há mais de 30 dias
-            filteredClients.forEach(client => {
-              const clientProjects = projects.filter(p => p.client_id === client.id);
-              if (clientProjects.length > 0) {
-                const allConcluded = clientProjects.every(p => p.status === 'CONCLUIDO');
-                const lastProject = clientProjects.sort((a, b) => new Date(b.deadline).getTime() - new Date(a.deadline).getTime())[0];
-                if (allConcluded && new Date(lastProject.deadline) < thirtyDaysAgo) {
-                  // Move automaticamente para FECHAMENTO se ainda estiver no funil ativo
-                  if (client.funnel_status !== 'FECHAMENTO' && client.funnel_status !== 'PERDIDO') {
-                    clientService.updateFunnel(client.id, 'FECHAMENTO');
-                  }
-                }
-              }
-            });
-            return null;
-          })()}
+        <div className="grid grid-cols-1 gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, funnelColumns.length)}, minmax(200px, 1fr))` }}>
           {funnelColumns.map((col, idx) => {
             const colClients = filteredClients.filter(c => (c.funnel_id === selectedFunnel?.id || (!c.funnel_id && !!selectedFunnel?.is_default)) && c.funnel_status === col.column_key);
             const colTotal = colClients.reduce((acc, c) => acc + clientDisplayValue(c, projects).value, 0);
             const borderColor = getColumnColor(col.column_key, idx);
             return (
-              <div key={col.column_key} className={`glass-panel rounded-xl flex flex-col min-h-[500px] overflow-hidden border-t-2 ${borderColor}`}>
+              <div
+                key={col.column_key}
+                onDragOver={(e) => { e.preventDefault(); if (dragOverColumn !== col.column_key) setDragOverColumn(col.column_key); }}
+                onDragLeave={() => setDragOverColumn(prev => (prev === col.column_key ? null : prev))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const id = e.dataTransfer.getData('text/plain') || draggingClientId;
+                  if (id) handleDropFunnel(id, col.column_key);
+                }}
+                className={`glass-panel rounded-xl flex flex-col min-h-[500px] overflow-hidden border-t-2 ${borderColor} ${dragOverColumn === col.column_key ? 'ring-2 ring-red-600/70' : ''}`}
+              >
                 <div className="p-4 bg-zinc-950/60 border-b border-zinc-900">
                   <div className="flex justify-between items-start">
                     <div className="flex-1 min-w-0">
@@ -704,7 +735,14 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       const { value: displayValue, isEstimated } = clientDisplayValue(client, projects);
                       const pendingTasks = events.filter(e => e.client_id === client.id && e.status !== 'CONCLUIDO' && e.status !== 'CANCELADO').length;
                       return (
-                      <div key={client.id} onClick={() => setDetailClient(client)} className="p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg cursor-pointer">
+                      <div
+                        key={client.id}
+                        onClick={() => setDetailClient(client)}
+                        draggable
+                        onDragStart={(e) => { e.dataTransfer.setData('text/plain', client.id); e.dataTransfer.effectAllowed = 'move'; setDraggingClientId(client.id); }}
+                        onDragEnd={() => { setDraggingClientId(null); setDragOverColumn(null); }}
+                        className={`p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg cursor-pointer ${draggingClientId === client.id ? 'opacity-40' : ''}`}
+                      >
                         <h4 className="text-sm font-semibold text-zinc-100 group-hover:text-white">{client.name}</h4>
                         {(client as any).partner_name && <span className="inline-flex items-center mt-1 text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded">🤝 {(client as any).partner_name}</span>}
                         {client.email && <p className="text-[11px] text-zinc-500 mt-0.5 truncate">✉ {client.email}</p>}
@@ -925,7 +963,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       {/* Modal Converter em Projeto */}
       {convertModalClient && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
             <div className="bg-zinc-950 p-5 border-b border-zinc-850 flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -982,7 +1020,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       {/* Modal Negócio Perdido */}
       {lostModalClient && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
             <div className="bg-zinc-950 p-5 border-b border-zinc-850 flex justify-between items-center">
               <div className="flex items-center gap-2">
@@ -1027,7 +1065,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       {/* Modal Gestão de Funis */}
       {showFunnelManager && selectedFunnel && ['ADMIN', 'GERENTE'].includes(userRole) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-2xl rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[90vh] flex flex-col">
             <div className="bg-zinc-950 p-5 border-b border-zinc-800 flex justify-between items-center shrink-0">
               <div className="flex items-center gap-2">
@@ -1156,9 +1194,9 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       {/* Slideout Side Modal for Client Action */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800/80 shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
-            <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800/80 shadow-2xl animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+            <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center shrink-0">
               <div>
                 <h3 className="text-lg font-serif font-semibold text-white">
                   {editingClient ? 'Atualizar Cliente' : 'Adicionar Novo Cliente'}
@@ -1179,7 +1217,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-7 space-y-6 font-sans">
+            <form onSubmit={handleSubmit} className="p-7 space-y-6 font-sans overflow-y-auto flex-1 overscroll-contain">
               {submitError && (
                 <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">
                   {submitError}
@@ -1410,7 +1448,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 )}
               </div>
 
-              <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800 mt-6 md:mt-8">
+              <div className="sticky bottom-0 z-10 -mx-7 px-7 pt-4 pb-4 flex justify-end gap-3 border-t border-zinc-800 mt-6 md:mt-8 bg-zinc-950/95">
                 <button 
                   type="button"
                   onClick={() => {

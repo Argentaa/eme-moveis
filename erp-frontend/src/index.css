@@ -6,6 +6,12 @@
   --font-mono: "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, monospace;
 }
 
+/* Controles nativos (popup do <select>, date picker, scrollbar) seguem o tema.
+   Sem isso o app escuro abre popups claros e sem estilo do sistema. */
+:root {
+  color-scheme: dark;
+}
+
 /* Custom styles for high-end feel */
 body {
   background-color: #09090b; /* zinc-950 */
@@ -18,6 +24,7 @@ html[data-theme="light"],
 html[data-theme="light"] body {
   background-color: #f5f3ef;
   color: #1f2937;
+  color-scheme: light;
 }
 
 /* Custom scrollbar for dark premium look */
@@ -39,12 +46,21 @@ html[data-theme="light"] body {
   background: #7f1d1d;
 }
 
-/* Glassmorphism utility */
+/* Glassmorphism utility.
+   IMPORTANTE: sem backdrop-filter de proposito. O app aplica esta classe em
+   dezenas de paineis/colunas ANINHADOS e o modal soma backdrop-blur; no Chromium
+   isso gera camadas de blur empilhadas -> frames pretos, tearing, conteudo
+   duplicado/borrado e travamento de animacao, piorando ao abrir o popup nativo
+   do <select>. O fundo quase opaco entrega o mesmo visual sem o custo. */
 .glass-panel {
-  background-color: rgba(18, 18, 24, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background-color: rgba(18, 18, 24, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Popup nativo do <select> no Firefox nao respeita color-scheme nas opcoes. */
+select option {
+  background-color: #18181b;
+  color: #f4f4f5;
 }
 
 .glass-panel-hover {

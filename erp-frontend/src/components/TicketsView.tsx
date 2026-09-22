@@ -506,7 +506,7 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
 
       {/* Modal Novo/Editar */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-2xl rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[90vh] flex flex-col bg-zinc-900">
             <div className="bg-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center shrink-0">
               <div>
@@ -709,7 +709,7 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
 
       {/* Modal Detalhe */}
       {detailTicket && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-3xl rounded-xl overflow-hidden border border-zinc-800 shadow-2xl max-h-[90vh] flex flex-col bg-zinc-900">
             <div className="bg-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center shrink-0">
               <div>
