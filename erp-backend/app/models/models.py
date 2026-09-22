@@ -6,6 +6,7 @@ DEADLINE_WARNING_DAYS = 7
 
 from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, Numeric, String, Text, Time
 from sqlalchemy import ForeignKey, UniqueConstraint
+import sqlalchemy as sa
 
 from app.helpers import iso, num, parse_date
 from app.extensions import db
@@ -89,6 +90,13 @@ class Client(db.Model):
     partner_id = db.Column(String(36), ForeignKey("partners.id", ondelete="SET NULL"), nullable=True, index=True)
     partner = db.relationship("Partner")
 
+    # Campos de fornecedor (cadastro central: cliente tambem pode ser fornecedor)
+    is_supplier = db.Column(Boolean, nullable=False, default=False, server_default=sa.false(), index=True)
+    contact = db.Column(String(160), nullable=True, default="", server_default="")
+    category = db.Column(String(80), nullable=True, default="", server_default="")
+    payment_terms = db.Column(String(120), nullable=True, default="", server_default="")
+    avg_delivery_days = db.Column(Integer, nullable=True)
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -107,6 +115,11 @@ class Client(db.Model):
             "funnel_id": self.funnel_id,
             "partner_id": self.partner_id,
             "partner_name": self.partner.name if getattr(self, "partner", None) else None,
+            "is_supplier": bool(self.is_supplier),
+            "contact": self.contact or "",
+            "category": self.category or "",
+            "payment_terms": self.payment_terms or "",
+            "avg_delivery_days": self.avg_delivery_days,
         }
 
     @property
@@ -128,6 +141,10 @@ class Supplier(db.Model):
     payment_terms = db.Column(String(120), nullable=True, default="")
     avg_delivery_days = db.Column(Integer, nullable=True)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    # Espelho de cliente-fornecedor: quando um cliente e marcado como
+    # fornecedor, uma linha espelho e mantida aqui (preserva as FKs de
+    # purchase_orders.supplier_id e financial_records.supplier_id).
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
 
     def to_dict(self):
         return {
@@ -142,6 +159,7 @@ class Supplier(db.Model):
             "payment_terms": self.payment_terms or "",
             "avg_delivery_days": self.avg_delivery_days,
             "created_at": iso(self.created_at),
+            "client_id": self.client_id,
         }
 
 
@@ -1229,6 +1247,12 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Novidades avisa o que você ainda não leu",
      "O menu Novidades mostra um contador com quantas atualizações você ainda não leu. Ao abrir a aba, as novidades que chegaram ganham o selo NOVA e o contador é zerado. Cada usuário tem o seu próprio controle de leitura.",
      "NOVIDADE", "2026-09-22"),
+    ("Cadastro central de clientes e fornecedores",
+     "O módulo Clientes/Fornecedores virou o cadastro central: um cliente pode ser marcado como fornecedor e passa a aparecer nos lançamentos de Compras e Financeiro. Nenhum cliente com histórico (projetos, lançamentos, agenda, pós-venda) pode mais ser excluído — o registro fica preservado para referência futura.",
+     "NOVIDADE", "2026-09-22"),
+    ("Nome dos módulos do menu atualizado",
+     "O menu lateral foi renomeado e reorganizado: Dashboard Executivo, Comercial, Financeiro, Produção, Clientes/Fornecedores, Estoque, Compras, Pós-venda, Relatórios, Agenda, Novidades e Acessos & TI.",
+     "MELHORIA", "2026-09-22"),
 ]
 
 

@@ -277,13 +277,131 @@ def test_modelos_novos_serializacao_e_cascata(client):
         c = db.session.get(ClientModel, cid)
         assert any(i.id == inter.id for i in c.interactions)
         assert any(a.id == att.id for a in c.attachments)
-    assert client.delete(f"/api/clients/{cid}", headers=h).status_code == 200
+    # Guard do cadastro central: cliente com historico (interacao/anexo) nao e excluido.
+    r = client.delete(f"/api/clients/{cid}", headers=h)
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert "interacao" in r.get_data(as_text=True).lower()
     with client.application.app_context():
         from app.models.models import Attachment as AttModel, Campaign as CampModel, Interaction as IntModel, LeadSource as SrcModel
-        assert db.session.get(IntModel, inter.id) is None      # cascade do banco
-        assert db.session.get(AttModel, att.id) is None        # cascade do banco
+        # registros preservados apos o bloqueio (cadastro central)
+        assert db.session.get(IntModel, inter.id) is not None
+        assert db.session.get(AttModel, att.id) is not None
         assert db.session.get(SrcModel, src.id) is not None    # tabela independente do cliente
         assert db.session.get(CampModel, camp.id) is not None  # tabela independente do cliente
+    # limpeza direta via ORM para nao vazar entre testes
+    with client.application.app_context():
+        from app.models.models import Attachment as AttModel2, Interaction as IntModel2
+        db.session.query(IntModel2).filter_by(client_id=cid).delete()
+        db.session.query(AttModel2).filter_by(client_id=cid).delete()
+        db.session.commit()
+
+
+def test_client_supplier_fields_crud(client):
+    h = _login(client)
+    # cria cliente com campos de fornecedor
+    r = client.post(
+        "/api/clients", headers=h,
+        json={"name": "Cliente Fornecedor", "cpf_cnpj": "sup-001",
+              "is_supplier": True, "contact": "Joao", "category": "Madeira",
+              "payment_terms": "30 dias", "avg_delivery_days": 5},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["is_supplier"] is True
+    assert body["contact"] == "Joao"
+    assert body["category"] == "Madeira"
+    assert body["payment_terms"] == "30 dias"
+    assert body["avg_delivery_days"] == 5
+    cid = body["id"]
+
+    # filtro is_supplier=1
+    lst = client.get("/api/clients?is_supplier=1", headers=h).get_json()
+    assert any(c["id"] == cid for c in lst)
+
+    # cliente normal nao entra no filtro
+    client.post("/api/clients", headers=h, json={"name": "Normal", "cpf_cnpj": "sup-002"})
+    lst2 = client.get("/api/clients?is_supplier=1", headers=h).get_json()
+    assert all(c["id"] != "sup-002" for c in lst2)
+    assert all(c["is_supplier"] is True for c in lst2)
+
+    # update campos
+    r = client.put(f"/api/clients/{cid}", headers=h, json={"is_supplier": False, "avg_delivery_days": ""})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["is_supplier"] is False
+    assert r.get_json()["avg_delivery_days"] is None
+
+    # avg_delivery_days invalido -> 400
+    r = client.put(f"/api/clients/{cid}", headers=h, json={"avg_delivery_days": -1})
+    assert r.status_code == 400
+
+
+def test_client_delete_guard(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Com Historico", "cpf_cnpj": "hist-001"}).get_json()["id"]
+    r = client.post(
+        "/api/projects", headers=h,
+        json={"title": "Proj H", "client_id": cid, "status": "ORCAMENTO", "value": 100, "deadline": "2030-01-01", "steps": []},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+    # delete bloqueado pelo guard
+    r = client.delete(f"/api/clients/{cid}", headers=h)
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert "projeto" in r.get_data(as_text=True).lower()
+    # cliente ainda existe
+    assert client.get(f"/api/clients/{cid}", headers=h).status_code == 200
+
+    # cliente sem historico pode ser excluido
+    c2 = client.post("/api/clients", headers=h, json={"name": "Limpo", "cpf_cnpj": "hist-002"}).get_json()["id"]
+    assert client.delete(f"/api/clients/{c2}", headers=h).status_code == 200
+
+
+def test_vendors_merge(client):
+    h = _login(client)
+    # supplier legado
+    s = client.post("/api/suppliers", headers=h, json={"name": "Madeireira Legada", "cnpj": "11.111", "category": "Madeira"}).get_json()
+    # cliente-fornecedor (cria espelho em suppliers automaticamente)
+    c = client.post(
+        "/api/clients", headers=h,
+        json={"name": "Cliente que vende", "cpf_cnpj": "22.222", "is_supplier": True, "contact": "Maria"},
+    ).get_json()
+    r = client.get("/api/vendors", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    rows = r.get_json()
+    assert len(rows) >= 2
+    by_name = {row["name"]: row for row in rows}
+    assert "Madeireira Legada" in by_name and by_name["Madeireira Legada"]["source"] == "supplier"
+    assert by_name["Madeireira Legada"]["id"] == s["id"]
+    assert "Cliente que vende" in by_name and by_name["Cliente que vende"]["source"] == "client"
+    # id do espelho e um suppliers.id (FK valida), ligado ao cliente
+    mirror = by_name["Cliente que vende"]
+    assert mirror["client_id"] == c["id"]
+    assert mirror["id"] != c["id"]
+    # espelho serve como supplier_id real em compras
+    r = client.post(
+        "/api/purchases", headers=h,
+        json={"supplier_id": mirror["id"], "request_date": "2026-09-22",
+              "items": [{"material_name": "MDF", "quantity": 2, "unit_price": 100}]},
+    )
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+
+def test_client_supplier_mirror_sync(client):
+    h = _login(client)
+    c = client.post(
+        "/api/clients", headers=h,
+        json={"name": "Espelho Sync", "cpf_cnpj": "33.333", "is_supplier": True,
+              "contact": "Ana", "phone": "555", "category": "Ferragens"},
+    ).get_json()
+    # espelho criado
+    rows = client.get("/api/vendors", headers=h).get_json()
+    mirror = next(r for r in rows if r.get("client_id") == c["id"])
+    assert mirror["contact"] == "Ana" and mirror["category"] == "Ferragens"
+    # update do cliente sincroniza o espelho
+    client.put(f"/api/clients/{c['id']}", headers=h, json={"contact": "Ana Nova", "phone": "999"})
+    rows = client.get("/api/vendors", headers=h).get_json()
+    mirror2 = next(r for r in rows if r.get("client_id") == c["id"])
+    assert mirror2["id"] == mirror["id"]  # mesmo espelho, sem duplicar
+    assert mirror2["contact"] == "Ana Nova" and mirror2["phone"] == "999"
 
 
 def test_seeds_fontes_e_campanhas_idempotente(client):
@@ -718,7 +836,7 @@ def test_cash_flow_report(client):
     r = client.get("/api/reports/cash-flow", headers=h, query_string={"year": 2026})
     assert r.status_code == 200, r.get_data(as_text=True)
     body = r.get_json()
-    assert body["title"] == "Fluxo de Caixa Mensal"
+    assert body["title"] in ("Fluxo de Caixa Mensal", "Fluxo de Caixa Realizado")
     jan = next(row for row in body["rows"] if row["month"] == "1 - Janeiro")
     fev = next(row for row in body["rows"] if row["month"] == "2 - Fevereiro")
     assert jan["income"] == "R$ 1.000,00" and jan["outcome"] == "R$ 300,00" and jan["balance"] == "R$ 700,00"

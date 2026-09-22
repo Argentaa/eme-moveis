@@ -1,8 +1,9 @@
 """CRUD /api/clients."""
 import math
 
-from flask import Blueprint, g, jsonify
+from flask import Blueprint, g, jsonify, request
 from sqlalchemy.exc import IntegrityError
+import sqlalchemy as sa
 
 from app.helpers import body_json
 from app.auth import token_required
@@ -28,11 +29,75 @@ CLIENT_FIELDS = (
     "name", "email", "phone", "cpf_cnpj", "address",
     "funnel_status", "lost_reason", "estimated_value", "lead_source", "campaign",
     "funnel_id", "partner_id",
+    "is_supplier", "contact", "category", "payment_terms", "avg_delivery_days",
 )
+
+SUPPLIER_OPTIONAL_FIELDS = ("contact", "category", "payment_terms")
 
 INTERACTION_TYPES = ("CONVERSA", "PROPOSTA", "ORCAMENTO", "OBSERVACAO")
 
 ITEM_RECURRENCES = ("UNICO", "MENSAL", "TRIMESTRAL", "ANUAL")
+
+
+def _apply_supplier_fields(row, data):
+    """Aplica campos de fornecedor no modelo Client, com validacao."""
+    if "is_supplier" in data:
+        v = data.get("is_supplier")
+        if isinstance(v, str):
+            v = v.strip().lower() in ("1", "true", "sim", "yes", "on")
+        row.is_supplier = bool(v)
+    for f in SUPPLIER_OPTIONAL_FIELDS:
+        if f in data:
+            v = data[f]
+            setattr(row, f, v.strip() if isinstance(v, str) else v)
+    if "avg_delivery_days" in data:
+        v = data.get("avg_delivery_days")
+        if v is None or v == "":
+            row.avg_delivery_days = None
+        else:
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                raise ValueError("avg_delivery_days deve ser inteiro >= 0")
+            if iv < 0:
+                raise ValueError("avg_delivery_days deve ser inteiro >= 0")
+            row.avg_delivery_days = iv
+
+
+def ensure_supplier_mirror(client):
+    """Mantem a linha espelho em suppliers para cliente marcado como fornecedor.
+
+    Preserva as FKs existentes: Compras/Financeiro continuam usando
+    supplier_id (id do espelho), nunca o client id direto. Nao quebra a
+    criacao do cliente se o espelho falhar (log + rollback parcial).
+    """
+    if not getattr(client, "is_supplier", False):
+        return None
+    try:
+        from app.models.models import Supplier as SupplierModel
+        mirror = db.session.query(SupplierModel).filter_by(client_id=client.id).first()
+        if not mirror:
+            mirror = SupplierModel(client_id=client.id)
+            db.session.add(mirror)
+        mirror.name = client.name
+        mirror.cnpj = client.cpf_cnpj or ""
+        mirror.contact = client.contact or ""
+        mirror.phone = client.phone or ""
+        mirror.email = client.email or ""
+        mirror.address = client.address or ""
+        mirror.category = client.category or ""
+        mirror.payment_terms = client.payment_terms or ""
+        mirror.avg_delivery_days = client.avg_delivery_days
+        db.session.commit()
+        return mirror
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        import logging
+        logging.getLogger(__name__).exception("Espelho de fornecedor falhou p/ cliente %s", getattr(client, "id", "?"))
+        return None
 
 
 def _item_number(value, default):
@@ -85,7 +150,22 @@ def _resolve_funnel_id_for_create(data):
 @bp.get("/api/clients")
 @token_required()
 def list_clients():
-    clients = db.session.query(Client).order_by(Client.created_at.desc()).all()
+    q = db.session.query(Client)
+    is_supplier = (request.args.get("is_supplier") or "").strip().lower()
+    if is_supplier in ("1", "true", "sim", "yes", "on"):
+        q = q.filter(Client.is_supplier.is_(True))
+    elif is_supplier in ("0", "false", "nao", "no", "off"):
+        q = q.filter(Client.is_supplier.is_(False))
+    search = (request.args.get("q") or "").strip()
+    if search:
+        like = f"%{search}%"
+        q = q.filter(sa.or_(
+            Client.name.ilike(like),
+            Client.email.ilike(like),
+            Client.phone.ilike(like),
+            Client.cpf_cnpj.ilike(like),
+        ))
+    clients = q.order_by(Client.created_at.desc()).all()
     return jsonify([c.to_dict() for c in clients])
 
 
@@ -99,8 +179,14 @@ def create_client():
     for f in CLIENT_FIELDS:
         if f in ("funnel_id", "partner_id"):
             continue
+        if f in ("is_supplier", "contact", "category", "payment_terms", "avg_delivery_days"):
+            continue
         if f in data:
             setattr(client, f, data[f] if data[f] != "" or f in ("email", "phone", "address") else None)
+    try:
+        _apply_supplier_fields(client, data)
+    except ValueError as e:
+        return jsonify({"detail": str(e)}), 400
     if not client.cpf_cnpj:
         client.cpf_cnpj = None
     if not client.funnel_status:
@@ -126,6 +212,7 @@ def create_client():
     except IntegrityError:
         db.session.rollback()
         return jsonify({"detail": "cpf_cnpj ja cadastrado"}), 400
+    ensure_supplier_mirror(client)
     return jsonify(client.to_dict()), 201
 
 
@@ -306,8 +393,14 @@ def update_client(client_id):
     for f in CLIENT_FIELDS:
         if f in ("funnel_id", "partner_id"):
             continue
+        if f in ("is_supplier", "contact", "category", "payment_terms", "avg_delivery_days"):
+            continue
         if f in data:
             setattr(client, f, data[f])
+    try:
+        _apply_supplier_fields(client, data)
+    except ValueError as e:
+        return jsonify({"detail": str(e)}), 400
     if "funnel_id" in data:
         raw = data.get("funnel_id")
         if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
@@ -375,6 +468,7 @@ def update_client(client_id):
     except IntegrityError:
         db.session.rollback()
         return jsonify({"detail": "cpf_cnpj ja cadastrado"}), 400
+    ensure_supplier_mirror(client)
     return jsonify(client.to_dict())
 
 
@@ -384,6 +478,48 @@ def delete_client(client_id):
     client = db.session.get(Client, client_id)
     if not client:
         return jsonify({"detail": "Cliente nao encontrado"}), 404
+    # Guard do cadastro central: cliente com historico nao pode ser excluido.
+    # Depois de entrar no funil/producao, o registro vira referencia para
+    # Compras, Financeiro, Agenda, Pos-venda etc. — preservar o cadastro.
+    from app.models.models import (
+        Attachment as AttModel,
+        CalendarEvent as EvModel,
+        FinancialRecord as FinModel,
+        Interaction as IntModel,
+        NegotiationItem as ItemModel,
+        PurchaseOrder as POModel,
+        ServiceTicket as TickModel,
+        Supplier as SupModel,
+    )
+    counts = {
+        "projeto(s)": db.session.query(Project).filter_by(client_id=client_id).count(),
+        "lancamento(s) financeiro(s)": db.session.query(FinModel).filter_by(client_id=client_id).count(),
+        "evento(s) de agenda": db.session.query(EvModel).filter_by(client_id=client_id).count(),
+        "chamado(s) de pos-venda": db.session.query(TickModel).filter_by(client_id=client_id).count(),
+        "item(ns) de negociacao": db.session.query(ItemModel).filter_by(client_id=client_id).count(),
+        "interacao(oes)": db.session.query(IntModel).filter_by(client_id=client_id).count(),
+        "anexo(s)": db.session.query(AttModel).filter_by(client_id=client_id).count(),
+    }
+    # Espelho como fornecedor: pedidos/lancamentos vinculados ao espelho
+    # tambem bloqueiam a exclusao do cliente.
+    try:
+        mirror = db.session.query(SupModel).filter_by(client_id=client_id).first()
+        if mirror:
+            po = db.session.query(POModel).filter_by(supplier_id=mirror.id).count()
+            fs = db.session.query(FinModel).filter_by(supplier_id=mirror.id).count()
+            if po:
+                counts["pedido(s) de compra como fornecedor"] = po
+            if fs:
+                counts["lancamento(s) como fornecedor"] = fs
+    except Exception:
+        pass
+    linked = {k: v for k, v in counts.items() if v}
+    if linked:
+        parts = ", ".join(f"{v} {k}" for k, v in linked.items())
+        return jsonify({
+            "detail": f"Cliente possui {parts} e nao pode ser excluido. "
+                      "O cadastro central preserva o historico; remova os vinculos ou desative o registro."
+        }), 400
     db.session.delete(client)
     db.session.commit()
     return jsonify({"ok": True})
