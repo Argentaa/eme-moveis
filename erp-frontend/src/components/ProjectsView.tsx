@@ -1148,7 +1148,7 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
-                  <p className="text-[11px] text-zinc-500 font-mono mt-1">Clientes pré-cadastrados na aba Clientes · {clients.length} cadastrado(s)</p>
+                  <p className="text-[11px] text-zinc-500 font-mono mt-1">Clientes pré-cadastrados no Comercial · {clients.length} cadastrado(s)</p>
                 </div>
                 {funnels.length > 1 && (
                   <div className="space-y-2 font-sans">

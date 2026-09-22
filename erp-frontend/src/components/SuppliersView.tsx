@@ -152,7 +152,7 @@ export default function SuppliersView({ userRole }: SuppliersViewProps) {
     return (
       <div className="glass-panel p-8 rounded-lg text-center border border-zinc-800">
         <ShieldAlert className="w-10 h-10 text-zinc-500 mx-auto mb-3" />
-        <p className="text-zinc-400 font-mono text-sm">Sem acesso a Fornecedores.</p>
+        <p className="text-zinc-400 font-mono text-sm">Sem acesso a Clientes/Fornecedores.</p>
       </div>
     );
   }
@@ -163,9 +163,9 @@ export default function SuppliersView({ userRole }: SuppliersViewProps) {
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-serif text-white tracking-wide flex items-center gap-3">
-            <Truck className="w-7 h-7 text-zinc-400" /> Fornecedores
+            <Truck className="w-7 h-7 text-zinc-400" /> Clientes/Fornecedores
           </h1>
-          <p className="text-sm text-zinc-400 font-mono mt-1">Cadastro centralizado — usado em Compras e Financeiro. Cadastre aqui para selecionar no pedido.</p>
+          <p className="text-sm text-zinc-400 font-mono mt-1">Cadastro centralizado de clientes e fornecedores — usado no Comercial, Compras, Produção e Financeiro. Cadastre aqui para selecionar nos outros módulos.</p>
         </div>
         <button
           onClick={handleOpenCreate}

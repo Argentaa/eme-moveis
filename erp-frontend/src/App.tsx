@@ -56,11 +56,11 @@ interface TabItem {
 }
 
 const TABS: TabItem[] = [
-  { id: 'dashboard', label: 'Painel Geral', icon: Layers, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
-  { id: 'clients', label: 'Clientes', icon: Users, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
-  { id: 'suppliers', label: 'Fornecedores', icon: Truck, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
+  { id: 'dashboard', label: 'Dashboard Executivo', icon: Layers, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
+  { id: 'clients', label: 'Comercial', icon: Users, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
+  { id: 'financial', label: 'Financeiro', icon: Landmark, roles: ['ADMIN', 'GERENTE'] },
   { id: 'projects', label: 'Produção', icon: Building2, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
-  { id: 'financial', label: 'Financeiro Caixa', icon: Landmark, roles: ['ADMIN', 'GERENTE'] },
+  { id: 'suppliers', label: 'Clientes/Fornecedores', icon: Truck, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
   { id: 'stock', label: 'Estoque', icon: Package, roles: ['ADMIN', 'GERENTE', 'ESTOQUE', 'PROJETISTA'] },
   { id: 'purchases', label: 'Compras', icon: ShoppingCart, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
   { id: 'tickets', label: 'Pós-venda', icon: Wrench, roles: ['ADMIN', 'GERENTE'] },

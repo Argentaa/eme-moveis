@@ -568,8 +568,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       {/* Top Bar Actions */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-serif text-white tracking-wide">Cadastro de Clientes</h1>
-          <p className="text-sm text-zinc-400 font-mono mt-1">Gerenciamento das informações dos clientes da marcenaria.</p>
+          <h1 className="text-3xl font-serif text-white tracking-wide">Comercial</h1>
+          <p className="text-sm text-zinc-400 font-mono mt-1">Funil de vendas e negociações da marcenaria.</p>
         </div>
         
         <div className="flex items-center gap-2 flex-wrap">

@@ -29,8 +29,8 @@ const TICKET_STATUSES = [
 
 const AREAS: { id: ReportArea; label: string; icon: React.ComponentType<any>; description: string }[] = [
   { id: 'financial', label: 'Financeiro', icon: Landmark, description: 'Entradas, saídas e fluxo de caixa' },
-  { id: 'clients', label: 'Clientes', icon: Users, description: 'Cadastro e histórico de clientes' },
-  { id: 'projects', label: 'Projetos', icon: Building2, description: 'Ambientes e status de produção' },
+  { id: 'clients', label: 'Comercial', icon: Users, description: 'Funil de vendas e histórico de negociações' },
+  { id: 'projects', label: 'Produção', icon: Building2, description: 'Ambientes e status de produção' },
   { id: 'stock', label: 'Estoque', icon: Package, description: 'Itens e movimentações de estoque' },
   { id: 'dre', label: 'DRE', icon: Landmark, description: 'Demonstrativo de Resultado do Exercício' },
   { id: 'crm', label: 'CRM', icon: Users, description: 'Negociações, conversão, ticket médio e fluxo de caixa' },

@@ -964,7 +964,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
                   <ShoppingCart className="w-5 h-5" />
                   {editingId ? `Editar ${orders.find((o) => o.id === editingId)?.number || 'Pedido'}` : 'Novo Pedido'}
                 </h3>
-                <p className="text-xs text-zinc-400 font-mono">Fornecedor deve estar pré-cadastrado na aba Fornecedores · Use a busca</p>
+                <p className="text-xs text-zinc-400 font-mono">Fornecedor deve estar pré-cadastrado em Clientes/Fornecedores · Use a busca</p>
               </div>
               <button onClick={() => setIsModalOpen(false)} className="p-2 text-zinc-500 hover:text-white rounded cursor-pointer">
                 <X className="w-5 h-5" />
@@ -1000,7 +1000,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
                           </option>
                         ))}
                       </select>
-                      {suppliers.length === 0 && <p className="text-[11px] text-amber-500 font-mono">Nenhum fornecedor cadastrado. Cadastre na aba Fornecedores ou use o botão +.</p>}
+                      {suppliers.length === 0 && <p className="text-[11px] text-amber-500 font-mono">Nenhum fornecedor cadastrado. Cadastre em Clientes/Fornecedores ou use o botão +.</p>}
                     </div>
                     <button
                       type="button"
@@ -1011,7 +1011,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
                       <Plus className="w-4 h-4" />
                     </button>
                   </div>
-                  <p className="text-[11px] text-zinc-500 font-mono">Dica: Gerencie fornecedores na aba lateral Fornecedores.</p>
+                  <p className="text-[11px] text-zinc-500 font-mono">Dica: Gerencie fornecedores em Clientes/Fornecedores.</p>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider">Status</label>
@@ -1220,7 +1220,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
                 />
               </div>
-              <p className="text-[11px] text-zinc-500 font-mono">Você poderá completar dados na aba Fornecedores.</p>
+              <p className="text-[11px] text-zinc-500 font-mono">Você poderá completar dados em Clientes/Fornecedores.</p>
               <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800">
                 <button type="button" onClick={() => setIsSupplierModalOpen(false)} className="px-4 py-2 text-xs bg-zinc-900 text-zinc-300 hover:text-white rounded border border-zinc-800 cursor-pointer font-mono">
                   Cancelar
