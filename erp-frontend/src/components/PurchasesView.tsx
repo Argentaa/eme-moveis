@@ -35,8 +35,8 @@ import {
   LineChart,
   Line,
 } from 'recharts';
-import { purchaseService, supplierService, stockService, getApiErrorMessage } from '../services/api';
-import { PurchaseOrder, Supplier, StockItem } from '../types';
+import { purchaseService, supplierService, vendorService, stockService, getApiErrorMessage } from '../services/api';
+import { PurchaseOrder, Vendor, StockItem } from '../types';
 
 interface PurchasesViewProps {
   userRole: string;
@@ -118,7 +118,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
   const canManage = allowedRoles.includes(userRole);
 
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [suppliers, setSuppliers] = useState<Vendor[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -146,7 +146,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
     try {
       const [o, s, st] = await Promise.all([
         purchaseService.list(),
-        supplierService.getAll().catch(() => [] as Supplier[]),
+        vendorService.list().catch(() => [] as Vendor[]),
         stockService.getAll().catch(() => [] as StockItem[]),
       ]);
       setOrders(o);
@@ -424,7 +424,10 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
     setSupplierSaving(true);
     try {
       const sup = await supplierService.create({ name: newSupplierName.trim(), cnpj: newSupplierCnpj.trim() || undefined });
-      setSuppliers(prev => [...prev, sup].sort((a,b) => a.name.localeCompare(b.name)));
+      // Recarrega a lista unificada (inclui espelhos de clientes-fornecedores)
+      vendorService.list().then(v => setSuppliers(v)).catch(() => {
+        setSuppliers(prev => [...prev, { ...sup, source: 'supplier' as const }].sort((a,b) => a.name.localeCompare(b.name)));
+      });
       setFormData(prev => ({ ...prev, supplier_id: sup.id }));
       setIsSupplierModalOpen(false);
       setNewSupplierName('');

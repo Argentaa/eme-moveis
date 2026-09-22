@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Truck, Plus, Search, Edit3, Trash2, RefreshCw, ShieldAlert, Building2, Package, CreditCard, Clock, Mail, Phone, X } from 'lucide-react';
-import { supplierService, purchaseService, getApiErrorMessage } from '../services/api';
-import { Supplier, PurchaseOrder } from '../types';
+import { supplierService, purchaseService, clientService, getApiErrorMessage } from '../services/api';
+import { Supplier, Client, PurchaseOrder } from '../types';
 
 interface SuppliersViewProps {
   userRole: string;
@@ -26,6 +26,9 @@ export default function SuppliersView({ userRole }: SuppliersViewProps) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('TODOS');
+  // Abas do cadastro central: fornecedores independentes vs clientes-fornecedores
+  const [activeTab, setActiveTab] = useState<'SUPPLIERS' | 'CLIENTS'>('SUPPLIERS');
+  const [clientSuppliers, setClientSuppliers] = useState<Client[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -35,12 +38,14 @@ export default function SuppliersView({ userRole }: SuppliersViewProps) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [sups, ords] = await Promise.all([
+      const [sups, ords, cliSups] = await Promise.all([
         supplierService.getAll().catch(() => [] as Supplier[]),
         purchaseService.list().catch(() => [] as PurchaseOrder[]),
+        clientService.getAll({ is_supplier: '1' }).catch(() => [] as Client[]),
       ]);
       setSuppliers(sups);
       setOrders(ords as PurchaseOrder[]);
+      setClientSuppliers(cliSups);
     } finally { setLoading(false); }
   };
 
@@ -60,6 +65,17 @@ export default function SuppliersView({ userRole }: SuppliersViewProps) {
       return matchesCat && matchesSearch;
     });
   }, [suppliers, search, categoryFilter]);
+
+  const filteredClients = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return clientSuppliers;
+    return clientSuppliers.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      (c.cpf_cnpj || '').toLowerCase().includes(q) ||
+      (c.email || '').toLowerCase().includes(q) ||
+      (c.phone || '').toLowerCase().includes(q)
+    );
+  }, [clientSuppliers, search]);
 
   const stats = useMemo(() => {
     const totalOrdersBySupplier = new Map<string, number>();
@@ -210,6 +226,56 @@ export default function SuppliersView({ userRole }: SuppliersViewProps) {
         </div>
       </div>
 
+      {/* Abas do cadastro central */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setActiveTab('SUPPLIERS')}
+          className={`px-4 py-2 rounded text-xs font-mono transition cursor-pointer ${activeTab === 'SUPPLIERS' ? 'bg-red-600 text-white font-bold' : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'}`}
+        >
+          Fornecedores ({suppliers.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('CLIENTS')}
+          className={`px-4 py-2 rounded text-xs font-mono transition cursor-pointer ${activeTab === 'CLIENTS' ? 'bg-red-600 text-white font-bold' : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'}`}
+        >
+          Clientes fornecedores ({clientSuppliers.length})
+        </button>
+      </div>
+
+      {activeTab === 'CLIENTS' ? (
+        <div className="glass-panel p-4 rounded-lg">
+          <p className="text-[11px] text-zinc-500 font-mono mb-3">Clientes marcados como fornecedor no Comercial — aparecem em Compras e Financeiro. Para editar, use o Comercial.</p>
+          {filteredClients.length === 0 ? (
+            <p className="text-zinc-500 font-mono text-sm text-center py-8">{clientSuppliers.length === 0 ? 'Nenhum cliente marcado como fornecedor. Marque "Também é fornecedor" no cadastro do cliente, no Comercial.' : 'Nenhum cliente corresponde à busca.'}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="text-xs uppercase text-zinc-500 bg-zinc-950/60 border-b border-zinc-800 font-mono">
+                  <tr>
+                    <th className="py-3 px-4 font-normal">Nome</th>
+                    <th className="py-3 px-4 font-normal">CPF/CNPJ</th>
+                    <th className="py-3 px-4 font-normal">Contato</th>
+                    <th className="py-3 px-4 font-normal">Telefone</th>
+                    <th className="py-3 px-4 font-normal">Categoria</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800 text-sm">
+                  {filteredClients.map(c => (
+                    <tr key={c.id} className="hover:bg-zinc-800/30">
+                      <td className="py-3 px-4 font-sans font-semibold text-white">{c.name}<span className="block text-[10px] font-mono text-zinc-500 truncate max-w-[220px]">{c.email || '—'}</span></td>
+                      <td className="py-3 px-4 font-mono text-xs text-zinc-400">{c.cpf_cnpj || '—'}</td>
+                      <td className="py-3 px-4 text-zinc-300 text-xs">{(c as any).contact || '—'}</td>
+                      <td className="py-3 px-4 font-mono text-xs text-zinc-400">{c.phone || '—'}</td>
+                      <td className="py-3 px-4"><span className="inline-block px-2 py-0.5 text-[11px] font-mono rounded bg-sky-500/10 text-sky-300 border border-sky-500/30">{(c as any).category || '—'}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
       {/* Filters */}
       <div className="glass-panel p-4 rounded-lg flex flex-col md:flex-row gap-4 items-center">
         <div className="relative w-full md:flex-1">
@@ -307,6 +373,8 @@ export default function SuppliersView({ userRole }: SuppliersViewProps) {
             ))}
           </div>
         </>
+      )}
+      </>
       )}
 
       {/* Modal */}

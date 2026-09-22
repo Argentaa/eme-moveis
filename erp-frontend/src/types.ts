@@ -45,6 +45,12 @@ export interface Client {
   lead_source?: string | null;
   campaign?: string | null;
   negotiation_value?: number | null;
+  // Cadastro central: campos de fornecedor (cliente pode ser fornecedor)
+  is_supplier?: boolean;
+  contact?: string;
+  category?: string;
+  payment_terms?: string;
+  avg_delivery_days?: number | null;
 }
 
 export type ProjectStatus = 'ORCAMENTO' | 'PROJETADO' | 'PRODUCAO' | 'MONTAGEM' | 'CONCLUIDO';
@@ -212,6 +218,18 @@ export interface Supplier {
   category: string;
   payment_terms: string;
   avg_delivery_days: number | null;
+}
+
+/**
+ * Fornecedor unificado para selects (Compras/Financeiro): merge da tabela
+ * legada suppliers (source='supplier', id com prefixo 'sup-') com clientes
+ * marcados como fornecedor (source='client', id = client id).
+ */
+export interface Vendor extends Supplier {
+  source: 'supplier' | 'client';
+  client_id?: string | null;
+  is_supplier?: boolean;
+  needs_mirror?: boolean;
 }
 
 export interface PurchaseItem {

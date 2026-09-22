@@ -20,6 +20,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
   const [viewMode, setViewMode] = useState<'LIST' | 'KANBAN'>('KANBAN');
+  // Filtro do cadastro central: todos / so clientes / so fornecedores
+  const [supplierFilter, setSupplierFilter] = useState<'ALL' | 'CLIENTS' | 'SUPPLIERS'>('ALL');
   // Drag and drop do Kanban
   const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
@@ -74,6 +76,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     lead_source: '',
     campaign: '',
     partner_id: '' as string,
+    is_supplier: false as boolean,
   });
   const [submitError, setSubmitError] = useState('');
 
@@ -165,6 +168,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       lead_source: '',
       campaign: '',
       partner_id: '',
+      is_supplier: false,
     });
     setSubmitError('');
     setAddingSource(false);
@@ -189,6 +193,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       lead_source: client.lead_source || '',
       campaign: client.campaign || '',
       partner_id: (client as any).partner_id || '',
+      is_supplier: !!(client as any).is_supplier,
     });
     setSubmitError('');
     setAddingSource(false);
@@ -213,6 +218,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         funnel_id: formData.funnel_id || undefined,
         partner_id: formData.partner_id || undefined,
         estimated_value: formData.estimated_value !== '' ? Number(formData.estimated_value) : undefined,
+        is_supplier: !!formData.is_supplier,
       };
       if (editingClient) {
         await clientService.update(editingClient.id, payload);
@@ -244,11 +250,13 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   };
 
   // Filter clients
-  const filteredClients = clients.filter(c =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.cpf_cnpj.includes(searchQuery)
-  );
+  const filteredClients = clients.filter(c => {
+    if (supplierFilter === 'SUPPLIERS' && !(c as any).is_supplier) return false;
+    if (supplierFilter === 'CLIENTS' && (c as any).is_supplier) return false;
+    return c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.cpf_cnpj.includes(searchQuery);
+  });
 
   const handleMarkLost = async () => {
     if (!lostModalClient) return;
@@ -647,6 +655,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
             className="w-full bg-zinc-900 border border-zinc-805 text-white pl-10 pr-4 py-2 text-sm rounded focus:outline-none focus:border-red-600 font-sans"
           />
         </div>
+        <select
+          value={supplierFilter}
+          onChange={e => setSupplierFilter(e.target.value as 'ALL' | 'CLIENTS' | 'SUPPLIERS')}
+          className="bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-xs focus:outline-none focus:border-red-600 font-mono"
+          title="Filtrar cadastro central"
+        >
+          <option value="ALL">Todos</option>
+          <option value="CLIENTS">Só clientes</option>
+          <option value="SUPPLIERS">Só fornecedores</option>
+        </select>
         <div className="text-xs text-zinc-400 font-mono w-full md:w-auto text-right">
           Exibindo {filteredClients.length} de {clients.length} corporativos
         </div>
@@ -745,6 +763,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       >
                         <h4 className="text-sm font-semibold text-zinc-100 group-hover:text-white">{client.name}</h4>
                         {(client as any).partner_name && <span className="inline-flex items-center mt-1 text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded">🤝 {(client as any).partner_name}</span>}
+                        {(client as any).is_supplier && <span className="inline-flex items-center mt-1 ml-1 text-[10px] font-mono text-sky-300 bg-sky-500/10 border border-sky-500/30 px-1.5 py-0.5 rounded">🏭 Fornecedor</span>}
                         {client.email && <p className="text-[11px] text-zinc-500 mt-0.5 truncate">✉ {client.email}</p>}
                         {client.phone && <p className="text-[11px] text-zinc-500 truncate">📞 {client.phone}</p>}
                         {displayValue > 0 && (
@@ -854,6 +873,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                   <tr key={client.id} className="hover:bg-zinc-900/40 transition">
                     <td className="py-4 px-6 font-sans">
                       <div className="font-semibold text-white text-base">{client.name}</div>
+                      {(client as any).is_supplier && <span className="inline-flex items-center mt-1 text-[10px] font-mono text-sky-300 bg-sky-500/10 border border-sky-500/30 px-1.5 py-0.5 rounded">🏭 Fornecedor</span>}
                       <span className="text-xs font-mono text-zinc-500 block mt-0.5">ID: {client.id}</span>
                     </td>
                     <td className="py-4 px-6 font-mono text-xs text-zinc-400">
@@ -1446,6 +1466,20 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                     <option value="__nova_fonte__">+ Nova fonte...</option>
                   </select>
                 )}
+              </div>
+
+              <div className="flex items-start gap-3 bg-zinc-900/60 border border-zinc-800 rounded px-4 py-3">
+                <input
+                  type="checkbox"
+                  id="client-is-supplier"
+                  checked={!!formData.is_supplier}
+                  onChange={(e) => setFormData({ ...formData, is_supplier: e.target.checked })}
+                  className="mt-1 w-4 h-4 accent-red-600 cursor-pointer"
+                />
+                <label htmlFor="client-is-supplier" className="text-xs text-zinc-300 font-sans cursor-pointer">
+                  <span className="font-semibold text-white">Também é fornecedor</span>
+                  <span className="block text-[11px] text-zinc-500 font-mono mt-0.5">Aparece em Compras e Financeiro via cadastro central.</span>
+                </label>
               </div>
 
               <div className="sticky bottom-0 z-10 -mx-7 px-7 pt-4 pb-4 flex justify-end gap-3 border-t border-zinc-800 mt-6 md:mt-8 bg-zinc-950/95">

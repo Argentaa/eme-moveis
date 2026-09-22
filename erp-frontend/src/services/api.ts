@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -93,8 +93,8 @@ export const authService = {
 
 // Client Services
 export const clientService = {
-  async getAll(): Promise<Client[]> {
-    const response = await api.get('/api/clients');
+  async getAll(params?: { is_supplier?: string; q?: string }): Promise<Client[]> {
+    const response = await api.get('/api/clients', { params });
     return response.data;
   },
 
@@ -715,6 +715,15 @@ export const supplierService = {
 
   async remove(id: string): Promise<any> {
     const response = await api.delete(`/api/suppliers/${id}`);
+    return response.data;
+  },
+};
+
+// Vendor Services — unifica fornecedores legados + clientes marcados como
+// fornecedor, para uso nos selects de Compras/Financeiro.
+export const vendorService = {
+  async list(): Promise<Vendor[]> {
+    const response = await api.get('/api/vendors');
     return response.data;
   },
 };

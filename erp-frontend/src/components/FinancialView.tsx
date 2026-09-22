@@ -5,8 +5,8 @@ import {
   Receipt, FileText, FileType, X, Loader2, ChevronDown, ChevronRight, UserX,
   Target, Truck, BarChart3, TrendingUp
 } from 'lucide-react';
-import { financialService, projectService, stockService, recurringService, clientService, supplierService, budgetService, reportService, bankAccountService, getApiErrorMessage } from '../services/api';
-import { FinancialRecord, Project, Category, Supplier, BudgetGoal, BudgetAnalysis, Client, ReportResult, BankAccount, BankOverview } from '../types';
+import { financialService, projectService, stockService, recurringService, clientService, supplierService, vendorService, budgetService, reportService, bankAccountService, getApiErrorMessage } from '../services/api';
+import { FinancialRecord, Project, Category, Vendor, BudgetGoal, BudgetAnalysis, Client, ReportResult, BankAccount, BankOverview } from '../types';
 
 interface FinancialViewProps {
   userRole: string;
@@ -67,7 +67,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   const [overdueLoading, setOverdueLoading] = useState(true);
   const [expandedClientId, setExpandedClientId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState('');
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [suppliers, setSuppliers] = useState<Vendor[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
 
   // Fluxo de caixa
@@ -182,7 +182,9 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
     }
     try {
       const sup = await supplierService.create({ name: newSupplierName.trim() });
-      setSuppliers(prev => [...prev, sup]);
+      vendorService.list().then(v => setSuppliers(v)).catch(() => {
+        setSuppliers(prev => [...prev, { ...sup, source: 'supplier' as const }]);
+      });
       setFormData(prev => ({ ...prev, supplier_id: sup.id }));
       setIsSupplierModalOpen(false);
       setNewSupplierName('');
@@ -280,7 +282,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         financialService.getAll(),
         projectService.getAll(),
         stockService.getCategories('FINANCIAL'),
-        supplierService.getAll().catch(() => []),
+        vendorService.list().catch(() => []),
         clientService.getAll().catch(() => []),
       ]);
       setRecords(fins);
