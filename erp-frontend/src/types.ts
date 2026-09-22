@@ -394,6 +394,8 @@ export interface ChangelogEntry {
   entry_date: string;
   created_by: string;
   created_at: string;
+  /** false/undefined = novidade ainda não lida por este usuário */
+  read?: boolean;
 }
 
 export interface FunnelColumn {

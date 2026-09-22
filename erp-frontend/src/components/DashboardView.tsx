@@ -33,6 +33,8 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
   const today = new Date();
   const [selectedMonth, setSelectedMonth] = useState(today.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(today.getFullYear());
+  // Visualização do demonstrativo de fluxo de caixa: realizado x projetado
+  const [cfMode, setCfMode] = useState<'realizado' | 'projetado'>('realizado');
 
   const MONTH_NAMES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
                        'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -224,34 +226,31 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
     year: 'numeric',
   });
 
-  const timeChartData = Array.from(
-    financialsByMonth
-      .filter(f => f.status === 'PAGO')
-      .reduce((acc, f) => {
-        const parsedDate = new Date(`${f.date}T00:00:00`);
-        if (Number.isNaN(parsedDate.getTime())) return acc;
+  // Demonstrativo mensal do ano selecionado, mês a mês.
+  // Realizado = só o que foi pago/recebido; Projetado = inclui o que está em aberto.
+  const timeChartData = Array.from({ length: 12 }, (_, i) => ({
+    name: new Date(selectedYear, i, 1).toLocaleDateString('pt-BR', { month: 'short' }),
+    entradas: 0,
+    saidas: 0,
+  }));
 
-        const key = `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, '0')}`;
-        const existing = acc.get(key) || {
-          name: parsedDate.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
-          entradas: 0,
-          saidas: 0,
-        };
-
-        if (f.type === 'ENTRADA') {
-          existing.entradas += f.amount;
-        } else {
-          existing.saidas += f.amount;
-        }
-
-        acc.set(key, existing);
-        return acc;
-      }, new Map<string, { name: string; entradas: number; saidas: number }>())
-      .entries()
-  )
-    .sort(([a], [b]) => a.localeCompare(b))
-    .slice(-6)
-    .map(([, value]) => value);
+  financials
+    .filter(f => {
+      if (cfMode === 'realizado' && f.status !== 'PAGO') return false;
+      const ref = f.due_date || f.date;
+      const d = new Date(`${ref}T00:00:00`);
+      return !Number.isNaN(d.getTime()) && d.getFullYear() === selectedYear;
+    })
+    .forEach(f => {
+      const ref = f.due_date || f.date;
+      const slot = timeChartData[new Date(`${ref}T00:00:00`).getMonth()];
+      if (!slot) return;
+      if (f.type === 'ENTRADA') {
+        slot.entradas += f.amount;
+      } else {
+        slot.saidas += f.amount;
+      }
+    });
 
   return (
     <div className="space-y-6">
@@ -412,12 +411,30 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         
         {/* Area Chart: Entries vs Exits over time */}
         <div className="glass-panel p-5 rounded-lg lg:col-span-2">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
             <div>
               <h3 className="text-base font-medium text-white">Demonstrativo de Fluxo de Caixa</h3>
-              <p className="text-xs text-zinc-400 font-mono">Histórico Trimestral (valor consolidado)</p>
+              <p className="text-xs text-zinc-400 font-mono">
+                {cfMode === 'projetado' ? 'Projetado' : 'Realizado'} · mensal ({selectedYear}) · BRL (R$)
+              </p>
             </div>
-            <span className="text-xs font-mono text-red-500">BRL (R$)</span>
+            <div className="flex items-center rounded border border-zinc-800 overflow-hidden">
+              {(['realizado', 'projetado'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setCfMode(m)}
+                  title={m === 'realizado'
+                    ? 'Somente o que já foi pago/recebido'
+                    : 'Inclui os lançamentos em aberto (previstos)'}
+                  className={`px-3 py-1.5 text-xs font-mono transition cursor-pointer ${
+                    cfMode === m ? 'bg-red-600 text-white font-semibold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {m === 'realizado' ? 'Realizado' : 'Projetado'}
+                </button>
+              ))}
+            </div>
           </div>
           
           <div className="h-64 mt-4 text-xs font-mono">
@@ -440,8 +457,8 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
                   itemStyle={{ fontSize: '11px' }}
                 />
                 <Legend iconSize={8} wrapperStyle={{ paddingTop: '10px' }} />
-                <Area type="monotone" dataKey="entradas" name="Entradas (Pagas)" stroke="#10b981" fillOpacity={1} fill="url(#colorEntradas)" strokeWidth={2} />
-                <Area type="monotone" dataKey="saidas" name="Saídas (Pagas)" stroke="#ef4444" fillOpacity={1} fill="url(#colorSaidas)" strokeWidth={2} />
+                <Area type="monotone" dataKey="entradas" name={cfMode === 'projetado' ? 'Entradas (Previstas)' : 'Entradas (Realizadas)'} stroke="#10b981" fillOpacity={1} fill="url(#colorEntradas)" strokeWidth={2} />
+                <Area type="monotone" dataKey="saidas" name={cfMode === 'projetado' ? 'Saídas (Previstas)' : 'Saídas (Realizadas)'} stroke="#ef4444" fillOpacity={1} fill="url(#colorSaidas)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
           </div>

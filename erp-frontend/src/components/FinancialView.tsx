@@ -74,6 +74,8 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   const [cfData, setCfData] = useState<ReportResult | null>(null);
   const [cfLoading, setCfLoading] = useState(false);
   const [cfYear, setCfYear] = useState(new Date().getFullYear());
+  // Demonstração do fluxo de caixa: realizado (pago) x projetado (inclui em aberto)
+  const [cfMode, setCfMode] = useState<'realizado' | 'projetado'>('realizado');
 
   // Orçamento
   const [budgetData, setBudgetData] = useState<BudgetAnalysis | null>(null);
@@ -328,12 +330,12 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   useEffect(() => {
     let active = true;
     setCfLoading(true);
-    reportService.getReport('cash-flow', { year: String(cfYear) })
+    reportService.getReport('cash-flow', { year: String(cfYear), mode: cfMode })
       .then((data) => { if (active) setCfData(data); })
       .catch(() => { if (active) setCfData(null); })
       .finally(() => { if (active) setCfLoading(false); });
     return () => { active = false; };
-  }, [cfYear]);
+  }, [cfYear, cfMode]);
 
   useEffect(() => {
     let active = true;
@@ -701,6 +703,23 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                 <option key={y} value={y}>{y}</option>
               ))}
             </select>
+            <div className="flex items-center rounded border border-zinc-800 overflow-hidden">
+              {(['realizado', 'projetado'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setCfMode(m)}
+                  title={m === 'realizado'
+                    ? 'Somente o que já foi pago/recebido'
+                    : 'Inclui os lançamentos em aberto (previstos)'}
+                  className={`px-3 py-1.5 text-xs font-mono transition cursor-pointer ${
+                    cfMode === m ? 'bg-red-600 text-white font-semibold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {m === 'realizado' ? 'Realizado' : 'Projetado'}
+                </button>
+              ))}
+            </div>
             <TrendingUp className="w-4 h-4 text-zinc-600" />
           </div>
         </div>
@@ -731,16 +750,31 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                 <tbody className="divide-y divide-zinc-900">
                   {cfData.rows.map((row: any) => (
                     <tr key={row.month} className="hover:bg-zinc-900/40">
-                      <td className="py-2 pr-4 text-zinc-400">{row.month}</td>
-                      <td className="py-2 pr-4 text-emerald-400">{row.income}</td>
-                      <td className="py-2 pr-4 text-red-500">{row.outcome}</td>
-                      <td className="py-2 pr-4 text-white">{row.balance}</td>
-                      <td className="py-2 pr-4 text-zinc-300">{row.accumulated}</td>
+                      {cfData.columns.map((c) => (
+                        <td
+                          key={c.key}
+                          className={`py-2 pr-4 ${
+                            c.key === 'month' ? 'text-zinc-400'
+                              : c.key === 'income' ? 'text-emerald-400'
+                                : c.key === 'outcome' ? 'text-red-500'
+                                  : c.key === 'balance' ? 'text-white'
+                                    : c.key === 'accumulated' ? 'text-zinc-300'
+                                      : 'text-zinc-500'
+                          }`}
+                        >
+                          {row[c.key]}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            <p className="text-[11px] text-zinc-500 font-mono">
+              {cfMode === 'projetado'
+                ? 'Projetado = realizado + lançamentos em aberto, agrupados pela data de vencimento.'
+                : 'Realizado = somente lançamentos já pagos/recebidos.'}
+            </p>
           </>
         ) : (
           <p className="text-xs text-zinc-500 font-mono">Não foi possível carregar o fluxo de caixa.</p>

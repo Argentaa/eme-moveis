@@ -755,6 +755,30 @@ class ChangelogEntry(db.Model):
                 "created_by": self.created_by or "", "created_at": iso(self.created_at)}
 
 
+class ChangelogRead(db.Model):
+    """Marcacao de leitura das novidades, por usuario (lido / nao lido).
+
+    Uma linha por par (usuario, novidade). A ausencia de linha significa nao lida.
+    """
+    __tablename__ = "changelog_reads"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    user_id = db.Column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    entry_id = db.Column(
+        String(36), ForeignKey("changelog_entries.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    read_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "entry_id", name="uq_changelog_read_user_entry"),
+    )
+
+    def to_dict(self):
+        return {"id": self.id, "user_id": self.user_id, "entry_id": self.entry_id,
+                "read_at": iso(self.read_at)}
+
+
 class ServiceTicket(db.Model):
     __tablename__ = "service_tickets"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -1196,6 +1220,15 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Correção: botão de confirmar escondido nos lançamentos",
      "No formulário de lançamento contábil o botão de confirmar ficava no fim de uma rolagem longa. Agora ele fica fixo na base da janela, sempre visível.",
      "CORRECAO", "2026-09-22"),
+    ("Fluxo de caixa: visões Realizado e Projetado",
+     "O demonstrativo de fluxo de caixa agora tem dois modos: Realizado, que mostra só o que já foi pago ou recebido, e Projetado, que inclui também os lançamentos em aberto. A tabela ganhou as colunas de valores ainda em aberto por mês (a receber e a pagar).",
+     "NOVIDADE", "2026-09-22"),
+    ("Painel Geral: fluxo de caixa mês a mês",
+     "O gráfico de fluxo de caixa do Painel Geral passou a mostrar os 12 meses do ano selecionado, com o mesmo botão para alternar entre Realizado e Projetado.",
+     "MELHORIA", "2026-09-22"),
+    ("Novidades avisa o que você ainda não leu",
+     "O menu Novidades mostra um contador com quantas atualizações você ainda não leu. Ao abrir a aba, as novidades que chegaram ganham o selo NOVA e o contador é zerado. Cada usuário tem o seu próprio controle de leitura.",
+     "NOVIDADE", "2026-09-22"),
 ]
 
 

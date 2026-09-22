@@ -5,6 +5,8 @@ import { ChangelogEntry } from '../types';
 
 interface NovidadesViewProps {
   userRole: string;
+  /** Chamado quando a aba e aberta e as novidades passam a lidas. */
+  onUnreadChange?: (unread: number) => void;
 }
 
 const CATEGORY_META: Record<string, { label: string; cls: string }> = {
@@ -35,8 +37,9 @@ const EMPTY_FORM = {
   entry_date: new Date().toISOString().substring(0, 10),
 };
 
-export default function NovidadesView({ userRole }: NovidadesViewProps) {
+export default function NovidadesView({ userRole, onUnreadChange }: NovidadesViewProps) {
   const [entries, setEntries] = useState<ChangelogEntry[]>([]);
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -51,7 +54,18 @@ export default function NovidadesView({ userRole }: NovidadesViewProps) {
     setLoading(true);
     setLoadError('');
     try {
-      setEntries(await changelogService.list());
+      const rows = await changelogService.list();
+      // O que estava nao lido ganha o selo NOVA nesta visita.
+      const unread = new Set(rows.filter((e) => e.read === false).map((e) => e.id));
+      setNewIds(unread);
+      setEntries(rows);
+      if (unread.size > 0) {
+        // Abrir a aba marca como lido (limpa o badge do menu), mas o selo
+        // NOVA continua na tela para o usuario ver o que mudou.
+        changelogService.markAllRead()
+          .then(() => onUnreadChange?.(0))
+          .catch(() => { /* o badge se corrige na proxima visita */ });
+      }
     } catch (err) {
       setLoadError(getApiErrorMessage(err, 'Erro ao carregar novidades.'));
     } finally {
@@ -167,12 +181,19 @@ export default function NovidadesView({ userRole }: NovidadesViewProps) {
             return (
               <div
                 key={entry.id}
-                className="glass-panel rounded-lg p-5 flex flex-col gap-3 border-t-2 border-t-red-800/50"
+                className={`glass-panel rounded-lg p-5 flex flex-col gap-3 border-t-2 ${newIds.has(entry.id) ? 'border-t-red-500' : 'border-t-red-800/50'}`}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded border shrink-0 ${meta.cls}`}>
-                    {meta.label}
-                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded border shrink-0 ${meta.cls}`}>
+                      {meta.label}
+                    </span>
+                    {newIds.has(entry.id) && (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded border shrink-0 bg-red-600/20 text-red-300 border-red-500/50 font-bold">
+                        NOVA
+                      </span>
+                    )}
+                  </div>
                   {canManage && (
                     <div className="flex gap-1 shrink-0">
                       <button

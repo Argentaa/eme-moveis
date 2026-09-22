@@ -927,6 +927,22 @@ export const changelogService = {
     return response.data;
   },
 
+  /** Quantas novidades este usuário ainda não leu (badge do menu). */
+  async unreadCount(): Promise<{ unread: number; count: number }> {
+    const response = await api.get('/api/changelog/unread-count');
+    return response.data;
+  },
+
+  async markAllRead(): Promise<{ ok: boolean; marked: number; unread: number; count: number }> {
+    const response = await api.post('/api/changelog/read-all');
+    return response.data;
+  },
+
+  async markRead(id: string): Promise<{ ok: boolean; unread: number; count: number }> {
+    const response = await api.put(`/api/changelog/${id}/read`);
+    return response.data;
+  },
+
   async create(data: { title: string; content?: string; category?: string; entry_date?: string }): Promise<ChangelogEntry> {
     const response = await api.post('/api/changelog', data);
     return response.data;

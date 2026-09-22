@@ -4,7 +4,8 @@ Contratos replicados do FastAPI original:
 - financial/clients/projects/stock/cash-flow/dre -> ReportResponse
   {title, generated_at, filters_applied, summary[], columns[], rows[]}
 - dre -> tabela por periodo (mensal|trimestral|semestral|anual)
-- cash-flow -> fluxo de caixa mensal (12 meses do ano)
+- cash-flow -> fluxo de caixa mensal (12 meses do ano) em dois modos:
+  realizado (status PAGO) e projetado (PAGO + PENDENTE)
 - crm -> {periodo, negociacoes{...}, conversao{...}, ticket_medio{...},
   fluxo_caixa[], fontes_lead[]}
 - lead-sources -> ReportResponse (origem dos leads: fonte/campanha, conversao e valores)
@@ -535,6 +536,15 @@ def _build_dre():
 
 # ── Fluxo de Caixa ────────────────────────────────────────────
 
+CASH_FLOW_MODES = ("realizado", "projetado")
+
+
+def _cash_flow_mode():
+    """Modo do demonstrativo. Default 'realizado' mantem o comportamento antigo."""
+    mode = (request.args.get("mode") or "realizado").strip().lower()
+    return mode if mode in CASH_FLOW_MODES else "realizado"
+
+
 def _build_cash_flow():
     today = date.today()
     try:
@@ -542,57 +552,77 @@ def _build_cash_flow():
     except (TypeError, ValueError):
         return jsonify({"detail": "year invalido"}), 400
 
-    recs = db.session.query(FinancialRecord).filter(
-        FinancialRecord.status == "PAGO",
-        extract("year", FinancialRecord.date) == year,
-    ).all()
-    per_month = {}
-    for r in recs:
-        m = r.date.month
-        b = per_month.setdefault(m, {"income": 0.0, "outcome": 0.0})
-        v = float(r.amount or 0)
-        if r.type == "ENTRADA":
-            b["income"] += v
-        else:
-            b["outcome"] += v
+    mode = _cash_flow_mode()
+    # Competencia: vencimento quando houver, senao a data do lancamento.
+    # Usar a MESMA referencia nos dois modos faz os meses baterem lado a lado.
+    eff_date = func.coalesce(FinancialRecord.due_date, FinancialRecord.date)
 
-    pend = db.session.query(FinancialRecord).filter(
-        FinancialRecord.status == "PENDENTE",
-        extract("year", FinancialRecord.date) == year,
+    def _bucket(rows):
+        out = {}
+        for r in rows:
+            d = r.due_date or r.date
+            if not d:
+                continue
+            b = out.setdefault(d.month, {"income": 0.0, "outcome": 0.0})
+            v = float(r.amount or 0)
+            if r.type == "ENTRADA":
+                b["income"] += v
+            else:
+                b["outcome"] += v
+        return out
+
+    paid = db.session.query(FinancialRecord).filter(
+        FinancialRecord.status == "PAGO",
+        extract("year", eff_date) == year,
     ).all()
-    pend_in = sum(float(r.amount or 0) for r in pend if r.type == "ENTRADA")
-    pend_out = sum(float(r.amount or 0) for r in pend if r.type == "SAIDA")
+    pending = db.session.query(FinancialRecord).filter(
+        FinancialRecord.status == "PENDENTE",
+        extract("year", eff_date) == year,
+    ).all()
+
+    paid_month = _bucket(paid)
+    pend_month = _bucket(pending)
+    pend_in = sum(v["income"] for v in pend_month.values())
+    pend_out = sum(v["outcome"] for v in pend_month.values())
+    is_proj = mode == "projetado"
 
     result_rows = []
     acc = 0.0
     total_in = 0.0
     total_out = 0.0
     for i in range(1, 13):
-        b = per_month.get(i, {"income": 0.0, "outcome": 0.0})
-        bal = b["income"] - b["outcome"]
+        p = paid_month.get(i, {"income": 0.0, "outcome": 0.0})
+        q = pend_month.get(i, {"income": 0.0, "outcome": 0.0})
+        inc = p["income"] + (q["income"] if is_proj else 0.0)
+        out = p["outcome"] + (q["outcome"] if is_proj else 0.0)
+        bal = inc - out
         acc += bal
-        total_in += b["income"]
-        total_out += b["outcome"]
+        total_in += inc
+        total_out += out
         result_rows.append({
             "month": MONTH_LABELS[i - 1],
-            "income": _fmt_brl(b["income"]),
-            "outcome": _fmt_brl(b["outcome"]),
+            "income": _fmt_brl(inc),
+            "outcome": _fmt_brl(out),
             "balance": _fmt_brl(bal),
             "accumulated": _fmt_brl(acc),
+            "pending_income": _fmt_brl(q["income"]),
+            "pending_outcome": _fmt_brl(q["outcome"]),
         })
 
     saldo = total_in - total_out
     return {
-        "title": "Fluxo de Caixa Mensal",
+        "title": "Fluxo de Caixa Projetado" if is_proj else "Fluxo de Caixa Realizado",
         "generated_at": _now_iso(),
-        "filters_applied": {"year": year},
+        "filters_applied": {"year": year, "mode": mode},
         "summary": [
-            {"label": "Total de Entradas", "value": _fmt_brl(total_in), "tone": "positive"},
-            {"label": "Total de Saidas", "value": _fmt_brl(total_out), "tone": "negative"},
-            {"label": "Saldo do Ano", "value": _fmt_brl(saldo),
-             "tone": "positive" if saldo >= 0 else "negative"},
-            {"label": "Pendente a Receber", "value": _fmt_brl(pend_in), "tone": "neutral"},
-            {"label": "Pendente a Pagar", "value": _fmt_brl(pend_out), "tone": "neutral"},
+            {"label": "Entradas Previstas" if is_proj else "Entradas Realizadas",
+             "value": _fmt_brl(total_in), "tone": "positive"},
+            {"label": "Saídas Previstas" if is_proj else "Saídas Realizadas",
+             "value": _fmt_brl(total_out), "tone": "negative"},
+            {"label": "Saldo Projetado" if is_proj else "Saldo Realizado",
+             "value": _fmt_brl(saldo), "tone": "positive" if saldo >= 0 else "negative"},
+            {"label": "A Receber (em aberto)", "value": _fmt_brl(pend_in), "tone": "neutral"},
+            {"label": "A Pagar (em aberto)", "value": _fmt_brl(pend_out), "tone": "neutral"},
         ],
         "columns": [
             {"key": "month", "label": "Mês"},
@@ -600,6 +630,8 @@ def _build_cash_flow():
             {"key": "outcome", "label": "Saídas"},
             {"key": "balance", "label": "Saldo do Mês"},
             {"key": "accumulated", "label": "Saldo Acumulado"},
+            {"key": "pending_income", "label": "A Receber (aberto)"},
+            {"key": "pending_outcome", "label": "A Pagar (aberto)"},
         ],
         "rows": result_rows,
     }

@@ -10,7 +10,7 @@ import logoFull from './assets/logo-eme-full.png';
 import logoIcon from './assets/logo-eme-icon.png';
 
 // Services
-import { authService, getApiErrorMessage } from './services/api';
+import { authService, changelogService, getApiErrorMessage } from './services/api';
 import { User as UserType } from './types';
 
 // Views
@@ -92,6 +92,20 @@ export default function App() {
     return 'dashboard';
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [unreadNews, setUnreadNews] = useState(0);
+
+  // Badge de novidades nao lidas (por usuario). Revalida quando a sessao muda.
+  useEffect(() => {
+    if (!token) {
+      setUnreadNews(0);
+      return;
+    }
+    let active = true;
+    changelogService.unreadCount()
+      .then((r) => { if (active) setUnreadNews(r.unread || 0); })
+      .catch(() => { if (active) setUnreadNews(0); });
+    return () => { active = false; };
+  }, [token]);
   const [theme, setTheme] = useState<ThemeMode>(() => {
     const stored = localStorage.getItem('eme_theme');
     if (stored === 'light' || stored === 'dark') return stored;
@@ -311,7 +325,15 @@ export default function App() {
                   }`}
                 >
                   <TabIcon className={`w-4 h-4 shrink-0 transition ${isSelected ? 'text-red-500' : 'text-zinc-500 group-hover:text-white'}`} />
-                  <span>{tab.label}</span>
+                  <span className="flex-1">{tab.label}</span>
+                  {tab.id === 'novidades' && unreadNews > 0 && (
+                    <span
+                      className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-red-600 text-white text-[10px] font-mono font-bold flex items-center justify-center"
+                      title={`${unreadNews} novidade(s) nao lida(s)`}
+                    >
+                      {unreadNews > 99 ? '99+' : unreadNews}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -390,7 +412,7 @@ export default function App() {
               {activeTab === 'tickets' && <TicketsView userRole={currentUser.role} />}
               {activeTab === 'reports' && <ReportsView userRole={currentUser.role} />}
               {activeTab === 'calendar' && <CalendarView userRole={currentUser.role} />}
-              {activeTab === 'novidades' && <NovidadesView userRole={currentUser.role} />}
+              {activeTab === 'novidades' && <NovidadesView userRole={currentUser.role} onUnreadChange={setUnreadNews} />}
               {activeTab === 'users' && <UsersView currentUser={currentUser} />}
             </motion.div>
           </AnimatePresence>
