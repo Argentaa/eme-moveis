@@ -8,6 +8,16 @@ import {
 import { projectService, clientService, funnelService, productionService, workerService, machineService, attachmentService, checklistService, getApiErrorMessage } from '../services/api';
 import { Project, Client, ProjectStatus, ProjectStep, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, Attachment, ChecklistItem, Funnel, FunnelColumn } from '../types';
 
+import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+
+/** Abas do módulo Produção, conforme a spec do cliente (17/09). */
+const PRODUCTION_TABS: ModuleTab[] = [
+  { id: 'dashboard', label: 'Dashboard da produção' },
+  { id: 'kanban', label: 'Kanban', ready: true },
+  { id: 'assemblies', label: 'Montagens' },
+  { id: 'issues', label: 'Pendências' },
+];
+
 interface ProjectsViewProps {
   userRole: string;
 }
@@ -46,6 +56,7 @@ function formatDateBR(d: string | null | undefined): string {
 }
 
 export default function ProjectsView({ userRole }: ProjectsViewProps) {
+  const [activeTab, setActiveTab] = useModuleTab('production', PRODUCTION_TABS, 'kanban');
   const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -797,6 +808,12 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
           )}
         </div>
       </div>
+      {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
+      <ModuleTabs tabs={PRODUCTION_TABS} active={activeTab} onChange={setActiveTab} />
+      <ActiveTabPlaceholder tabs={PRODUCTION_TABS} active={activeTab} />
+
+      {activeTab === 'kanban' && (<>
+
       {/* Filter panel */}
       <div className="glass-panel p-4 rounded-lg flex flex-col md:flex-row gap-4 items-center">
         <div className="relative w-full md:flex-1">
@@ -1095,6 +1112,8 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
           </div>
         </div>
       )}
+      </>)}
+
       {/* Creation Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">

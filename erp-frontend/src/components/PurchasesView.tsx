@@ -38,6 +38,16 @@ import {
 import { purchaseService, supplierService, vendorService, stockService, getApiErrorMessage } from '../services/api';
 import { PurchaseOrder, Vendor, StockItem } from '../types';
 
+import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+
+/** Abas do módulo Compras, conforme a spec do cliente (17/09). */
+const PURCHASES_TABS: ModuleTab[] = [
+  { id: 'dashboard', label: 'Dashboard', ready: true },
+  { id: 'quotes', label: 'Cotações' },
+  { id: 'orders', label: 'Compras', ready: true },
+  { id: 'logistics', label: 'Calendário logístico' },
+];
+
 interface PurchasesViewProps {
   userRole: string;
 }
@@ -117,6 +127,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
   const allowedRoles = ['ADMIN', 'GERENTE', 'ESTOQUE'];
   const canManage = allowedRoles.includes(userRole);
 
+  const [activeTab, setActiveTab] = useModuleTab('purchases', PURCHASES_TABS, 'dashboard');
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Vendor[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
@@ -529,6 +540,12 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
         </button>
       </div>
 
+      {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
+      <ModuleTabs tabs={PURCHASES_TABS} active={activeTab} onChange={setActiveTab} />
+      <ActiveTabPlaceholder tabs={PURCHASES_TABS} active={activeTab} />
+
+      {activeTab === 'dashboard' && (<>
+
       {/* ── Dashboard de Compras (fiel ao DASHBOARD do Sheets) ─────────── */}
       <div className="space-y-4">
         {/* Linha 1 — DASHBOARD A7/M7: Compras Mês/Ano + Cotações */}
@@ -790,6 +807,10 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
         </div>
       </div>
 
+      </>)}
+
+      {activeTab === 'orders' && (<>
+
       {/* Filters */}
       <div className="glass-panel p-4 rounded-lg flex flex-col md:flex-row gap-4 items-center bg-zinc-900 border border-zinc-800">
         <div className="relative w-full md:flex-1">
@@ -956,6 +977,8 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
           </div>
         </>
       )}
+
+      </>)}
 
       {/* Modal Novo/Editar */}
       {isModalOpen && (

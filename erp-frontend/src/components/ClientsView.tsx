@@ -9,11 +9,24 @@ import { clientService, projectService, funnelService, calendarService, leadOpti
 import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner } from '../types';
 import ClientDetailModal from './ClientDetailModal';
 
+import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+
+/** Abas do módulo Comercial, conforme a spec do cliente (17/09). */
+const COMMERCIAL_TABS: ModuleTab[] = [
+  { id: 'dashboard', label: 'Dashboard comercial' },
+  { id: 'funnel', label: 'Funil de vendas', ready: true },
+  { id: 'proposals', label: 'Orçamentos/Propostas' },
+  { id: 'commissions', label: 'Comissões' },
+  { id: 'partners', label: 'Parceiros/Arquitetos' },
+  { id: 'planning', label: 'Planejamento comercial' },
+];
+
 interface ClientsViewProps {
   userRole: string;
 }
 
 export default function ClientsView({ userRole }: ClientsViewProps) {
+  const [activeTab, setActiveTab] = useModuleTab('commercial', COMMERCIAL_TABS, 'funnel');
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -671,6 +684,12 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         </div>
       </div>
 
+      {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
+      <ModuleTabs tabs={COMMERCIAL_TABS} active={activeTab} onChange={setActiveTab} />
+      <ActiveTabPlaceholder tabs={COMMERCIAL_TABS} active={activeTab} />
+
+      {activeTab === 'funnel' && (<>
+
       {/* Filter panel */}
       <div className="glass-panel p-4 rounded-lg flex flex-col md:flex-row gap-4 items-center">
         <div className="relative w-full md:flex-1">
@@ -1008,6 +1027,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
           </div>
         );
       })()}
+
+      </>)}
 
       {/* Modal Converter em Projeto */}
       {convertModalClient && (

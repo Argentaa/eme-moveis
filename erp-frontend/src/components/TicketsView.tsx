@@ -19,6 +19,19 @@ import {
 import { ticketService, clientService, projectService, getApiErrorMessage, api } from '../services/api';
 import { ServiceTicket, Client, Project, User as UserType } from '../types';
 
+import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+
+/** Abas do módulo Pós-venda, conforme a spec do cliente (17/09). */
+const TICKETS_TABS: ModuleTab[] = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'schedule', label: 'Agenda de pós-venda' },
+  { id: 'checkins', label: 'Check-ins' },
+  { id: 'satisfaction', label: 'Pesquisa de satisfação' },
+  { id: 'tickets', label: 'Solicitações/Ocorrências', ready: true },
+  { id: 'warranties', label: 'Garantias' },
+  { id: 'pending', label: 'Pendências' },
+];
+
 interface TicketsViewProps {
   userRole: string;
 }
@@ -100,6 +113,7 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
   const allowedRoles = ['ADMIN', 'GERENTE'];
   const canManage = allowedRoles.includes(userRole);
 
+  const [activeTab, setActiveTab] = useModuleTab('tickets', TICKETS_TABS, 'tickets');
   const [tickets, setTickets] = useState<ServiceTicket[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -350,6 +364,12 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
           <Plus className="w-4 h-4" /> Novo Chamado
         </button>
       </div>
+
+      {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
+      <ModuleTabs tabs={TICKETS_TABS} active={activeTab} onChange={setActiveTab} />
+      <ActiveTabPlaceholder tabs={TICKETS_TABS} active={activeTab} />
+
+      {activeTab === 'tickets' && (<>
 
       {/* Filters */}
       <div className="glass-panel p-4 rounded-lg flex flex-col md:flex-row gap-4 items-center bg-zinc-900 border border-zinc-800">
@@ -858,6 +878,7 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
           </div>
         </div>
       )}
+      </>)}
     </div>
   );
 }

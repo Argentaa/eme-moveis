@@ -7,13 +7,27 @@ import {
 } from 'lucide-react';
 import { financialService, projectService, stockService, recurringService, clientService, supplierService, vendorService, budgetService, reportService, bankAccountService, getApiErrorMessage } from '../services/api';
 import { FinancialRecord, Project, Category, Vendor, BudgetGoal, BudgetAnalysis, Client, ReportResult, BankAccount, BankOverview } from '../types';
+import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+
+/** Abas do módulo Financeiro, conforme a spec do cliente (17/09). */
+const FINANCIAL_TABS: ModuleTab[] = [
+  { id: 'dashboard', label: 'Dashboard financeiro' },
+  { id: 'payable', label: 'Contas a pagar' },
+  { id: 'receivable', label: 'Contas a receber' },
+  { id: 'records', label: 'Lançamentos', ready: true },
+  { id: 'movements', label: 'Movimentações' },
+  { id: 'overdue', label: 'Pendências', ready: true },
+  { id: 'banks', label: 'Contas bancárias', ready: true },
+  { id: 'dre', label: 'DRE' },
+  { id: 'budget', label: 'Planejamento orçamentário' },
+];
 
 interface FinancialViewProps {
   userRole: string;
 }
 
 export default function FinancialView({ userRole }: FinancialViewProps) {
-  const [activeTab, setActiveTab] = useState<'records' | 'overdue' | 'banks'>('records');
+  const [activeTab, setActiveTab] = useModuleTab('financial', FINANCIAL_TABS, 'records');
   const [records, setRecords] = useState<FinancialRecord[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -595,39 +609,10 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         )}
       </div>
 
-      {/* Sub-tabs selector */}
-      <div className="flex gap-2 border-b border-zinc-800">
-        <button
-          onClick={() => setActiveTab('records')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-mono uppercase tracking-wide transition cursor-pointer border-b-2 ${
-            activeTab === 'records'
-              ? 'text-white border-red-600'
-              : 'text-zinc-500 border-transparent hover:text-zinc-300'
-          }`}
-        >
-          <Landmark className="w-4 h-4" /> Lançamentos
-        </button>
-        <button
-          onClick={() => setActiveTab('overdue')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-mono uppercase tracking-wide transition cursor-pointer border-b-2 ${
-            activeTab === 'overdue'
-              ? 'text-white border-red-600'
-              : 'text-zinc-500 border-transparent hover:text-zinc-300'
-          }`}
-        >
-          <AlertTriangle className="w-4 h-4" /> Pendências
-        </button>
-        <button
-          onClick={() => setActiveTab('banks')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-mono uppercase tracking-wide transition cursor-pointer border-b-2 ${
-            activeTab === 'banks'
-              ? 'text-white border-red-600'
-              : 'text-zinc-500 border-transparent hover:text-zinc-300'
-          }`}
-        >
-          <Wallet className="w-4 h-4" /> Contas Bancárias
-        </button>
-      </div>
+      {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
+      <ModuleTabs tabs={FINANCIAL_TABS} active={activeTab} onChange={setActiveTab} />
+
+      <ActiveTabPlaceholder tabs={FINANCIAL_TABS} active={activeTab} />
 
       {activeTab === 'records' && (
       <>

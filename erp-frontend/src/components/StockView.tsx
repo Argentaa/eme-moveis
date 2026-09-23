@@ -5,6 +5,17 @@ import {
 } from 'lucide-react';
 import { stockService, getApiErrorMessage } from '../services/api';
 import { StockItem, StockMovement, Category } from '../types';
+import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+
+/** Abas do módulo Estoque, conforme a spec do cliente (17/09). */
+const STOCK_TABS: ModuleTab[] = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'current', label: 'Estoque atual', ready: true },
+  { id: 'movements', label: 'Movimentações', ready: true },
+  { id: 'items', label: 'Materiais/Produtos', ready: true },
+  { id: 'losses', label: 'Perdas/Avarias' },
+  { id: 'minimum', label: 'Estoque mínimo' },
+];
 
 interface StockViewProps {
   userRole: string;
@@ -17,7 +28,10 @@ export default function StockView({ userRole }: StockViewProps) {
   const [loading, setLoading] = useState(true);
 
   // Layout panel switcher
-  const [currentTab, setCurrentTab] = useState<'ITEMS' | 'MOVEMENTS'>('ITEMS');
+  const [activeTab, setActiveTab] = useModuleTab('stock', STOCK_TABS, 'current');
+  // O módulo hoje tem uma única tela de lista/histórico; as sub-abas derivam dela.
+  // A separação real (saldo x cadastro próprio) vem na fase de Estoque.
+  const currentTab: 'ITEMS' | 'MOVEMENTS' = activeTab === 'movements' ? 'MOVEMENTS' : 'ITEMS';
 
   // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -240,21 +254,6 @@ export default function StockView({ userRole }: StockViewProps) {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Section view tabs switcher */}
-          <div className="bg-zinc-900 border border-zinc-c800 p-1 rounded-md flex mr-2">
-            <button 
-              onClick={() => setCurrentTab('ITEMS')}
-              className={`px-3 py-1.5 rounded text-xs font-mono transition ${currentTab === 'ITEMS' ? 'bg-red-650 text-white font-bold' : 'text-zinc-400 hover:text-white'} cursor-pointer`}
-            >
-              🛠️ Material Ativo
-            </button>
-            <button 
-              onClick={() => setCurrentTab('MOVEMENTS')}
-              className={`px-3 py-1.5 rounded text-xs font-mono transition ${currentTab === 'MOVEMENTS' ? 'bg-red-650 text-white font-bold' : 'text-zinc-400 hover:text-white'} cursor-pointer`}
-            >
-              📋 Histórico de movimentações
-            </button>
-          </div>
 
           <button 
             onClick={() => handleOpenMovementModal()}
@@ -279,6 +278,12 @@ export default function StockView({ userRole }: StockViewProps) {
           </button>
         </div>
       </div>
+
+      {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
+      <ModuleTabs tabs={STOCK_TABS} active={activeTab} onChange={setActiveTab} />
+      <ActiveTabPlaceholder tabs={STOCK_TABS} active={activeTab} />
+
+      {['current', 'items', 'movements'].includes(activeTab) && (<>
 
       {currentTab === 'ITEMS' ? (
         <>
@@ -797,6 +802,7 @@ export default function StockView({ userRole }: StockViewProps) {
         </div>
       )}
 
+      </>)}
     </div>
   );
 }
