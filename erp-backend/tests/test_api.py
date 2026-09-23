@@ -1,5 +1,6 @@
 """Cobertura: login, clients, projects, financial, stock e calendar CRUD."""
 import os
+from datetime import date, timedelta
 
 import pytest
 
@@ -897,6 +898,189 @@ def test_cash_flow_report(client):
     assert jan["accumulated"] == "R$ 700,00"
     assert fev["income"] == "R$ 0,00" and fev["outcome"] == "R$ 200,00" and fev["accumulated"] == "R$ 500,00"
     assert sum(1 for row in body["rows"] if "R$ 0,00" in row["income"]) == 11  # 12 meses, so janeiro tem entrada PAGO
+
+
+def test_cash_flow_weekly_report(client):
+    """Demonstrativo semanal do mes: entradas, saidas, saldo semanal e acumulado."""
+    h = _login(client)
+    base = [
+        # semana 1 (dias 1-7)
+        {"description": "Entrada S1", "type": "ENTRADA", "amount": 1000, "date": "2026-03-03", "status": "PAGO"},
+        # semana 3 (dias 15-21)
+        {"description": "Saida S3", "type": "SAIDA", "amount": 300, "date": "2026-03-18", "status": "PAGO"},
+        # semana 4 (dias 22-28) — em aberto: so aparece no projetado
+        {"description": "Entrada S4 pendente", "type": "ENTRADA", "amount": 500, "date": "2026-03-25", "status": "PENDENTE"},
+        # outro mes: nao pode entrar no demonstrativo de marco
+        {"description": "Fora do mes", "type": "ENTRADA", "amount": 777, "date": "2026-04-02", "status": "PAGO"},
+    ]
+    for p in base:
+        assert client.post("/api/financial", headers=h, json=p).status_code == 201
+
+    r = client.get("/api/reports/cash-flow-weekly", headers=h,
+                   query_string={"year": 2026, "month": 3, "mode": "realizado"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["filters_applied"] == {"year": 2026, "month": 3, "mode": "realizado"}
+    assert len(body["rows"]) == 5  # semanas 1..5 sempre presentes
+    assert [row["week"] for row in body["rows"]] == [f"Semana {i}" for i in range(1, 6)]
+
+    s1, s2, s3, s4 = body["rows"][0], body["rows"][1], body["rows"][2], body["rows"][3]
+    assert s1["income"] == "R$ 1.000,00" and s1["balance"] == "R$ 1.000,00"
+    assert s2["income"] == "R$ 0,00" and s2["balance"] == "R$ 0,00"
+    assert s3["outcome"] == "R$ 300,00" and s3["balance"] == "R$ -300,00"
+    # pendente NAO entra no realizado
+    assert s4["income"] == "R$ 0,00"
+    # saldo acumulado correto ao longo das semanas
+    assert s1["accumulated"] == "R$ 1.000,00"
+    assert s3["accumulated"] == "R$ 700,00"
+    assert body["rows"][4]["accumulated"] == "R$ 700,00"
+    # abril ficou fora
+    assert "777" not in r.get_data(as_text=True)
+
+    rp = client.get("/api/reports/cash-flow-weekly", headers=h,
+                    query_string={"year": 2026, "month": 3, "mode": "projetado"})
+    assert rp.status_code == 200
+    bp = rp.get_json()
+    assert bp["title"] == "Fluxo de Caixa Semanal Projetado"
+    assert bp["rows"][3]["income"] == "R$ 500,00"      # pendente entra no projetado
+    assert bp["rows"][3]["accumulated"] == "R$ 1.200,00"
+
+    # mes invalido -> 400
+    bad = client.get("/api/reports/cash-flow-weekly", headers=h,
+                     query_string={"year": 2026, "month": 13})
+    assert bad.status_code == 400
+
+
+def test_sales_goal_crud_and_summary(client):
+    """Meta comercial: CRUD, validacoes e meta x realizado com filtro de periodo."""
+    h = _login(client)
+    cur_year = date.today().year
+
+    # ── CRUD
+    r = client.post("/api/goals", headers=h, json={
+        "year": cur_year, "month": 3, "scope": "GERAL", "target_value": 10000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    gid = r.get_json()["id"]
+    assert float(r.get_json()["target_value"]) == 10000.0
+    assert r.get_json()["month"] == 3 and r.get_json()["scope"] == "GERAL"
+
+    # ── validacoes
+    assert client.post("/api/goals", headers=h,
+                       json={"year": cur_year, "target_value": -1}).status_code == 400
+    assert client.post("/api/goals", headers=h,
+                       json={"year": cur_year, "scope": "VENDEDOR"}).status_code == 400
+    assert client.post("/api/goals", headers=h,
+                       json={"year": cur_year, "scope": "INVALIDO", "target_value": 1}).status_code == 400
+    assert client.post("/api/goals", headers=h,
+                       json={"year": 1990, "target_value": 1}).status_code == 400
+    assert client.post("/api/goals", headers=h,
+                       json={"year": cur_year, "month": 13, "target_value": 1}).status_code == 400
+
+    r = client.put(f"/api/goals/{gid}", headers=h, json={"target_value": 12000})
+    assert r.status_code == 200 and float(r.get_json()["target_value"]) == 12000.0
+    lst = client.get("/api/goals", headers=h, query_string={"year": cur_year})
+    assert lst.status_code == 200 and len(lst.get_json()) == 1
+
+    # ── sem venda fechada: realizado zero
+    body = client.get("/api/goals/summary", headers=h,
+                      query_string={"year": cur_year, "month": 3}).get_json()
+    assert body["target"] == "R$ 12.000,00" and body["target_basis"] == "mes"
+    assert body["achieved"] == "R$ 0,00" and body["percent"] == "0,0%"
+    assert body["deals_closed"] == 0 and body["undated"] == 0
+
+    # ── fecha uma venda: move o cliente para a ultima coluna do funil
+    funnels = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"}).get_json()
+    fid = funnels[0]["id"]
+    last_key = max(funnels[0]["columns"], key=lambda c: c["position"])["column_key"]
+    cr = client.post("/api/clients", headers=h,
+                     json={"name": "Cliente Fechado", "funnel_id": fid, "estimated_value": 4000})
+    assert cr.status_code == 201, cr.get_data(as_text=True)
+    cid = cr.get_json()["id"]
+    assert cr.get_json()["closed_at"] is None  # ainda nao fechado
+
+    up = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": last_key})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    assert up.get_json()["closed_at"], "closed_at deveria ser gravado ao entrar na etapa final"
+
+    # marco continua zerado: a venda fechou AGORA, nao em marco -> prova o filtro de periodo
+    s2 = client.get("/api/goals/summary", headers=h, query_string={"year": cur_year, "month": 3})
+    assert s2.get_json()["achieved"] == "R$ 0,00"
+
+    # meta do ANO (month null) enxerga a venda do periodo corrente
+    ga = client.post("/api/goals", headers=h, json={
+        "year": cur_year, "scope": "GERAL", "target_value": 10000})
+    assert ga.status_code == 201, ga.get_data(as_text=True)
+    b3 = client.get("/api/goals/summary", headers=h,
+                    query_string={"year": cur_year}).get_json()
+    assert b3["target_basis"] == "ano" and b3["target"] == "R$ 10.000,00"
+    assert b3["achieved"] == "R$ 4.000,00"
+    assert b3["percent"] == "40,0%" and b3["remaining"] == "R$ 6.000,00"
+    assert b3["deals_closed"] == 1 and b3["undated"] == 0
+
+    # ── delete
+    assert client.delete(f"/api/goals/{gid}", headers=h).status_code == 200
+    assert client.delete(f"/api/goals/{gid}", headers=h).status_code == 404
+
+
+def test_dashboard_attention(client):
+    """Bloco 'o que precisa da minha atencao' agrega pendencias reais."""
+    h = _login(client)
+    today = date.today()
+    past = (today - timedelta(days=3)).isoformat()
+    soon = (today + timedelta(days=2)).isoformat()
+
+    # base limpa: nada pendente
+    body = client.get("/api/dashboard/attention", headers=h).get_json()
+    assert body["items"] == [] and body["total_items"] == 0
+    assert body["reference_date"] == today.isoformat()
+
+    # conta vencida + conta a vencer
+    for desc, dd in (("Vencida", past), ("A vencer", soon)):
+        assert client.post("/api/financial", headers=h, json={
+            "description": desc, "type": "SAIDA", "amount": 100,
+            "date": dd, "status": "PENDENTE", "due_date": dd}).status_code == 201
+
+    kinds = {i["kind"]: i for i in
+             client.get("/api/dashboard/attention", headers=h).get_json()["items"]}
+    assert kinds["CONTA_VENCIDA"]["count"] == 1
+    assert kinds["CONTA_VENCIDA"]["total"] == "R$ 100,00"
+    assert kinds["CONTA_VENCIDA"]["module"] == "financial"
+    assert kinds["CONTA_VENCIDA"]["tab"] == "overdue"
+    assert kinds["CONTA_VENCIDA"]["tone"] == "negative"
+    assert kinds["CONTA_A_VENCER"]["count"] == 1
+
+    # uma conta PAGA nao pode contar como pendencia
+    paid = client.post("/api/financial", headers=h, json={
+        "description": "Paga", "type": "SAIDA", "amount": 999,
+        "date": past, "status": "PAGO", "due_date": past}).get_json()["id"]
+    kinds = {i["kind"]: i for i in
+             client.get("/api/dashboard/attention", headers=h).get_json()["items"]}
+    assert kinds["CONTA_VENCIDA"]["count"] == 1  # continua 1, nao 2
+    assert "999" not in str(kinds["CONTA_VENCIDA"]["total"])
+    assert paid
+
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Atencao"}).get_json()["id"]
+
+    # chamado de pos-venda aberto
+    assert client.post("/api/tickets", headers=h, json={
+        "client_id": cid, "description": "Porta desalinhou"}).status_code == 201
+    # projeto com prazo vencido
+    assert client.post("/api/projects", headers=h, json={
+        "title": "Projeto Atrasado", "client_id": cid, "deadline": past}).status_code == 201
+    # orcamento parado, sem interacao
+    assert client.post("/api/clients", headers=h, json={
+        "name": "Orcamento Parado", "funnel_status": "ORCAMENTO"}).status_code == 201
+
+    body = client.get("/api/dashboard/attention", headers=h).get_json()
+    kinds = {i["kind"]: i for i in body["items"]}
+    assert kinds["CHAMADO_ABERTO"]["count"] == 1
+    assert kinds["CHAMADO_ABERTO"]["module"] == "tickets"
+    assert kinds["PROJETO_ATRASADO"]["count"] == 1
+    assert kinds["PROJETO_ATRASADO"]["module"] == "production"
+    assert kinds["ORCAMENTO_SEM_RETORNO"]["count"] == 1
+    assert kinds["ORCAMENTO_SEM_RETORNO"]["module"] == "commercial"
+    assert body["total_items"] == 5
 
 
 def test_dre_table_report(client):

@@ -26,8 +26,10 @@ def create_app(config_name=None):
     from app.api.calendar_bp import bp as calendar_bp
     from app.api.changelog_bp import bp as changelog_bp
     from app.api.clients_bp import bp as clients_bp
+    from app.api.dashboard_bp import bp as dashboard_bp
     from app.api.financial_bp import bp as financial_bp
     from app.api.funnel_bp import bp as funnel_bp
+    from app.api.goals_bp import bp as goals_bp
     from app.api.lead_options_bp import bp as lead_options_bp
     from app.api.projects_bp import bp as projects_bp
     from app.api.products_bp import bp as products_bp
@@ -40,7 +42,7 @@ def create_app(config_name=None):
     from app.api.partners_bp import bp as partners_bp
     from app.api.vendors_bp import bp as vendors_bp
 
-    for blueprint in (auth_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp, lead_options_bp, attachments_bp, products_bp, changelog_bp, suppliers_bp, purchases_bp, budget_bp, tickets_bp, production_bp, bank_accounts_bp, partners_bp, vendors_bp):
+    for blueprint in (auth_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp, lead_options_bp, attachments_bp, products_bp, changelog_bp, suppliers_bp, purchases_bp, budget_bp, tickets_bp, production_bp, bank_accounts_bp, partners_bp, vendors_bp, goals_bp, dashboard_bp):
         app.register_blueprint(blueprint)
 
     @app.get("/api/health")

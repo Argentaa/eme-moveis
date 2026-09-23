@@ -20,6 +20,7 @@ from app.models.models import (
     NegotiationItem,
     Partner,
     Product,
+    utcnow,
     Project,
 )
 
@@ -455,6 +456,8 @@ def update_client(client_id):
                 if cols:
                     last_key = cols[0].column_key
                     if client.funnel_status == last_key:
+                        # Data de fechamento: base da meta comercial e da comissao.
+                        client.closed_at = utcnow()
                         # Verifica se ja existe projeto ativo para este cliente (nao CONCLUIDO)
                         existing = db.session.query(Project).filter(Project.client_id == client.id, Project.status != "CONCLUIDO").first()
                         if not existing:

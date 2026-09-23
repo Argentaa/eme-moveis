@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -964,6 +964,37 @@ export const changelogService = {
 
   async remove(id: string): Promise<any> {
     const response = await api.delete(`/api/changelog/${id}`);
+    return response.data;
+  },
+};
+
+// ── Painel inicial: metas comerciais e pendências ────────────────
+
+export const goalService = {
+  async list(filters: { year?: number; month?: number; scope?: GoalScope } = {}): Promise<SalesGoal[]> {
+    const params: Record<string, string> = {};
+    if (filters.year) params.year = String(filters.year);
+    if (filters.month) params.month = String(filters.month);
+    if (filters.scope) params.scope = filters.scope;
+    const response = await api.get('/api/goals', { params });
+    return response.data;
+  },
+
+  /** Meta x realizado do período (percentual, restante e base de cálculo). */
+  async summary(filters: { year?: number; month?: number; scope?: GoalScope } = {}): Promise<SalesGoalSummary> {
+    const params: Record<string, string> = {};
+    if (filters.year) params.year = String(filters.year);
+    if (filters.month) params.month = String(filters.month);
+    if (filters.scope) params.scope = filters.scope;
+    const response = await api.get('/api/goals/summary', { params });
+    return response.data;
+  },
+};
+
+export const dashboardService = {
+  /** Pendências agregadas do painel (contas, chamados, projetos, orçamentos). */
+  async attention(): Promise<AttentionResult> {
+    const response = await api.get('/api/dashboard/attention');
     return response.data;
   },
 };

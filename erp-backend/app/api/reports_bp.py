@@ -637,6 +637,94 @@ def _build_cash_flow():
     }
 
 
+def _build_cash_flow_weekly():
+    """Demonstrativo do mês quebrado por semana, com saldo semanal e acumulado.
+
+    Semana do mês = ceil(dia/7) -> dias 1-7 = semana 1, 8-14 = 2, ... 29-31 = 5.
+    Usa a MESMA competencia do fluxo de caixa mensal (vencimento, senao data).
+    """
+    today = date.today()
+    try:
+        year = int(request.args.get("year") or today.year)
+        month = int(request.args.get("month") or today.month)
+    except (TypeError, ValueError):
+        return jsonify({"detail": "year/month invalidos"}), 400
+    if not 1 <= month <= 12:
+        return jsonify({"detail": "month fora de 1..12"}), 400
+
+    mode = _cash_flow_mode()
+    is_proj = mode == "projetado"
+    eff_date = func.coalesce(FinancialRecord.due_date, FinancialRecord.date)
+
+    def _bucket(rows):
+        out = {}
+        for r in rows:
+            d = r.due_date or r.date
+            if not d:
+                continue
+            week = ((d.day - 1) // 7) + 1
+            b = out.setdefault(week, {"income": 0.0, "outcome": 0.0})
+            v = float(r.amount or 0)
+            if r.type == "ENTRADA":
+                b["income"] += v
+            else:
+                b["outcome"] += v
+        return out
+
+    def _query(status):
+        return db.session.query(FinancialRecord).filter(
+            FinancialRecord.status == status,
+            extract("year", eff_date) == year,
+            extract("month", eff_date) == month,
+        ).all()
+
+    paid_month = _bucket(_query("PAGO"))
+    pend_month = _bucket(_query("PENDENTE"))
+
+    result_rows = []
+    acc = 0.0
+    total_in = 0.0
+    total_out = 0.0
+    for week in range(1, 6):
+        p = paid_month.get(week, {"income": 0.0, "outcome": 0.0})
+        q = pend_month.get(week, {"income": 0.0, "outcome": 0.0})
+        inc = p["income"] + (q["income"] if is_proj else 0.0)
+        out = p["outcome"] + (q["outcome"] if is_proj else 0.0)
+        bal = inc - out
+        acc += bal
+        total_in += inc
+        total_out += out
+        result_rows.append({
+            "week": f"Semana {week}",
+            "income": _fmt_brl(inc),
+            "outcome": _fmt_brl(out),
+            "balance": _fmt_brl(bal),
+            "accumulated": _fmt_brl(acc),
+        })
+
+    saldo = total_in - total_out
+    return {
+        "title": ("Fluxo de Caixa Semanal Projetado" if is_proj
+                  else "Fluxo de Caixa Semanal Realizado"),
+        "generated_at": _now_iso(),
+        "filters_applied": {"year": year, "month": month, "mode": mode},
+        "summary": [
+            {"label": "Entradas do Mês", "value": _fmt_brl(total_in), "tone": "positive"},
+            {"label": "Saídas do Mês", "value": _fmt_brl(total_out), "tone": "negative"},
+            {"label": "Saldo do Mês", "value": _fmt_brl(saldo),
+             "tone": "positive" if saldo >= 0 else "negative"},
+        ],
+        "columns": [
+            {"key": "week", "label": "Semana"},
+            {"key": "income", "label": "Entradas"},
+            {"key": "outcome", "label": "Saídas"},
+            {"key": "balance", "label": "Saldo Semanal"},
+            {"key": "accumulated", "label": "Saldo Acumulado"},
+        ],
+        "rows": result_rows,
+    }
+
+
 # ── CRM ───────────────────────────────────────────────────────
 
 def _build_crm():
@@ -1127,6 +1215,7 @@ def _build_partners():
 _BUILDERS = {
     "financial": (_build_financial, "relatorio-financeiro"),
     "cash-flow": (_build_cash_flow, "fluxo-caixa-mensal"),
+    "cash-flow-weekly": (_build_cash_flow_weekly, "fluxo-caixa-semanal"),
     "dre": (_build_dre, "relatorio-dre"),
     "clients": (_build_clients, "relatorio-clientes"),
     "projects": (_build_projects, "relatorio-projetos"),
@@ -1140,7 +1229,12 @@ _BUILDERS = {
 
 def _serve(name):
     builder, prefix = _BUILDERS[name]
-    return _send_report(builder(), prefix)
+    data = builder()
+    # Builder pode sinalizar parametro invalido devolvendo (jsonify(...), status).
+    # Sem isso o jsonify tenta serializar um Response e estoura TypeError.
+    if isinstance(data, tuple):
+        return data
+    return _send_report(data, prefix)
 
 
 @bp.get("/api/reports/financial")
@@ -1225,6 +1319,18 @@ def r_cash_flow():
 @token_required()
 def r_cash_flow_export():
     return _serve("cash-flow")
+
+
+@bp.get("/api/reports/cash-flow-weekly")
+@token_required()
+def r_cash_flow_weekly():
+    return _serve("cash-flow-weekly")
+
+
+@bp.get("/api/reports/cash-flow-weekly/export")
+@token_required()
+def r_cash_flow_weekly_export():
+    return _serve("cash-flow-weekly")
 
 
 @bp.get("/api/reports/tickets")

@@ -9,9 +9,10 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend 
 } from 'recharts';
 import {
-  clientService, projectService, financialService, stockService, reportService, bankAccountService
+  clientService, projectService, financialService, stockService, reportService, bankAccountService,
+  goalService, dashboardService
 } from '../services/api';
-import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResult, BankOverview } from '../types';
+import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResult, BankOverview, SalesGoalSummary, AttentionResult } from '../types';
 import OverdueProjectsCard from './OverdueProjectsCard';
 import UpcomingEventsCard from './UpcomingEventsCard';
 import UpcomingPaymentsCard from './UpcomingPaymentsCard';
@@ -29,6 +30,11 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [productionReport, setProductionReport] = useState<ReportResult | null>(null);
   const [bankOverview, setBankOverview] = useState<BankOverview | null>(null);
+  // Blocos novos do painel (spec do cliente 17/09)
+  const [crmReport, setCrmReport] = useState<ReportResult | null>(null);
+  const [attention, setAttention] = useState<AttentionResult | null>(null);
+  const [goalSummary, setGoalSummary] = useState<SalesGoalSummary | null>(null);
+  const [weeklyReport, setWeeklyReport] = useState<ReportResult | null>(null);
 
   const today = new Date();
   const [selectedMonth, setSelectedMonth] = useState(today.getMonth() + 1);
@@ -59,7 +65,7 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         setStock(st);
         setMovements(movs);
       } else {
-        const [cls, projs, fins, st, movs, prod, overview] = await Promise.all([
+        const [cls, projs, fins, st, movs, prod, overview, crm, att] = await Promise.all([
           clientService.getAll(),
           projectService.getAll(),
           financialService.getAll(),
@@ -70,6 +76,8 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
           // ao carregamento do painel inteiro.
           reportService.getReport('production', {}).catch(() => null),
           bankAccountService.overview().catch(() => null),
+          reportService.getReport('crm', {}).catch(() => null),
+          dashboardService.attention().catch(() => null),
         ]);
         setClients(cls);
         setProjects(projs);
@@ -78,6 +86,8 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         setMovements(movs);
         if (prod) setProductionReport(prod);
         if (overview) setBankOverview(overview);
+        if (crm) setCrmReport(crm);
+        if (att) setAttention(att);
       }
     } catch (err) {
       console.error('Error fetching dashboard statistics:', err);
@@ -89,6 +99,53 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
   useEffect(() => {
     loadData();
   }, [userRole]);
+
+  // Blocos que dependem do mês/ano selecionado: fluxo de caixa semanal e meta.
+  // Separado do loadData para não recarregar clientes/projetos a cada troca de mês.
+  useEffect(() => {
+    if (userRole === 'ESTOQUE') return;
+    let active = true;
+    Promise.all([
+      reportService.getReport('cash-flow-weekly', {
+        year: selectedYear, month: selectedMonth, mode: cfMode,
+      }).catch(() => null),
+      goalService.summary({ year: selectedYear, month: selectedMonth }).catch(() => null),
+    ]).then(([weekly, goal]) => {
+      if (!active) return;
+      if (weekly) setWeeklyReport(weekly);
+      if (goal) setGoalSummary(goal);
+    });
+    return () => { active = false; };
+  }, [selectedYear, selectedMonth, cfMode, userRole]);
+
+  /** Converte "R$ 1.000,00" / "R$ -300,00" em número, para o gráfico. */
+  const parseBRL = (value: string): number => {
+    const n = Number(String(value).replace(/[^\d,-]/g, '').replace(/\./g, '').replace(',', '.'));
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const weeklyData = (weeklyReport?.rows || []).map((row) => ({
+    week: String(row.week || ''),
+    Entradas: parseBRL(String(row.income || '')),
+    'Saídas': parseBRL(String(row.outcome || '')),
+    Acumulado: parseBRL(String(row.accumulated || '')),
+  }));
+
+  const ATTENTION_TONES: Record<string, string> = {
+    negative: 'border-l-red-600 text-red-400',
+    warning: 'border-l-amber-500 text-amber-400',
+    positive: 'border-l-emerald-600 text-emerald-400',
+    neutral: 'border-l-zinc-600 text-zinc-300',
+  };
+
+  const MODULE_LABELS: Record<string, string> = {
+    financial: 'Financeiro',
+    commercial: 'Comercial',
+    production: 'Produção',
+    tickets: 'Pós-venda',
+    purchases: 'Compras',
+    stock: 'Estoque',
+  };
 
   if (loading) {
     return (
@@ -207,6 +264,16 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
     .reduce((acc, f) => acc + f.amount, 0);
 
   const netBalance = entriesTotal - exitsTotal;
+
+  // Resumo principal (bloco 1 do painel): valores em aberto e projetos ativos.
+  const pendingReceivable = financials
+    .filter(f => f.type === 'ENTRADA' && f.status === 'PENDENTE')
+    .reduce((acc, f) => acc + f.amount, 0);
+  const pendingPayable = financials
+    .filter(f => f.type === 'SAIDA' && f.status === 'PENDENTE')
+    .reduce((acc, f) => acc + f.amount, 0);
+  const projectsInProduction = projects.filter(p => p.status !== 'CONCLUIDO').length;
+  const monthLabel = `${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}`;
 
   // Chart Mapping Groups (By Category)
   const categoryChartData = financialsByMonth
@@ -404,6 +471,177 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
           </div>
         </div>
 
+      </div>
+
+      {/* ── Resumo principal (bloco 1 da spec) ────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {[
+          { label: 'Saldo bancário', value: bankOverview ? bankOverview.total_balance : netBalance, tone: 'text-white' },
+          { label: 'Contas a receber (aberto)', value: pendingReceivable, tone: 'text-emerald-400' },
+          { label: 'Contas a pagar (aberto)', value: pendingPayable, tone: 'text-red-400' },
+          { label: 'Faturamento do mês', value: entriesTotal, tone: 'text-white' },
+          { label: 'Projetos em produção', value: projectsInProduction, tone: 'text-white', raw: true },
+        ].map((kpi) => (
+          <div key={kpi.label} className="glass-panel p-4 rounded-lg">
+            <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">{kpi.label}</p>
+            <p className={`text-lg font-bold mt-1.5 font-sans ${kpi.tone}`}>
+              {kpi.raw
+                ? kpi.value
+                : kpi.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Fluxo de Caixa do Mês, por semana (bloco 2 da spec) ───── */}
+      <div className="glass-panel p-5 rounded-lg">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
+          <div>
+            <h3 className="text-lg font-serif text-white tracking-wide">Fluxo de Caixa do Mês — por semana</h3>
+            <p className="text-xs text-zinc-400 font-mono mt-0.5">
+              {monthLabel} · entradas, saídas, saldo semanal e saldo acumulado
+            </p>
+          </div>
+          <div className="flex bg-zinc-950 border border-zinc-800 rounded p-1">
+            {(['realizado', 'projetado'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setCfMode(m)}
+                className={`px-3 py-1.5 text-xs font-mono uppercase rounded transition cursor-pointer ${
+                  cfMode === m ? 'bg-red-600 text-white font-semibold' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {weeklyData.length > 0 ? (
+          <>
+            <div className="h-52 mt-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={weeklyData}>
+                  <XAxis dataKey="week" stroke="#71717a" fontSize={11} />
+                  <YAxis stroke="#71717a" fontSize={11} />
+                  <Tooltip
+                    contentStyle={{ background: '#09090b', border: '1px solid #27272a', borderRadius: 6, fontSize: 12 }}
+                    formatter={(v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="Entradas" fill="#10b981" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="Saídas" fill="#ef4444" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="overflow-x-auto mt-4">
+              <table className="w-full text-xs font-mono">
+                <thead>
+                  <tr className="text-zinc-500 uppercase tracking-wider text-[10px]">
+                    {(weeklyReport?.columns || []).map((col) => (
+                      <th key={col.key} className="text-left py-2 pr-4 whitespace-nowrap">{col.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(weeklyReport?.rows || []).map((row) => (
+                    <tr key={String(row.week)} className="border-t border-zinc-900 text-zinc-300">
+                      {(weeklyReport?.columns || []).map((col) => (
+                        <td key={col.key} className="py-2 pr-4 whitespace-nowrap">{String(row[col.key] ?? '')}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-zinc-500 font-mono mt-4">Sem lançamentos no mês selecionado.</p>
+        )}
+      </div>
+
+      {/* ── Meta Comercial e Resumo Comercial (blocos 3 e 4 da spec) ─ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="glass-panel p-5 rounded-lg">
+          <h3 className="text-lg font-serif text-white tracking-wide">Meta Comercial</h3>
+          {goalSummary ? (
+            <>
+              <div className="flex justify-between items-end mt-3 gap-3">
+                <p className="text-2xl font-bold text-white font-sans">{goalSummary.percent}</p>
+                <p className="text-xs text-zinc-400 font-mono text-right">
+                  {goalSummary.achieved} de {goalSummary.target}
+                  <br />meta {goalSummary.target_basis === 'mes' ? 'do mês' : 'do ano'}
+                </p>
+              </div>
+              <div className="h-2 bg-zinc-950 rounded mt-3 overflow-hidden border border-zinc-900">
+                <div
+                  className="h-full bg-red-600 transition-all"
+                  style={{ width: `${Math.min(parseBRL(goalSummary.percent), 100)}%` }}
+                />
+              </div>
+              <p className="text-xs text-zinc-500 font-mono mt-2">
+                Faltam {goalSummary.remaining} · {goalSummary.deals_closed} venda(s) fechada(s)
+                {goalSummary.undated > 0 && ` · ${goalSummary.undated} sem data de fechamento`}
+              </p>
+            </>
+          ) : (
+            <p className="text-xs text-zinc-500 font-mono mt-3">Sem meta cadastrada para o período.</p>
+          )}
+        </div>
+
+        <div className="glass-panel p-5 rounded-lg">
+          <h3 className="text-lg font-serif text-white tracking-wide">Resumo Comercial</h3>
+          {crmReport ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+              {crmReport.summary.map((s) => (
+                <div key={s.label}>
+                  <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">{s.label}</p>
+                  <p className={`text-base font-bold font-sans mt-0.5 ${
+                    s.tone === 'positive' ? 'text-emerald-400' : s.tone === 'negative' ? 'text-red-400' : 'text-white'
+                  }`}>{s.value}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 font-mono mt-3">Resumo indisponível.</p>
+          )}
+        </div>
+      </div>
+
+      {/* ── O que precisa da minha atenção (bloco 6 da spec) ──────── */}
+      <div className="glass-panel p-5 rounded-lg">
+        <div className="flex justify-between items-center">
+          <h3 className="text-lg font-serif text-white tracking-wide">O que precisa da minha atenção</h3>
+          {attention && (
+            <span className="text-xs font-mono text-zinc-400">{attention.total_items} pendência(s)</span>
+          )}
+        </div>
+        {attention && attention.items.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+            {attention.items.map((item) => (
+              <div key={item.kind}
+                   className={`glass-panel p-4 rounded border-l-4 ${ATTENTION_TONES[item.tone] || ATTENTION_TONES.neutral}`}>
+                <div className="flex justify-between items-start gap-3">
+                  <div>
+                    <p className="text-sm text-white font-sans">{item.label}</p>
+                    <p className="text-[11px] text-zinc-500 font-mono mt-0.5">{item.detail}</p>
+                    <p className="text-[10px] text-zinc-600 font-mono mt-1.5">
+                      {MODULE_LABELS[item.module] || item.module} › {item.tab}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xl font-bold font-sans">{item.count}</p>
+                    {item.total && <p className="text-[11px] font-mono text-zinc-400">{item.total}</p>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-zinc-500 font-mono mt-3">Nada pendente. Tudo em ordem.</p>
+        )}
       </div>
 
       {/* Bento Layout: Charts row */}

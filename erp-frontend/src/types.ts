@@ -318,7 +318,7 @@ export interface StockMovement {
 
 // ── Relatórios ──────────────────────────────────────────────────
 
-export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'tickets' | 'production' | 'partners';
+export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'cash-flow-weekly' | 'tickets' | 'production' | 'partners';
 
 export interface ReportColumn {
   key: string;
@@ -338,6 +338,54 @@ export interface ReportResult {
   summary: ReportSummaryItem[];
   columns: ReportColumn[];
   rows: Record<string, string>[];
+}
+
+// ── Painel inicial: meta comercial e pendencias ──────────────────
+
+export type GoalScope = 'GERAL' | 'VENDEDOR' | 'PARCEIRO';
+
+export interface SalesGoal {
+  id: string;
+  year: number;
+  month: number | null;
+  scope: GoalScope;
+  user_id: string | null;
+  partner_id: string | null;
+  target_value: number;
+  created_at: string;
+}
+
+export interface SalesGoalSummary {
+  year: number;
+  month: number | null;
+  scope: GoalScope;
+  target: string;
+  achieved: string;
+  remaining: string;
+  percent: string;
+  deals_closed: number;
+  undated: number;
+  target_basis: 'mes' | 'ano';
+  basis: string;
+  generated_at: string;
+}
+
+export interface AttentionItem {
+  kind: 'CONTA_VENCIDA' | 'CONTA_A_VENCER' | 'CHAMADO_ABERTO' | 'PROJETO_ATRASADO' | 'ORCAMENTO_SEM_RETORNO';
+  label: string;
+  detail: string;
+  count: number;
+  total: string | null;
+  tone: 'positive' | 'negative' | 'neutral' | 'warning';
+  module: string;
+  tab: string;
+}
+
+export interface AttentionResult {
+  generated_at: string;
+  reference_date: string;
+  total_items: number;
+  items: AttentionItem[];
 }
 
 // ── CRM ─────────────────────────────────────────────────────────

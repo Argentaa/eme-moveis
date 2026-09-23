@@ -96,6 +96,9 @@ class Client(db.Model):
     category = db.Column(String(80), nullable=True, default="", server_default="")
     payment_terms = db.Column(String(120), nullable=True, default="", server_default="")
     avg_delivery_days = db.Column(Integer, nullable=True)
+    # Gravado quando o cliente entra na ultima etapa do funil (venda fechada).
+    # Necessario para meta comercial e comissao por periodo; dados antigos ficam NULL.
+    closed_at = db.Column(DateTime, nullable=True, index=True)
 
     def to_dict(self):
         return {
@@ -120,6 +123,7 @@ class Client(db.Model):
             "category": self.category or "",
             "payment_terms": self.payment_terms or "",
             "avg_delivery_days": self.avg_delivery_days,
+            "closed_at": iso(self.closed_at) if self.closed_at else None,
         }
 
     @property
@@ -757,6 +761,36 @@ class BudgetGoal(db.Model):
         }
 
 
+class SalesGoal(db.Model):
+    """Meta de vendas do planejamento comercial.
+
+    Diferente de BudgetGoal, que e orcamento de DESPESA por categoria — aqui e
+    meta de RECEITA, com escopo geral/vendedor/parceiro.
+    month=None significa meta do ano inteiro.
+    """
+    __tablename__ = "sales_goals"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    year = db.Column(Integer, nullable=False)
+    month = db.Column(Integer, nullable=True)
+    scope = db.Column(String(20), nullable=False, default="GERAL")  # GERAL|VENDEDOR|PARCEIRO
+    user_id = db.Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    partner_id = db.Column(String(36), ForeignKey("partners.id", ondelete="CASCADE"), nullable=True, index=True)
+    target_value = db.Column(Numeric(14, 2), nullable=False, default=0)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "year": self.year,
+            "month": self.month,
+            "scope": self.scope,
+            "user_id": self.user_id,
+            "partner_id": self.partner_id,
+            "target_value": num(self.target_value),
+            "created_at": iso(self.created_at),
+        }
+
+
 class ChangelogEntry(db.Model):
     __tablename__ = "changelog_entries"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -1253,6 +1287,18 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Nome dos módulos do menu atualizado",
      "O menu lateral foi renomeado e reorganizado: Dashboard Executivo, Comercial, Financeiro, Produção, Clientes/Fornecedores, Estoque, Compras, Pós-venda, Relatórios, Agenda, Novidades e Acessos & TI.",
      "MELHORIA", "2026-09-22"),
+    ("Módulos organizados em abas",
+     "Cada módulo agora tem as suas próprias abas internas. No Financeiro: Dashboard financeiro, Contas a pagar, Contas a receber, Lançamentos, Movimentações, Pendências, Contas bancárias, DRE e Planejamento orçamentário. No Comercial: Dashboard comercial, Funil de vendas, Orçamentos/Propostas, Comissões, Parceiros/Arquitetos e Planejamento comercial. O mesmo vale para Produção, Compras, Estoque e Pós-venda. As abas que ainda estão sendo construídas aparecem identificadas — nada ali mostra dado inventado.",
+     "MELHORIA", "2026-09-23"),
+    ("Painel inicial completo",
+     "O Painel Geral agora traz: resumo principal (saldo bancário, contas a receber e a pagar em aberto, faturamento do mês e projetos em produção), fluxo de caixa do mês por semana, meta comercial com percentual atingido, resumo comercial, resumo da produção, o bloco \"O que precisa da minha atenção\" e a Agenda do Dia.",
+     "NOVIDADE", "2026-09-23"),
+    ("Fluxo de caixa por semana",
+     "O fluxo de caixa do mês agora pode ser visto semana a semana, com entradas, saídas, saldo de cada semana e saldo acumulado — tanto em Realizado quanto em Projetado.",
+     "NOVIDADE", "2026-09-23"),
+    ("O que precisa da minha atenção",
+     "Um bloco no Painel reúne o que está pendente: contas vencidas, contas vencendo nos próximos dias, chamados de pós-venda em aberto, projetos atrasados e orçamentos sem retorno. Cada item mostra quantos são, o valor envolvido e em qual módulo resolver.",
+     "NOVIDADE", "2026-09-23"),
 ]
 
 

@@ -99,7 +99,7 @@ export default function UpcomingEventsCard() {
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-2">
           <Calendar className="w-4 h-4 text-red-500" />
-          <h3 className="text-sm font-semibold text-zinc-800 dark:text-white font-sans">Próximos Compromissos</h3>
+          <h3 className="text-sm font-semibold text-zinc-800 dark:text-white font-sans">Agenda do Dia</h3>
         </div>
         <span className="text-[11px] font-mono text-zinc-500 bg-zinc-100 dark:bg-zinc-900 px-2 py-0.5 rounded">
           {totalItems} item{totalItems !== 1 ? 's' : ''}
