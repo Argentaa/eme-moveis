@@ -256,18 +256,20 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (userRole !== 'ADMIN') {
-      alert('Acesso negado: Apenas administradores podem excluir registros.');
+    // No Comercial, "excluir" = remover DO FUNIL, nao do sistema.
+    // O cadastro continua em Clientes/Fornecedores (funnel_id null).
+    if (!['ADMIN', 'GERENTE'].includes(userRole)) {
+      alert('Acesso negado: apenas administradores ou gerentes podem remover do funil.');
       return;
     }
 
-    if (confirm(`Deseja mesmo remover o cliente "${name}" permanentemente?\nIsso pode afetar projetos ativos dele.`)) {
+    if (confirm(`Remover "${name}" do funil de vendas?\nO cadastro continua em Clientes/Fornecedores e pode ser vinculado de novo.`)) {
       try {
-        await clientService.delete(id);
+        await clientService.update(id, { funnel_id: null } as any);
         loadClients();
       } catch (err) {
-        console.error('Erro ao deletar cliente:', err);
-        alert(getApiErrorMessage(err, 'Falha ao remover cliente.'));
+        console.error('Erro ao remover cliente do funil:', err);
+        alert(getApiErrorMessage(err, 'Falha ao remover cliente do funil.'));
       }
     }
   };
@@ -856,11 +858,11 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                                 <FolderPlus className="w-3.5 h-3.5" />
                               </button>
                             )}
-                            {userRole === 'ADMIN' && (
+                            {['ADMIN', 'GERENTE'].includes(userRole) && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleDelete(client.id, client.name); }}
                                 className="p-1 text-zinc-500 hover:text-red-400 cursor-pointer"
-                                title="Excluir cliente"
+                                title="Remover do funil (mantém o cadastro)"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -944,11 +946,11 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                           <Eye className="w-3.5 h-3.5" />
                         </button>
                       )}
-                      {userRole === 'ADMIN' && (
+                      {['ADMIN', 'GERENTE'].includes(userRole) && (
                         <button 
                           onClick={() => handleDelete(client.id, client.name)}
                           className="p-2 bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-400 rounded border border-zinc-800 transition shadow inline-flex justify-center items-center cursor-pointer"
-                          title="Remover Cliente"
+                          title="Remover do funil (mantém o cadastro)"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

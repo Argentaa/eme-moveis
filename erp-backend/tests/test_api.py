@@ -442,6 +442,22 @@ def test_status_largo_cabe_no_banco(client):
     assert r.get_json()["funnel_status"] == long_key
 
 
+def test_desvincular_do_funil_mantem_cadastro(client):
+    # Botao Excluir no Comercial: so tira do funil (funnel_id null),
+    # o cadastro continua existindo no central.
+    h = _login(client)
+    c = client.post(
+        "/api/clients", headers=h,
+        json={"name": "Sai do Funil", "cpf_cnpj": "77.777"},
+    ).get_json()
+    assert c["funnel_id"] is not None
+    r = client.put(f"/api/clients/{c['id']}", headers=h, json={"funnel_id": None})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["funnel_id"] is None
+    rows = client.get("/api/clients", headers=h).get_json()
+    assert any(x["id"] == c["id"] for x in rows)
+
+
 def test_seeds_fontes_e_campanhas_idempotente(client):
     with client.application.app_context():
         from app.extensions import db

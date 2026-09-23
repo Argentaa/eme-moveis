@@ -411,7 +411,11 @@ def update_client(client_id):
         return jsonify({"detail": str(e)}), 400
     if "funnel_id" in data:
         raw = data.get("funnel_id")
-        if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+        if raw is None:
+            # Desvincular do funil (botao Excluir no Comercial): mantem o
+            # cadastro no central, so sai do funil.
+            client.funnel_id = None
+        elif isinstance(raw, str) and str(raw).strip() == "":
             funnel = db.session.query(Funnel).filter_by(kind="CRM", is_default=True).first()
             client.funnel_id = funnel.id if funnel else None
         else:
