@@ -988,19 +988,20 @@ def test_sales_goal_crud_and_summary(client):
     assert body["achieved"] == "R$ 0,00" and body["percent"] == "0,0%"
     assert body["deals_closed"] == 0 and body["undated"] == 0
 
-    # ── fecha uma venda: move o cliente para a ultima coluna do funil
+    # ── fecha uma venda: move o cliente para a etapa de GANHO do funil.
+    # Nao usar a ultima coluna por posicao: no funil CRM padrao ela e PERDIDO.
     funnels = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"}).get_json()
     fid = funnels[0]["id"]
-    last_key = max(funnels[0]["columns"], key=lambda c: c["position"])["column_key"]
+    won_key = next(c["column_key"] for c in funnels[0]["columns"] if c["column_key"] == "FECHAMENTO")
     cr = client.post("/api/clients", headers=h,
                      json={"name": "Cliente Fechado", "funnel_id": fid, "estimated_value": 4000})
     assert cr.status_code == 201, cr.get_data(as_text=True)
     cid = cr.get_json()["id"]
     assert cr.get_json()["closed_at"] is None  # ainda nao fechado
 
-    up = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": last_key})
+    up = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": won_key})
     assert up.status_code == 200, up.get_data(as_text=True)
-    assert up.get_json()["closed_at"], "closed_at deveria ser gravado ao entrar na etapa final"
+    assert up.get_json()["closed_at"], "closed_at deveria ser gravado ao entrar na etapa de ganho"
 
     # marco continua zerado: a venda fechou AGORA, nao em marco -> prova o filtro de periodo
     s2 = client.get("/api/goals/summary", headers=h, query_string={"year": cur_year, "month": 3})
@@ -1020,6 +1021,69 @@ def test_sales_goal_crud_and_summary(client):
     # ── delete
     assert client.delete(f"/api/goals/{gid}", headers=h).status_code == 200
     assert client.delete(f"/api/goals/{gid}", headers=h).status_code == 404
+
+
+def test_is_won_status():
+    """Ultima coluna por posicao NAO basta: perdido nunca e venda."""
+    from app.models.models import is_lost_status, is_won_status
+
+    assert is_won_status("FECHAMENTO", "PERDIDO") is True
+    assert is_won_status("PERDIDO", "PERDIDO") is False
+    assert is_won_status("CANCELADO", "CANCELADO") is False
+    # funil com nome proprio: ultima coluna continua valendo (comportamento antigo)
+    assert is_won_status("ENTREGUE", "ENTREGUE") is True
+    assert is_won_status("ORCAMENTO", "FECHAMENTO") is False
+    assert is_won_status(None) is False
+    assert is_lost_status("PERDIDO") is True and is_lost_status("FECHAMENTO") is False
+
+
+def test_perdido_nao_conta_como_venda(client):
+    """Negocio perdido nao e venda: nao grava closed_at, nao cria projeto e nao
+    entra na meta comercial.
+
+    O funil CRM padrao termina em PERDIDO, entao tratar a ultima coluna por
+    posicao como "venda fechada" contava negocio perdido como venda realizada
+    e criava projeto para cliente perdido.
+    """
+    h = _login(client)
+    cur_year = date.today().year
+    funnels = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"}).get_json()
+    fid = funnels[0]["id"]
+    keys = [c["column_key"] for c in funnels[0]["columns"]]
+    assert "PERDIDO" in keys and "FECHAMENTO" in keys
+    # premissa do teste: a ultima coluna por posicao e a de perda
+    last_key = max(funnels[0]["columns"], key=lambda c: c["position"])["column_key"]
+    assert last_key == "PERDIDO", f"premissa: ultima coluna e PERDIDO, veio {last_key}"
+
+    def novo(nome, valor):
+        r = client.post("/api/clients", headers=h,
+                        json={"name": nome, "funnel_id": fid, "estimated_value": valor})
+        assert r.status_code == 201, r.get_data(as_text=True)
+        return r.get_json()["id"]
+
+    perdido = novo("Cliente Perdido", 5000)
+    ganho = novo("Cliente Ganho", 2000)
+
+    up = client.put(f"/api/clients/{perdido}", headers=h, json={"funnel_status": "PERDIDO"})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    assert up.get_json()["closed_at"] is None, "perdido nao pode ter data de fechamento"
+
+    up = client.put(f"/api/clients/{ganho}", headers=h, json={"funnel_status": "FECHAMENTO"})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    assert up.get_json()["closed_at"], "ganho deve ter data de fechamento"
+
+    # a meta enxerga o ganho (2000), nunca o perdido (5000)
+    client.post("/api/goals", headers=h,
+                json={"year": cur_year, "scope": "GERAL", "target_value": 10000})
+    b = client.get("/api/goals/summary", headers=h, query_string={"year": cur_year}).get_json()
+    assert b["achieved"] == "R$ 2.000,00", b["achieved"]
+    assert b["deals_closed"] == 1, b["deals_closed"]
+    assert b["percent"] == "20,0%", b["percent"]
+
+    # e nao criou projeto para o cliente perdido
+    titulos = [p["title"] for p in client.get("/api/projects", headers=h).get_json()]
+    assert "Cliente Ganho" in titulos, "venda ganha deveria criar projeto"
+    assert "Cliente Perdido" not in titulos, "cliente perdido nao pode criar projeto"
 
 
 def test_dashboard_attention(client):

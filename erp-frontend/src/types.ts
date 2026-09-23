@@ -340,6 +340,29 @@ export interface ReportResult {
   rows: Record<string, string>[];
 }
 
+// ── Relatorio comercial (/api/reports/crm) ───────────────────────
+// Formato proprio: este endpoint NAO segue o padrao {summary, columns, rows}
+// dos outros relatorios. Tipar aqui evita tratar `summary` como se existisse.
+export interface CrmReport {
+  conversao: { taxa: number; total_clientes: number; total_fechamentos: number };
+  fluxo_caixa: { mes: string; receitas: number; despesas: number; resultado: number }[];
+  fontes_lead: { fonte: string; total: number }[];
+  negociacoes: {
+    perdidas: { name: string; created_at: string; lost_reason: string | null }[];
+    por_etapa: { funnel_status: string; total: number }[];
+    total: number;
+    total_perdidas: number;
+  };
+  parceiros: unknown[];
+  partner_clients_count: number;
+  periodo: { date_from: string | null; date_to: string | null };
+  ticket_medio: {
+    maximo: number; media: number; minimo: number;
+    total_faturado: number; total_projetos: number;
+  };
+  vendas_por_parceiro: unknown[];
+}
+
 // ── Painel inicial: meta comercial e pendencias ──────────────────
 
 export type GoalScope = 'GERAL' | 'VENDEDOR' | 'PARCEIRO';

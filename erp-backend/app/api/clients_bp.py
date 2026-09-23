@@ -15,6 +15,8 @@ from app.models.models import (
     Client,
     Funnel,
     FunnelColumn,
+    is_lost_status,
+    is_won_status,
     Interaction,
     LeadSource,
     NegotiationItem,
@@ -455,7 +457,9 @@ def update_client(client_id):
                 cols = db.session.query(FunnelColumn).filter_by(funnel_id=funnel.id).order_by(FunnelColumn.position.desc()).all()
                 if cols:
                     last_key = cols[0].column_key
-                    if client.funnel_status == last_key:
+                    # A ultima coluna do funil CRM padrao e "PERDIDO": posicao
+                    # nao indica venda fechada. Ver is_won_status.
+                    if is_won_status(client.funnel_status, last_key):
                         # Data de fechamento: base da meta comercial e da comissao.
                         client.closed_at = utcnow()
                         # Verifica se ja existe projeto ativo para este cliente (nao CONCLUIDO)
@@ -475,6 +479,9 @@ def update_client(client_id):
                             proj = Project(title=client.name, client_id=client.id, description="", status="ORCAMENTO", value=val or 0, steps=default_steps, funnel_id=proj_funnel.id if proj_funnel else None)
                             db.session.add(proj)
                             # Nao commit aqui; commit externo vai persistir
+                    elif is_lost_status(client.funnel_status):
+                        # Perdido nao e venda: sai da meta comercial.
+                        client.closed_at = None
         except Exception as e:
             # Nao quebrar o update do cliente se a automacao falhar; apenas log
             import logging; logging.getLogger(__name__).exception("Venda fechada automacao falhou: %s", e)

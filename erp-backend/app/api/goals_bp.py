@@ -16,7 +16,7 @@ from flask import Blueprint, jsonify, request
 from app.helpers import body_json, iso
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import Client, Funnel, FunnelColumn, SalesGoal, utcnow
+from app.models.models import Client, Funnel, FunnelColumn, SalesGoal, is_won_status, utcnow
 
 bp = Blueprint("goals", __name__)
 
@@ -229,15 +229,22 @@ def summary():
     ).all()
     achieved = sum(float(c.estimated_value or 0) for c in closed)
 
-    # Quantos clientes estao na etapa final mas sem data (fechados antes do closed_at)
+    # Clientes em etapa de VENDA GANHA sem data: fechados antes de closed_at
+    # existir, ou em funil com nome proprio. Contados a parte para o resumo
+    # avisar que a meta esta subestimada, em vez de somar errado.
     undated = 0
     for funnel in db.session.query(Funnel).filter(Funnel.kind == "CRM").all():
-        key = _last_column_key(funnel.id)
-        if not key:
+        last_key = _last_column_key(funnel.id)
+        won_keys = [
+            c.column_key
+            for c in db.session.query(FunnelColumn).filter_by(funnel_id=funnel.id).all()
+            if is_won_status(c.column_key, last_key)
+        ]
+        if not won_keys:
             continue
         undated += db.session.query(Client).filter(
             Client.funnel_id == funnel.id,
-            Client.funnel_status == key,
+            Client.funnel_status.in_(won_keys),
             Client.closed_at.is_(None),
         ).count()
 

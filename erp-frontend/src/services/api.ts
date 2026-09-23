@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -992,9 +992,21 @@ export const goalService = {
 };
 
 export const dashboardService = {
-  /** Pendências agregadas do painel (contas, chamados, projetos, orçamentos). */
+  /** Pendencias agregadas do painel inicial. */
   async attention(): Promise<AttentionResult> {
     const response = await api.get('/api/dashboard/attention');
+    return response.data;
+  },
+
+  /**
+   * Relatorio comercial. Endpoint com formato proprio (nao segue
+   * {summary, columns, rows}) — por isso tem metodo e tipo dedicados.
+   */
+  async crmReport(filters: { date_from?: string; date_to?: string } = {}): Promise<CrmReport> {
+    const params: Record<string, string> = {};
+    if (filters.date_from) params.date_from = filters.date_from;
+    if (filters.date_to) params.date_to = filters.date_to;
+    const response = await api.get('/api/reports/crm', { params });
     return response.data;
   },
 };

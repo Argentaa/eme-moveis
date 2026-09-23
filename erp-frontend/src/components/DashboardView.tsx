@@ -12,7 +12,7 @@ import {
   clientService, projectService, financialService, stockService, reportService, bankAccountService,
   goalService, dashboardService
 } from '../services/api';
-import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResult, BankOverview, SalesGoalSummary, AttentionResult } from '../types';
+import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResult, BankOverview, SalesGoalSummary, AttentionResult, CrmReport } from '../types';
 import OverdueProjectsCard from './OverdueProjectsCard';
 import UpcomingEventsCard from './UpcomingEventsCard';
 import UpcomingPaymentsCard from './UpcomingPaymentsCard';
@@ -31,7 +31,7 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
   const [productionReport, setProductionReport] = useState<ReportResult | null>(null);
   const [bankOverview, setBankOverview] = useState<BankOverview | null>(null);
   // Blocos novos do painel (spec do cliente 17/09)
-  const [crmReport, setCrmReport] = useState<ReportResult | null>(null);
+  const [crmReport, setCrmReport] = useState<CrmReport | null>(null);
   const [attention, setAttention] = useState<AttentionResult | null>(null);
   const [goalSummary, setGoalSummary] = useState<SalesGoalSummary | null>(null);
   const [weeklyReport, setWeeklyReport] = useState<ReportResult | null>(null);
@@ -76,7 +76,8 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
           // ao carregamento do painel inteiro.
           reportService.getReport('production', {}).catch(() => null),
           bankAccountService.overview().catch(() => null),
-          reportService.getReport('crm', {}).catch(() => null),
+          // Formato proprio do CRM (nao segue {summary, columns, rows}).
+          dashboardService.crmReport().catch(() => null),
           dashboardService.attention().catch(() => null),
         ]);
         setClients(cls);
@@ -274,6 +275,12 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
     .reduce((acc, f) => acc + f.amount, 0);
   const projectsInProduction = projects.filter(p => p.status !== 'CONCLUIDO').length;
   const monthLabel = `${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}`;
+
+  // Resumo comercial: o /api/reports/crm tem formato proprio (nao tem
+  // `summary`), entao os KPIs sao montados a partir dos campos reais.
+  const money = (v: number) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const crmStage = (key: string) =>
+    (crmReport?.negociacoes?.por_etapa || []).find((e) => e.funnel_status === key)?.total ?? 0;
 
   // Chart Mapping Groups (By Category)
   const categoryChartData = financialsByMonth
@@ -595,12 +602,17 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
           <h3 className="text-lg font-serif text-white tracking-wide">Resumo Comercial</h3>
           {crmReport ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
-              {crmReport.summary.map((s) => (
-                <div key={s.label}>
-                  <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">{s.label}</p>
-                  <p className={`text-base font-bold font-sans mt-0.5 ${
-                    s.tone === 'positive' ? 'text-emerald-400' : s.tone === 'negative' ? 'text-red-400' : 'text-white'
-                  }`}>{s.value}</p>
+              {[
+                { label: 'Vendas realizadas', value: String(crmReport.conversao?.total_fechamentos ?? 0) },
+                { label: 'Taxa de conversão', value: `${Number(crmReport.conversao?.taxa ?? 0).toFixed(1)}%` },
+                { label: 'Em orçamento', value: String(crmStage('ORCAMENTO')) },
+                { label: 'Em negociação', value: String(crmStage('NEGOCIACAO')) },
+                { label: 'Ticket médio', value: money(crmReport.ticket_medio?.media ?? 0) },
+                { label: 'Perdidos', value: String(crmReport.negociacoes?.total_perdidas ?? 0) },
+              ].map((kpi) => (
+                <div key={kpi.label}>
+                  <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">{kpi.label}</p>
+                  <p className="text-base font-bold font-sans mt-0.5 text-white">{kpi.value}</p>
                 </div>
               ))}
             </div>

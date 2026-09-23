@@ -660,6 +660,38 @@ class NegotiationItem(db.Model):
                 "created_at": iso(self.created_at)}
 
 
+# ── Convencao de ganho/perdido no funil ──────────────────────────────
+# O funil nao tem flag de ganho/perdido: as colunas so trazem column_key e
+# position. E a ultima coluna por posicao pode ser a de PERDA (o funil CRM
+# padrao termina em "PERDIDO"), entao "ultima coluna" NAO significa "venda
+# fechada". Tratar posicao como venda contava negocio perdido como venda
+# realizada e criava projeto para cliente perdido.
+WON_FUNNEL_KEYS = {"FECHAMENTO", "FECHADO", "GANHO", "VENDIDO", "CLIENTE", "CONCLUIDO"}
+LOST_FUNNEL_KEYS = {"PERDIDO", "PERDA", "CANCELADO", "DESISTIU", "DESISTENCIA"}
+
+
+def is_won_status(column_key, last_key=None):
+    """True se a etapa do funil representa venda ganha.
+
+    Perda explicita nunca conta como ganho. Chave conhecida de ganho conta.
+    Qualquer outra so conta se for a ultima coluna do funil — comportamento
+    antigo, preservado para funis com nomes proprios.
+    """
+    if not column_key:
+        return False
+    key = str(column_key).upper()
+    if key in LOST_FUNNEL_KEYS:
+        return False
+    if key in WON_FUNNEL_KEYS:
+        return True
+    return bool(last_key) and key == str(last_key).upper()
+
+
+def is_lost_status(column_key):
+    """True se a etapa do funil representa perda explicita."""
+    return bool(column_key) and str(column_key).upper() in LOST_FUNNEL_KEYS
+
+
 class Funnel(db.Model):
     __tablename__ = "funnels"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
