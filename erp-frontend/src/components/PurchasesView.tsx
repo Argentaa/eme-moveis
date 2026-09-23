@@ -1128,7 +1128,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-3 items-end">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 items-end">
                         <div className="space-y-1">
                           <label className="text-[10px] text-zinc-500 font-mono uppercase">Qtd *</label>
                           <input

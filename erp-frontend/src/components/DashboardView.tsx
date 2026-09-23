@@ -543,7 +543,11 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
               </ResponsiveContainer>
             </div>
 
-            <div className="overflow-x-auto mt-4">
+            <p className="text-[10px] text-zinc-500 font-mono mt-4 sm:hidden">
+              arraste a tabela para o lado para ver todas as colunas →
+            </p>
+
+            <div className="overflow-x-auto mt-2 sm:mt-4">
               <table className="w-full text-xs font-mono">
                 <thead>
                   <tr className="text-zinc-500 uppercase tracking-wider text-[10px]">

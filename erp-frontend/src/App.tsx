@@ -91,7 +91,9 @@ export default function App() {
     if (u?.role === 'ESTOQUE') return 'stock';
     return 'dashboard';
   });
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  // Menu lateral no mobile: no desktop a sidebar e sempre visivel (md:),
+  // entao este estado so governa a gaveta em telas pequenas.
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [unreadNews, setUnreadNews] = useState(0);
 
   // Badge de novidades nao lidas (por usuario). Revalida quando a sessao muda.
@@ -291,8 +293,17 @@ export default function App() {
   return (
     <div className={`theme-${theme} min-h-screen flex flex-col md:flex-row bg-zinc-955 text-zinc-100 selection:bg-red-800 select-none`}>
       
-      {/* Sidebar Rail Menu */}
-      <div className={`w-full md:w-64 bg-zinc-950 border-r border-zinc-900 flex flex-col justify-between shrink-0 transition-all z-20`}>
+      {/* Backdrop da gaveta: so no mobile, fecha ao toque */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-30 md:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar Rail Menu — gaveta no mobile, coluna fixa no desktop */}
+      <div className={`fixed md:static inset-y-0 left-0 w-72 md:w-64 bg-zinc-950 border-r border-zinc-900 flex flex-col justify-between shrink-0 overflow-y-auto overscroll-contain transition-transform duration-200 md:transition-none z-40 md:z-20 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         
         <div>
           {/* Workspace Brand logo header */}
@@ -305,7 +316,18 @@ export default function App() {
               </div>
             </div>
             
-            <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                className="md:hidden p-1.5 -mr-1 text-zinc-400 hover:text-white rounded border border-zinc-800 cursor-pointer"
+                title="Fechar menu"
+                aria-label="Fechar menu"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Navigation Links list */}
@@ -317,7 +339,10 @@ export default function App() {
               return (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    setMobileMenuOpen(false);
+                  }}
                   className={`w-full flex items-center gap-3.5 px-4 py-3 rounded text-sm text-left font-medium transition duration-200 cursor-pointer ${
                     isSelected 
                       ? 'text-white active-link-glow font-bold' 
@@ -374,17 +399,29 @@ export default function App() {
       <main className="flex-1 min-w-0 bg-neutral-950 flex flex-col min-h-screen">
         
         {/* Top Operational Status Header */}
-        <header className="p-5 border-b border-zinc-900 flex justify-between items-center bg-zinc-950/30">
-          <div className="flex items-center gap-2 text-xs font-mono text-zinc-400">
-            <span>Área de Trabalho</span>
-            <span>&raquo;</span>
-            <span className="text-white font-bold">{TABS.find(t => t.id === activeTab)?.label}</span>
+        <header className="p-3 sm:p-5 border-b border-zinc-900 flex justify-between items-center gap-2 bg-zinc-950/30">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(true)}
+              className="md:hidden shrink-0 p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 transition cursor-pointer"
+              title="Abrir menu"
+              aria-label="Abrir menu"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-2 text-xs font-mono text-zinc-400 min-w-0">
+              <span className="hidden sm:inline">Área de Trabalho</span>
+              <span className="hidden sm:inline">&raquo;</span>
+              <span className="text-white font-bold truncate">{TABS.find(t => t.id === activeTab)?.label}</span>
+            </div>
           </div>
 
           <button
             type="button"
             onClick={toggleTheme}
-            className="p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 transition cursor-pointer"
+            className="shrink-0 p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 transition cursor-pointer"
             title={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
           >
             <ThemeIcon className="w-4 h-4" />
@@ -392,7 +429,7 @@ export default function App() {
         </header>
 
         {/* Dynamic page rendering section */}
-        <div className="p-6 md:p-8 flex-1 min-w-0">
+        <div className="p-3 sm:p-6 md:p-8 flex-1 min-w-0">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}

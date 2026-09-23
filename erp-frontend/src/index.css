@@ -225,3 +225,58 @@ select option {
   color: #18181b;
   border-color: #e2e8f0;
 }
+
+/* ── Alvos de toque (mobile) ──────────────────────────────────────────
+   Botoes de icone nas listas nasciam 22x22 (p-1 em volta de um icone de
+   14px) — abaixo do minimo confortavel para o dedo, e o usuario erra o
+   alvo. Em dispositivo de toque, esses botoes ganham area minima de 40px.
+   Escopo deliberadamente estreito: so quem tem padding pequeno (p-1/p-1.5/
+   p-2), ou seja botao de icone. Botoes de texto (px-4 py-2) ja sao altos
+   o bastante e nao sao afetados; mouse (pointer: fine) nao e afetado. */
+/* ── Alvos de toque (mobile) ──────────────────────────────────────────
+   Botoes de icone nas listas nasciam 22x22 (p-1 em volta de um icone de
+   14px) — abaixo do minimo confortavel para o dedo, e o usuario erra o
+   alvo. Em dispositivo de toque, esses botoes ganham area minima de 40px.
+   Nao afeta mouse (pointer: fine). */
+@media (pointer: coarse) {
+  /* Piso de altura para todo controle: filtros (select/input px-3 py-2 = 34px)
+     e botoes de texto sem padding (17px) ficavam baixos demais para o dedo. */
+  button,
+  select,
+  input:not([type="checkbox"]):not([type="radio"]) {
+    min-height: 40px;
+  }
+  /* Botoes de icone (padding pequeno) tambem precisam de largura minima,
+     senao viram um alvo de 16-22px de lado. */
+  button:is(.p-0\.5, .p-1, .p-1\.5, .p-2, .px-1, .px-1\.5, .px-2) {
+    min-width: 40px;
+  }
+}
+
+/* ── Dica de rolagem horizontal ───────────────────────────────────────
+   Tabelas largas no celular rolam de lado (overflow-x-auto), mas o corte
+   na borda nao avisa que ha mais coluna — o usuario acha que o dado sumiu.
+   O truque de "scroll shadow": duas camadas com background-attachment
+   local cobrem as sombras quando o conteudo ja foi rolado ate o fim, e as
+   sombras (attachment scroll) ficam presas nas bordas. Resultado: a sombra
+   aparece SO quando existe conteudo escondido daquele lado, sem JS. */
+@media (max-width: 767px) {
+  [class*="overflow-x-auto"] {
+    background-image:
+      linear-gradient(to right, rgba(9, 9, 11, 0.95) 30%, rgba(9, 9, 11, 0)),
+      linear-gradient(to left, rgba(9, 9, 11, 0.95) 30%, rgba(9, 9, 11, 0)),
+      radial-gradient(farthest-side at 0 50%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0)),
+      radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0));
+    background-position: left center, right center, left center, right center;
+    background-repeat: no-repeat;
+    background-size: 30px 100%, 30px 100%, 16px 100%, 16px 100%;
+    background-attachment: local, local, scroll, scroll;
+  }
+  .theme-light [class*="overflow-x-auto"] {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.95) 30%, rgba(255, 255, 255, 0)),
+      linear-gradient(to left, rgba(255, 255, 255, 0.95) 30%, rgba(255, 255, 255, 0)),
+      radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0)),
+      radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0));
+  }
+}
