@@ -145,6 +145,31 @@ export interface ProductionIssue {
 
 export type FinancialType = 'ENTRADA' | 'SAIDA';
 
+/** Bucket do aging: quantos lancamentos e quanto dinheiro ha nele. */
+export interface AgingBucket {
+  count: number;
+  total: number;
+}
+
+/**
+ * Aging das contas em aberto, devolvido por /api/financial/aging.
+ * `no_due_date` existe porque lancamento sem vencimento nao pode entrar em
+ * bucket nenhum — sem esse campo o total dos buckets mentiria.
+ */
+export interface AgingResult {
+  type: FinancialType;
+  reference_date: string;
+  open_count: number;
+  open_total: number;
+  buckets: {
+    vencidas: AgingBucket;
+    '0_7': AgingBucket;
+    '8_30': AgingBucket;
+    acima_30: AgingBucket;
+  };
+  no_due_date: AgingBucket;
+}
+
 export interface FinancialRecord {
   id: string;
   description: string;

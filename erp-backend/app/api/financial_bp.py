@@ -196,8 +196,105 @@ def overdue():
 @bp.get("/api/financial")
 @token_required()
 def list_records():
-    rows = db.session.query(FinancialRecord).order_by(FinancialRecord.date.desc()).all()
+    """Lista lancamentos com filtros server-side (opcionais, combinaveis).
+
+    type=ENTRADA|SAIDA, status=PAGO|PENDENTE, due_from=YYYY-MM-DD,
+    due_to=YYYY-MM-DD, overdue=1 (vencidas e ainda em aberto).
+    Parametro invalido devolve 400 — parse_date levanta ValueError, entao
+    sem tratamento viraria 500.
+    """
+    q = db.session.query(FinancialRecord)
+
+    tipo = (request.args.get("type") or "").upper()
+    if tipo:
+        if tipo not in ("ENTRADA", "SAIDA"):
+            return jsonify({"detail": "type deve ser ENTRADA ou SAIDA"}), 400
+        q = q.filter(FinancialRecord.type == tipo)
+
+    status = (request.args.get("status") or "").upper()
+    if status:
+        if status not in ("PAGO", "PENDENTE"):
+            return jsonify({"detail": "status deve ser PAGO ou PENDENTE"}), 400
+        q = q.filter(FinancialRecord.status == status)
+
+    try:
+        due_from = parse_date(request.args.get("due_from"))
+        due_to = parse_date(request.args.get("due_to"))
+    except ValueError:
+        return jsonify({"detail": "due_from/due_to devem estar em YYYY-MM-DD"}), 400
+    if due_from:
+        q = q.filter(FinancialRecord.due_date >= due_from)
+    if due_to:
+        q = q.filter(FinancialRecord.due_date <= due_to)
+
+    if (request.args.get("overdue") or "").lower() in ("1", "true", "sim"):
+        q = q.filter(
+            FinancialRecord.status == "PENDENTE",
+            FinancialRecord.due_date < date.today(),
+        )
+
+    rows = q.order_by(FinancialRecord.date.desc()).all()
     return jsonify([r.to_dict() for r in rows])
+
+
+@bp.get("/api/financial/aging")
+@token_required()
+def aging():
+    """Aging das contas em ABERTO por vencimento, para um tipo.
+
+    ENTrada = a receber, SAIDA = a pagar. Buckets: vencidas, 0-7 dias,
+    8-30 dias e mais de 30 dias. Lancamento sem vencimento nao entra em
+    bucket nenhum — vai em `no_due_date`, para o total nao mentir.
+    """
+    tipo = (request.args.get("type") or "SAIDA").upper()
+    if tipo not in ("ENTRADA", "SAIDA"):
+        return jsonify({"detail": "type deve ser ENTRADA ou SAIDA"}), 400
+
+    rows = db.session.query(FinancialRecord).filter(
+        FinancialRecord.type == tipo,
+        FinancialRecord.status == "PENDENTE",
+    ).all()
+
+    hoje = date.today()
+    buckets = {
+        "vencidas": {"count": 0, "total": 0.0},
+        "0_7": {"count": 0, "total": 0.0},
+        "8_30": {"count": 0, "total": 0.0},
+        "acima_30": {"count": 0, "total": 0.0},
+    }
+    sem_data = {"count": 0, "total": 0.0}
+    total_geral = 0.0
+
+    for r in rows:
+        valor = float(r.amount or 0)
+        total_geral += valor
+        if r.due_date is None:
+            sem_data["count"] += 1
+            sem_data["total"] += valor
+            continue
+        dias = (hoje - r.due_date).days
+        if dias > 0:
+            chave = "vencidas"
+        elif dias >= -7:
+            chave = "0_7"
+        elif dias >= -30:
+            chave = "8_30"
+        else:
+            chave = "acima_30"
+        buckets[chave]["count"] += 1
+        buckets[chave]["total"] += valor
+
+    return jsonify({
+        "type": tipo,
+        "reference_date": hoje.isoformat(),
+        "open_count": len(rows),
+        "open_total": round(total_geral, 2),
+        "buckets": {
+            k: {"count": v["count"], "total": round(v["total"], 2)}
+            for k, v in buckets.items()
+        },
+        "no_due_date": {"count": sem_data["count"], "total": round(sem_data["total"], 2)},
+    })
 
 
 @bp.post("/api/financial")

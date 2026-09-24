@@ -1086,6 +1086,98 @@ def test_perdido_nao_conta_como_venda(client):
     assert "Cliente Perdido" not in titulos, "cliente perdido nao pode criar projeto"
 
 
+def test_financial_filters_and_aging(client):
+    """Filtros server-side de /api/financial e o aging das contas em aberto."""
+    h = _login(client)
+    hoje = date.today()
+
+    def lanc(desc, tipo, valor, dias_venc, status="PENDENTE"):
+        venc = hoje + timedelta(days=dias_venc)
+        r = client.post("/api/financial", headers=h, json={
+            "description": desc, "type": tipo, "amount": valor,
+            "date": venc.isoformat(), "due_date": venc.isoformat(), "status": status,
+        })
+        assert r.status_code == 201, r.get_data(as_text=True)
+        return r.get_json()["id"]
+
+    lanc("Pagar vencida", "SAIDA", 300, -5)
+    lanc("Pagar 0-7", "SAIDA", 200, 3)
+    lanc("Pagar 8-30", "SAIDA", 100, 20)
+    lanc("Pagar +30", "SAIDA", 50, 60)
+    lanc("Pagar JA PAGA", "SAIDA", 999, -5, status="PAGO")
+    lanc("Receber vencida", "ENTRADA", 700, -2)
+
+    # ── filtros ──────────────────────────────────────────────────────
+    r = client.get("/api/financial", headers=h,
+                   query_string={"type": "SAIDA", "status": "PENDENTE"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    pend = r.get_json()
+    assert len(pend) == 4, f"esperava 4 SAIDA pendentes, veio {len(pend)}"
+    assert all(x["type"] == "SAIDA" and x["status"] == "PENDENTE" for x in pend)
+    assert 999 not in [x["amount"] for x in pend], "lancamento PAGO nao pode aparecer"
+
+    r = client.get("/api/financial", headers=h, query_string={"type": "ENTRADA"})
+    assert len(r.get_json()) == 1, "so o lancamento de entrada"
+
+    # vencidas em aberto: as duas com vencimento no passado e status PENDENTE
+    r = client.get("/api/financial", headers=h, query_string={"overdue": "1"})
+    assert r.status_code == 200
+    venc = r.get_json()
+    assert len(venc) == 2, f"esperava 2 vencidas em aberto, veio {len(venc)}"
+    assert sum(x["amount"] for x in venc) == 1000
+
+    # janela de vencimento
+    r = client.get("/api/financial", headers=h, query_string={
+        "due_from": hoje.isoformat(), "due_to": (hoje + timedelta(days=30)).isoformat()})
+    assert len(r.get_json()) == 2, "dentro da janela: 0-7 e 8-30"
+
+    # parametro invalido -> 400 (nao 500: parse_date levanta ValueError)
+    for qs in ({"type": "BANANA"}, {"status": "TALVEZ"}, {"due_from": "ontem"}):
+        r = client.get("/api/financial", headers=h, query_string=qs)
+        assert r.status_code == 400, f"{qs} deveria dar 400, deu {r.status_code}"
+
+    # ── aging ────────────────────────────────────────────────────────
+    r = client.get("/api/financial/aging", headers=h, query_string={"type": "SAIDA"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    a = r.get_json()
+    assert a["open_count"] == 4 and a["open_total"] == 650, a
+    assert a["buckets"]["vencidas"] == {"count": 1, "total": 300}, a["buckets"]["vencidas"]
+    assert a["buckets"]["0_7"] == {"count": 1, "total": 200}, a["buckets"]["0_7"]
+    assert a["buckets"]["8_30"] == {"count": 1, "total": 100}, a["buckets"]["8_30"]
+    assert a["buckets"]["acima_30"] == {"count": 1, "total": 50}, a["buckets"]["acima_30"]
+    # a conta PAGA nao entra no aging
+    assert a["open_total"] == 650, "lancamento PAGO entrou no aging"
+
+    r = client.get("/api/financial/aging", headers=h, query_string={"type": "ENTRADA"})
+    ae = r.get_json()
+    assert ae["open_total"] == 700 and ae["buckets"]["vencidas"]["count"] == 1, ae
+
+    r = client.get("/api/financial/aging", headers=h, query_string={"type": "NOPE"})
+    assert r.status_code == 400
+
+
+def test_financial_aging_sem_vencimento(client):
+    """Lancamento sem vencimento nao pode entrar em bucket nenhum."""
+    h = _login(client)
+    r = client.post("/api/financial", headers=h, json={
+        "description": "Sem vencimento", "type": "SAIDA", "amount": 123,
+        "date": date.today().isoformat(), "status": "PENDENTE",
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    # o POST preenche due_date = date quando ausente; zera direto no banco
+    from app.extensions import db
+    from app.models.models import FinancialRecord
+    with client.application.app_context():
+        rec = db.session.query(FinancialRecord).filter_by(description="Sem vencimento").one()
+        rec.due_date = None
+        db.session.commit()
+
+    a = client.get("/api/financial/aging", headers=h, query_string={"type": "SAIDA"}).get_json()
+    assert a["no_due_date"] == {"count": 1, "total": 123}, a["no_due_date"]
+    assert all(b["count"] == 0 for b in a["buckets"].values()), "foi para um bucket indevido"
+    assert a["open_total"] == 123, "o total geral ainda deve contar o lancamento"
+
+
 def test_dashboard_attention(client):
     """Bloco 'o que precisa da minha atencao' agrega pendencias reais."""
     h = _login(client)

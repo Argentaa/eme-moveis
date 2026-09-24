@@ -8,18 +8,20 @@ import {
 import { financialService, projectService, stockService, recurringService, clientService, supplierService, vendorService, budgetService, reportService, bankAccountService, getApiErrorMessage } from '../services/api';
 import { FinancialRecord, Project, Category, Vendor, BudgetGoal, BudgetAnalysis, Client, ReportResult, BankAccount, BankOverview } from '../types';
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+import DrePanel from './DrePanel';
+import FinancialAgingPanel from './FinancialAgingPanel';
 
 /** Abas do módulo Financeiro, conforme a spec do cliente (17/09). */
 const FINANCIAL_TABS: ModuleTab[] = [
-  { id: 'dashboard', label: 'Dashboard financeiro' },
-  { id: 'payable', label: 'Contas a pagar' },
-  { id: 'receivable', label: 'Contas a receber' },
+  { id: 'dashboard', label: 'Dashboard financeiro', ready: true },
+  { id: 'payable', label: 'Contas a pagar', ready: true },
+  { id: 'receivable', label: 'Contas a receber', ready: true },
   { id: 'records', label: 'Lançamentos', ready: true },
-  { id: 'movements', label: 'Movimentações' },
+  { id: 'movements', label: 'Movimentações', ready: true },
   { id: 'overdue', label: 'Pendências', ready: true },
   { id: 'banks', label: 'Contas bancárias', ready: true },
-  { id: 'dre', label: 'DRE' },
-  { id: 'budget', label: 'Planejamento orçamentário' },
+  { id: 'dre', label: 'DRE', ready: true },
+  { id: 'budget', label: 'Planejamento orçamentário', ready: true },
 ];
 
 interface FinancialViewProps {
@@ -614,7 +616,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
       <ActiveTabPlaceholder tabs={FINANCIAL_TABS} active={activeTab} />
 
-      {activeTab === 'records' && (
+      {activeTab === 'dashboard' && (
       <>
 
       {/* Grid containing Quick accounting KPIs */}
@@ -767,6 +769,11 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
           <p className="text-xs text-zinc-500 font-mono">Não foi possível carregar o fluxo de caixa.</p>
         )}
       </div>
+      </>
+      )}
+
+      {activeTab === 'movements' && (
+      <>
 
       {/* Advanced Filters */}
       <div className="glass-panel p-4 rounded-lg flex flex-col md:flex-row gap-4 items-center">
@@ -978,6 +985,11 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
           </div>
         </div>
       )}
+      </>
+      )}
+
+      {activeTab === 'budget' && (
+      <>
 
       {/* Orçamento x Realizado */}
       <div className="glass-panel rounded-lg p-5 space-y-4">
@@ -1091,6 +1103,66 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
       </>
       )}
+
+      {activeTab === 'records' && (
+      <>
+      {/* Lancamentos: acao de criar + lista curta. A lista completa, com
+          filtros, fica em Movimentacoes — aqui e o ponto de entrada. */}
+      <div className="glass-panel rounded-lg p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Plus className="w-4 h-4 text-red-500" />
+            <h3 className="text-sm font-semibold text-white font-sans">Lançamentos</h3>
+          </div>
+          <button
+            onClick={handleOpenCreateModal}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-red-950/40 hover:bg-red-900/50 border border-red-900/40 text-red-400 rounded text-xs font-mono uppercase transition cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" /> Novo lançamento
+          </button>
+        </div>
+        <p className="text-[11px] text-zinc-500 font-mono">
+          Os 8 lançamentos mais recentes. A lista completa, com filtros, está na aba Movimentações.
+        </p>
+        <div className="divide-y divide-zinc-900">
+          {[...records]
+            .sort((a, b) => (a.date < b.date ? 1 : -1))
+            .slice(0, 8)
+            .map((record) => (
+              <div key={record.id} className="py-3 flex items-center justify-between gap-3">
+                <button onClick={() => setDetailRecord(record)} className="text-left cursor-pointer min-w-0">
+                  <span className="font-semibold text-white font-sans text-sm block truncate">{record.description}</span>
+                  <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">
+                    {new Date(record.date + 'T00:00:00').toLocaleDateString('pt-BR')} · {record.category}
+                  </span>
+                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`font-mono text-xs ${record.type === 'ENTRADA' ? 'text-emerald-400' : 'text-rose-500'}`}>
+                    {record.type === 'ENTRADA' ? '+' : '-'}{' '}
+                    {Number(record.amount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                  <button onClick={() => handleOpenEditModal(record)} title="Editar" className="p-1.5 text-zinc-400 hover:text-white transition cursor-pointer">
+                    <Edit3 className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => handleDelete(record.id, record.description)} title="Excluir" className="p-1.5 text-zinc-400 hover:text-rose-500 transition cursor-pointer">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          {records.length === 0 && (
+            <p className="py-8 text-center text-zinc-500 font-mono text-xs">Nenhum lançamento cadastrado.</p>
+          )}
+        </div>
+      </div>
+      </>
+      )}
+
+      {activeTab === 'payable' && <FinancialAgingPanel type="SAIDA" />}
+
+      {activeTab === 'receivable' && <FinancialAgingPanel type="ENTRADA" />}
+
+      {activeTab === 'dre' && <DrePanel />}
 
       {activeTab === 'banks' && (
         <div className="space-y-5">

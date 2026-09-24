@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult } from '../types';
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -471,8 +471,20 @@ export const bankAccountService = {
 };
 
 export const financialService = {
-  async getAll(): Promise<FinancialRecord[]> {
-    const response = await api.get('/api/financial');
+  async getAll(params?: {
+    type?: FinancialType;
+    status?: 'PAGO' | 'PENDENTE';
+    due_from?: string;
+    due_to?: string;
+    overdue?: string;
+  }): Promise<FinancialRecord[]> {
+    const response = await api.get('/api/financial', { params });
+    return response.data;
+  },
+
+  /** Aging das contas em aberto (vencidas / 0-7 / 8-30 / +30). */
+  async aging(type: FinancialType): Promise<AgingResult> {
+    const response = await api.get('/api/financial/aging', { params: { type } });
     return response.data;
   },
 

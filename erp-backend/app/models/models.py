@@ -1196,6 +1196,12 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Contas a pagar e a receber com aging",
+     "As duas abas mostram o que está em aberto e há quanto tempo: vencidas, vence em até 7 dias, de 8 a 30 dias e acima de 30 dias. Lançamento sem data de vencimento aparece separado, para a soma não mentir.",
+     "NOVIDADE", "2026-09-24"),
+    ("Financeiro organizado em abas",
+     "Dashboard, Contas a pagar, Contas a receber, Lançamentos, Movimentações, Pendências, Contas bancárias, DRE e Planejamento orçamentário — cada assunto na sua aba, sem precisar rolar uma tela só.",
+     "MELHORIA", "2026-09-24"),
     ("CRM: detalhamento completo do cliente",
      "Clicar em um card abre o modal do cliente com 5 abas: Visão Geral, Histórico, Tarefas, Anexos e Produtos.",
      "NOVIDADE", "2026-09-15"),
