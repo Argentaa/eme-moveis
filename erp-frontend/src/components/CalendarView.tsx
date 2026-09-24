@@ -82,6 +82,9 @@ const EMPTY_FORM = {
   client_id: '',
   assigned_user_id: '',
   observations: '',
+  // campos de montagem (so usados quando type === 'MONTAGEM')
+  team: '',
+  location: '',
 };
 
 export default function CalendarView({ userRole }: CalendarViewProps) {
@@ -173,6 +176,8 @@ export default function CalendarView({ userRole }: CalendarViewProps) {
       client_id: event.client_id || '',
       assigned_user_id: event.assigned_user_id || '',
       observations: event.observations || '',
+      team: event.team || '',
+      location: event.location || '',
     });
     setSubmitError('');
     setIsModalOpen(true);
@@ -190,6 +195,8 @@ export default function CalendarView({ userRole }: CalendarViewProps) {
       if (!payload.project_id) delete payload.project_id;
       if (!payload.client_id) delete payload.client_id;
       if (!payload.assigned_user_id) delete payload.assigned_user_id;
+      if (!payload.team) delete payload.team;
+      if (!payload.location) delete payload.location;
       if (!payload.end_date) delete payload.end_date;
       if (!payload.start_time) delete payload.start_time;
       if (!payload.end_time) delete payload.end_time;
@@ -554,6 +561,26 @@ export default function CalendarView({ userRole }: CalendarViewProps) {
                   </select>
                 </div>
               </div>
+
+              {/* Equipe e local so fazem sentido numa montagem: aparecem
+                  quando o tipo MONTAGEM e escolhido, para nao poluir os
+                  outros tipos de evento. */}
+              {formData.type === 'MONTAGEM' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div className="space-y-2">
+                    <label className="text-xs text-zinc-300 font-mono uppercase block">Equipe</label>
+                    <input type="text" value={formData.team} placeholder="Ex.: Equipe A — João e Carlos"
+                      onChange={e => setFormData({ ...formData, team: e.target.value })}
+                      className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none font-mono" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs text-zinc-300 font-mono uppercase block">Local</label>
+                    <input type="text" value={formData.location} placeholder="Endereço da montagem"
+                      onChange={e => setFormData({ ...formData, location: e.target.value })}
+                      className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none font-mono" />
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-xs text-zinc-300 font-mono uppercase block">Descrição</label>

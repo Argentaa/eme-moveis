@@ -6,7 +6,9 @@ from flask import Blueprint, jsonify, request, g
 from app.extensions import db
 from app.helpers import body_json, iso, num, parse_date
 from app.auth import token_required
-from app.models.models import Project, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue
+from app.models.models import (
+    Project, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, ChecklistItem,
+)
 
 bp = Blueprint("production", __name__)
 
@@ -721,3 +723,72 @@ def delete_issue(issue_id):
     db.session.delete(iss)
     db.session.commit()
     return jsonify({"ok": True})
+
+
+@bp.get("/api/production/pending")
+@token_required()
+def pending_overview():
+    """Pendencias de producao de TODOS os projetos, opcionalmente num periodo.
+
+    Junta as duas coisas que a spec chama de "pendencias" no modulo Producao:
+      - ocorrencias (retrabalho / desperdicio / perda), com o custo somado;
+      - itens de checklist ainda nao concluidos.
+
+    O CRUD existente de ocorrencias e por projeto; a aba precisa da visao
+    cruzada. Custo de ocorrencia sem valor conta como 0 no total — nao inventa
+    numero.
+    """
+    try:
+        de = parse_date(request.args.get("from"))
+        ate = parse_date(request.args.get("to"))
+    except ValueError:
+        return jsonify({"detail": "from/to devem estar em YYYY-MM-DD"}), 400
+
+    q = db.session.query(ProductionIssue)
+    if de:
+        q = q.filter(ProductionIssue.issue_date >= de)
+    if ate:
+        q = q.filter(ProductionIssue.issue_date <= ate)
+    issues = q.order_by(ProductionIssue.issue_date.desc()).all()
+
+    por_tipo = {k: {"count": 0, "cost": 0.0} for k in sorted(ISSUE_KINDS)}
+    total = 0.0
+    sem_custo = 0
+    for i in issues:
+        if i.cost is None:
+            sem_custo += 1
+        custo = float(i.cost or 0)
+        total += custo
+        if i.kind in por_tipo:
+            por_tipo[i.kind]["count"] += 1
+            por_tipo[i.kind]["cost"] += custo
+
+    checklist = (
+        db.session.query(ChecklistItem)
+        .filter(ChecklistItem.completed.is_(False))
+        .order_by(ChecklistItem.project_id, ChecklistItem.position)
+        .all()
+    )
+
+    return jsonify({
+        "period": {"from": iso(de), "to": iso(ate)},
+        "issues": [i.to_dict() for i in issues],
+        "issues_count": len(issues),
+        "issues_total_cost": round(total, 2),
+        "issues_without_cost": sem_custo,
+        "issues_by_kind": {
+            k: {"count": v["count"], "cost": round(v["cost"], 2)}
+            for k, v in por_tipo.items()
+        },
+        "checklist": [
+            {
+                "id": c.id,
+                "project_id": c.project_id,
+                "project_title": c.project.title if c.project else None,
+                "label": c.label,
+                "step_id": c.step_id,
+            }
+            for c in checklist
+        ],
+        "checklist_count": len(checklist),
+    })

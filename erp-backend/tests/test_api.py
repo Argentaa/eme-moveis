@@ -1086,6 +1086,83 @@ def test_perdido_nao_conta_como_venda(client):
     assert "Cliente Perdido" not in titulos, "cliente perdido nao pode criar projeto"
 
 
+def test_assembly_event_fields(client):
+    """Montagem e um CalendarEvent com equipe e local — nao tabela nova."""
+    h = _login(client)
+    r = client.post("/api/calendar", headers=h, json={
+        "title": "Montagem QA", "type": "MONTAGEM",
+        "start_date": date.today().isoformat(),
+        "team": "Equipe A", "location": "Rua das Flores, 100",
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    ev = r.get_json()
+    assert ev["type"] == "MONTAGEM"
+    assert ev["team"] == "Equipe A" and ev["location"] == "Rua das Flores, 100", ev
+
+    # editar so a equipe nao pode apagar o local
+    r = client.put(f"/api/calendar/{ev['id']}", headers=h, json={"team": "Equipe B"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    ev2 = r.get_json()
+    assert ev2["team"] == "Equipe B", ev2
+    assert ev2["location"] == "Rua das Flores, 100", f"local foi perdido: {ev2}"
+
+    # evento comum continua sem equipe
+    r = client.post("/api/calendar", headers=h, json={
+        "title": "Reuniao QA", "type": "REUNIAO",
+        "start_date": date.today().isoformat(),
+    })
+    assert r.status_code == 201
+    assert r.get_json()["team"] is None
+
+
+def test_production_pending_overview(client):
+    """Pendencias de producao: ocorrencias (com custo) + checklist aberto."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente QA Pend"}).get_json()["id"]
+    pid = client.post("/api/projects", headers=h, json={
+        "title": "Projeto QA Pend", "client_id": cid,
+        "steps": [{"id": "1", "label": "Medição", "completed": False}]}).get_json()["id"]
+
+    for kind, custo in (("RETRABALHO", 150.5), ("PERDA", 49.5)):
+        r = client.post(f"/api/projects/{pid}/issues", headers=h, json={
+            "kind": kind, "cost": custo, "issue_date": date.today().isoformat(),
+            "reason": f"{kind} QA"})
+        assert r.status_code == 201, r.get_data(as_text=True)
+
+    # ocorrencia SEM custo: nao pode virar zero silencioso nem quebrar a soma
+    r = client.post(f"/api/projects/{pid}/issues", headers=h, json={
+        "kind": "DESPERDICIO", "issue_date": date.today().isoformat(),
+        "reason": "sem custo"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    proj = client.get(f"/api/projects/{pid}", headers=h).get_json()
+    steps = proj.get("steps") or []
+    assert steps, "projeto criado com etapas deveria devolve-las"
+    r = client.post(f"/api/projects/{pid}/checklists", headers=h, json={
+        "step_id": str(steps[0]["id"]), "label": "Conferir puxador QA"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    body = client.get("/api/production/pending", headers=h).get_json()
+    assert body["issues_count"] == 3, body["issues_count"]
+    assert body["issues_total_cost"] == 200.0, body["issues_total_cost"]
+    assert body["issues_without_cost"] == 1, "ocorrencia sem custo deve ser contada a parte"
+    assert body["issues_by_kind"]["RETRABALHO"] == {"count": 1, "cost": 150.5}
+    assert body["issues_by_kind"]["PERDA"] == {"count": 1, "cost": 49.5}
+    assert body["issues_by_kind"]["DESPERDICIO"] == {"count": 1, "cost": 0.0}
+    assert body["checklist_count"] >= 1
+    assert any(c["label"] == "Conferir puxador QA" for c in body["checklist"])
+
+    # periodo fora da janela nao traz ocorrencia
+    body2 = client.get("/api/production/pending", headers=h, query_string={
+        "from": "2000-01-01", "to": "2000-01-31"}).get_json()
+    assert body2["issues_count"] == 0, "periodo antigo nao pode trazer ocorrencia"
+
+    # data invalida -> 400, nao 500
+    assert client.get("/api/production/pending", headers=h,
+                      query_string={"from": "ontem"}).status_code == 400
+
+
 def test_financial_filters_and_aging(client):
     """Filtros server-side de /api/financial e o aging das contas em aberto."""
     h = _login(client)

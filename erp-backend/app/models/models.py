@@ -477,6 +477,10 @@ class CalendarEvent(db.Model):
     client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
     assigned_user_id = db.Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     observations = db.Column(Text, nullable=True)
+    # Campos de montagem (tipo MONTAGEM): qual equipe vai e onde. Texto livre
+    # por decisao do plano — equipe nao e usuario do sistema.
+    team = db.Column(String(120), nullable=True)
+    location = db.Column(String(200), nullable=True)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
 
     project = db.relationship("Project")
@@ -501,6 +505,8 @@ class CalendarEvent(db.Model):
             "assigned_user_id": self.assigned_user_id,
             "assigned_user_name": self.assigned_user.name if self.assigned_user else None,
             "observations": self.observations,
+            "team": self.team,
+            "location": self.location,
             "created_at": iso(self.created_at),
         }
 
@@ -1196,6 +1202,12 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Montagens com equipe e local",
+     "A montagem agora registra qual equipe vai e o endereço, e ganhou uma aba própria em Produção com filtro por equipe e por mês. O que é criado ali aparece também na Agenda.",
+     "NOVIDADE", "2026-09-24"),
+    ("Pendências de produção num só lugar",
+     "Ocorrências de todos os projetos (retrabalho, desperdício e perda) com o custo somado do período, mais os itens de checklist ainda em aberto — para saber o que está travando sem abrir projeto por projeto.",
+     "NOVIDADE", "2026-09-24"),
     ("Contas a pagar e a receber com aging",
      "As duas abas mostram o que está em aberto e há quanto tempo: vencidas, vence em até 7 dias, de 8 a 30 dias e acima de 30 dias. Lançamento sem data de vencimento aparece separado, para a soma não mentir.",
      "NOVIDADE", "2026-09-24"),

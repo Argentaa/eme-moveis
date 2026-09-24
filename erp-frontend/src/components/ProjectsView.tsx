@@ -9,13 +9,16 @@ import { projectService, clientService, funnelService, productionService, worker
 import { Project, Client, ProjectStatus, ProjectStep, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, Attachment, ChecklistItem, Funnel, FunnelColumn } from '../types';
 
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+import AssemblyPanel from './AssemblyPanel';
+import ProductionPendingPanel from './ProductionPendingPanel';
+import ProductionDashboard from './ProductionDashboard';
 
 /** Abas do módulo Produção, conforme a spec do cliente (17/09). */
 const PRODUCTION_TABS: ModuleTab[] = [
-  { id: 'dashboard', label: 'Dashboard da produção' },
+  { id: 'dashboard', label: 'Dashboard da produção', ready: true },
   { id: 'kanban', label: 'Kanban', ready: true },
-  { id: 'assemblies', label: 'Montagens' },
-  { id: 'issues', label: 'Pendências' },
+  { id: 'assemblies', label: 'Montagens', ready: true },
+  { id: 'issues', label: 'Pendências', ready: true },
 ];
 
 interface ProjectsViewProps {
@@ -1113,6 +1116,12 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
         </div>
       )}
       </>)}
+
+      {activeTab === 'dashboard' && <ProductionDashboard />}
+
+      {activeTab === 'assemblies' && <AssemblyPanel />}
+
+      {activeTab === 'issues' && <ProductionPendingPanel />}
 
       {/* Creation Modal */}
       {isModalOpen && (

@@ -143,6 +143,30 @@ export interface ProductionIssue {
   created_at: string;
 }
 
+/** Item de checklist ainda em aberto, como /api/production/pending devolve. */
+export interface PendingChecklistItem {
+  id: string;
+  project_id: string;
+  project_title: string | null;
+  label: string;
+  step_id: string;
+}
+
+/**
+ * Pendencias de producao de TODOS os projetos num periodo: ocorrencias
+ * (retrabalho/desperdicio/perda) com custo somado + itens de checklist abertos.
+ */
+export interface ProductionPending {
+  period: { from: string | null; to: string | null };
+  issues: ProductionIssue[];
+  issues_count: number;
+  issues_total_cost: number;
+  issues_without_cost: number;
+  issues_by_kind: Record<string, { count: number; cost: number }>;
+  checklist: PendingChecklistItem[];
+  checklist_count: number;
+}
+
 export type FinancialType = 'ENTRADA' | 'SAIDA';
 
 /** Bucket do aging: quantos lancamentos e quanto dinheiro ha nele. */

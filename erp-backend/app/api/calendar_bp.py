@@ -13,6 +13,8 @@ bp = Blueprint("calendar", __name__)
 EVENT_FIELDS = (
     "title", "description", "type", "status", "start_date", "start_time",
     "end_date", "end_time", "project_id", "client_id", "assigned_user_id", "observations",
+    # campos de montagem (tipo MONTAGEM)
+    "team", "location",
 )
 
 
