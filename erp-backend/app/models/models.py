@@ -177,18 +177,69 @@ class PurchaseOrder(db.Model):
     expected_date = db.Column(Date, nullable=True)
     received_at = db.Column(DateTime, nullable=True)
     notes = db.Column(Text, nullable=True, default="")
+    # logistico: com quem vem e codigo de rastreio (calendario logistico)
+    carrier = db.Column(String(120), nullable=True)
+    tracking = db.Column(String(120), nullable=True)
     created_by = db.Column(String(80), nullable=True, default="")
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
     supplier = db.relationship("Supplier")
     items = db.relationship("PurchaseItem", cascade="all, delete-orphan", passive_deletes=False, order_by="PurchaseItem.position", overlaps="purchase_items,order")
+    quotations = db.relationship("PurchaseQuotation", cascade="all, delete-orphan",
+                                 passive_deletes=False, backref="order")
+
+    @property
+    def saving_real(self):
+        """Economia MEDIDA pelas cotacoes, no formato da planilha do cliente.
+
+        Por item: (maior preco cotado entre os fornecedores) - (preco escolhido).
+        So conta item que tem cotacao; pedido sem cotacao devolve 0 e o
+        dashboard cai no proxy de catalogo, que e estimativa.
+
+        Devolve (economia, itens_com_cotacao) para o frontend saber se o numero
+        e medido ou estimado.
+        """
+        cotacoes = list(self.quotations or [])
+        if not cotacoes:
+            return 0.0, 0
+
+        vencedora = next((q for q in cotacoes if q.is_winner), None)
+        economia = 0.0
+        com_cotacao = 0
+        for item in self.items:
+            precos = [
+                num(qi.unit_price) or 0
+                for q in cotacoes
+                for qi in q.items
+                if qi.purchase_item_id == item.id
+            ]
+            if not precos:
+                continue
+            com_cotacao += 1
+            escolhido = num(item.unit_price) or 0
+            if vencedora:
+                preco_venc = next(
+                    (num(qi.unit_price) or 0 for qi in vencedora.items
+                     if qi.purchase_item_id == item.id), None,
+                )
+                if preco_venc is not None:
+                    escolhido = preco_venc
+            diff = (max(precos) - escolhido) * (num(item.quantity) or 0)
+            if diff > 0:
+                economia += diff
+        return round(economia, 2), com_cotacao
 
     def to_dict(self):
         items = [i.to_dict() for i in self.items]
+        economia, itens_cotados = self.saving_real
         return {"id": self.id, "number": self.number, "status": self.status,
                 "supplier_id": self.supplier_id, "supplier_name": self.supplier.name if self.supplier else None,
                 "request_date": iso(self.request_date), "expected_date": iso(self.expected_date),
                 "received_at": iso(self.received_at),
                 "notes": self.notes or "", "created_by": self.created_by or "",
+                "carrier": self.carrier, "tracking": self.tracking,
+                "quotations_count": len(self.quotations or []),
+                "saving_real": economia,
+                "saving_real_items": itens_cotados,
                 "created_at": iso(self.created_at), "items": items,
                 "total": sum(i.total for i in self.items)}
 
@@ -214,6 +265,77 @@ class PurchaseItem(db.Model):
                 "material_name": self.material_name, "quantity": num(self.quantity),
                 "unit_price": num(self.unit_price), "received_qty": num(self.received_qty),
                 "position": self.position, "total": self.total}
+
+
+class PurchaseQuotation(db.Model):
+    """Cotacao de UM fornecedor para UM pedido de compra.
+
+    Varias por pedido: e o que permite o comparativo lado a lado que a spec
+    pede. `is_winner` marca a escolhida — aprovar uma zera as outras, porque a
+    vencedora e unica (senao a economia medida contaria duas vezes).
+    """
+    __tablename__ = "purchase_quotations"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    order_id = db.Column(String(36), ForeignKey("purchase_orders.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    supplier_id = db.Column(String(36), ForeignKey("suppliers.id", ondelete="SET NULL"),
+                            nullable=True, index=True)
+    delivery_days = db.Column(Integer, nullable=True)
+    payment_terms = db.Column(String(120), nullable=True)
+    is_winner = db.Column(Boolean, nullable=False, default=False)
+    notes = db.Column(Text, nullable=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    supplier = db.relationship("Supplier")
+    items = db.relationship("PurchaseQuotationItem", cascade="all, delete-orphan",
+                            passive_deletes=False, backref="quotation")
+
+    @property
+    def total(self):
+        """Valor da cotacao = soma(preco unitario x quantidade do item do pedido)."""
+        total = 0.0
+        for qi in self.items:
+            qtd = num(qi.purchase_item.quantity) if qi.purchase_item else 0
+            total += (num(qi.unit_price) or 0) * (qtd or 0)
+        return round(total, 2)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "order_id": self.order_id,
+            "supplier_id": self.supplier_id,
+            "supplier_name": self.supplier.name if self.supplier else None,
+            "delivery_days": self.delivery_days,
+            "payment_terms": self.payment_terms or "",
+            "is_winner": bool(self.is_winner),
+            "notes": self.notes or "",
+            "created_at": iso(self.created_at),
+            "items": [i.to_dict() for i in self.items],
+            "total": self.total,
+        }
+
+
+class PurchaseQuotationItem(db.Model):
+    """Preco de UM item do pedido nesta cotacao."""
+    __tablename__ = "purchase_quotation_items"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    quotation_id = db.Column(String(36), ForeignKey("purchase_quotations.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    purchase_item_id = db.Column(String(36), ForeignKey("purchase_items.id", ondelete="CASCADE"),
+                                 nullable=False, index=True)
+    unit_price = db.Column(Numeric(14, 2), nullable=False, default=0)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    purchase_item = db.relationship("PurchaseItem")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "quotation_id": self.quotation_id,
+            "purchase_item_id": self.purchase_item_id,
+            "purchase_item_name": self.purchase_item.material_name if self.purchase_item else None,
+            "unit_price": num(self.unit_price),
+        }
 
 
 class Project(db.Model):
@@ -1210,6 +1332,12 @@ DEFAULT_CHANGELOG_ENTRIES = [
      "NOVIDADE", "2026-09-24"),
     ("Contas a pagar e a receber com aging",
      "As duas abas mostram o que está em aberto e há quanto tempo: vencidas, vence em até 7 dias, de 8 a 30 dias e acima de 30 dias. Lançamento sem data de vencimento aparece separado, para a soma não mentir.",
+     "NOVIDADE", "2026-09-24"),
+    ("Cotações comparadas lado a lado",
+     "Na aba Cotações, vários fornecedores para a mesma compra ficam lado a lado, com o menor preço de cada item destacado. Aprovar uma cotação leva os preços dela para o pedido — e a economia do dashboard passa a ser medida, não estimada.",
+     "NOVIDADE", "2026-09-24"),
+    ("Calendário logístico das compras",
+     "Os pedidos aparecem pela data prevista de entrega, do mais atrasado para o mais distante, com transportadora e código de rastreio editáveis na própria linha.",
      "NOVIDADE", "2026-09-24"),
     ("Financeiro organizado em abas",
      "Dashboard, Contas a pagar, Contas a receber, Lançamentos, Movimentações, Pendências, Contas bancárias, DRE e Planejamento orçamentário — cada assunto na sua aba, sem precisar rolar uma tela só.",

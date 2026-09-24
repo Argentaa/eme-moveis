@@ -303,9 +303,41 @@ export interface PurchaseOrder {
   expected_date: string | null;
   received_at: string | null;
   notes: string;
+  carrier?: string | null;
+  tracking?: string | null;
+  /** Quantas cotacoes o pedido tem (0 = economia estimada, nao medida). */
+  quotations_count?: number;
+  /** Economia MEDIDA pelas cotacoes; 0 quando nao ha cotacao. */
+  saving_real?: number;
+  /** Quantos itens tem cotacao — diz se saving_real cobre o pedido todo. */
+  saving_real_items?: number;
   created_by: string;
   created_at: string;
   items: PurchaseItem[];
+  total: number;
+}
+
+/** Preco de um item do pedido dentro de uma cotacao. */
+export interface PurchaseQuotationItem {
+  id: string;
+  quotation_id: string;
+  purchase_item_id: string;
+  purchase_item_name: string | null;
+  unit_price: number;
+}
+
+/** Cotacao de um fornecedor para um pedido. Varias por pedido. */
+export interface PurchaseQuotation {
+  id: string;
+  order_id: string;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  delivery_days: number | null;
+  payment_terms: string;
+  is_winner: boolean;
+  notes: string;
+  created_at: string;
+  items: PurchaseQuotationItem[];
   total: number;
 }
 

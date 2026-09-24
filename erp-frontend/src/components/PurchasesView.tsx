@@ -39,13 +39,15 @@ import { purchaseService, supplierService, vendorService, stockService, getApiEr
 import { PurchaseOrder, Vendor, StockItem } from '../types';
 
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+import QuotationsPanel from './QuotationsPanel';
+import LogisticsPanel from './LogisticsPanel';
 
 /** Abas do módulo Compras, conforme a spec do cliente (17/09). */
 const PURCHASES_TABS: ModuleTab[] = [
   { id: 'dashboard', label: 'Dashboard', ready: true },
-  { id: 'quotes', label: 'Cotações' },
+  { id: 'quotes', label: 'Cotações', ready: true },
   { id: 'orders', label: 'Compras', ready: true },
-  { id: 'logistics', label: 'Calendário logístico' },
+  { id: 'logistics', label: 'Calendário logístico', ready: true },
 ];
 
 interface PurchasesViewProps {
@@ -219,24 +221,39 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
       return o.expected_date < today;
     });
 
-    // Valor Economizado — Sheets: SUM(O) onde O = MAX(grupo)-J quando K=🏆 (diferença entre maior e menor cotação da mesma compra)
-    // No ERP hoje não existe tabela de múltiplas cotações por compra, então a economia é aprox. vs preço de catálogo (stock.price)
+    // Valor Economizado — Sheets: SUM(O) onde O = MAX(grupo)-J quando K=🏆
+    // Agora existe tabela de cotacoes: onde o pedido TEM cotacao, a economia e
+    // MEDIDA (saving_real do backend, mesma formula da planilha). Onde nao tem,
+    // cai no proxy de catalogo (stock.price) e fica contado como estimativa.
+    // Nunca somar os dois no mesmo pedido — seria contar a mesma compra duas vezes.
     const stockMap = new Map<string, number>();
     stockItems.forEach(s => stockMap.set(s.id, Number(s.price || 0)));
 
-    let totalSaving = 0;
+    let totalSaving = 0;      // medida + estimada
+    let savingReal = 0;       // so a medida por cotacao
+    let savingEstimado = 0;   // so o proxy de catalogo
     let savingCount = 0;
-    let sumRecommended = 0; // para Economia % = SUM(O)/SUMIFS(J,K=🏆) — aqui proxy = soma dos totais das compras com saving
+    let sumRecommended = 0; // para Economia % = SUM(O)/SUMIFS(J,K=🏆)
     orders.forEach(o => {
       if (['APROVADA', 'COMPRADA', 'RECEBIDA'].includes(o.status)) {
+        if ((o.quotations_count || 0) > 0) {
+          const medida = Number(o.saving_real || 0);
+          totalSaving += medida;
+          savingReal += medida;
+          savingCount += Number(o.saving_real_items || 0);
+          if (medida > 0) sumRecommended += (o.total || 0);
+          return;
+        }
         let orderSaving = 0;
         o.items.forEach(it => {
           if (it.stock_item_id && stockMap.has(it.stock_item_id)) {
             const catalog = stockMap.get(it.stock_item_id)!;
             const diff = (catalog - Number(it.unit_price || 0)) * Number(it.quantity || 0);
-            if (diff > 0) { totalSaving += diff; orderSaving += diff; savingCount += 1; }
+            if (diff > 0) { orderSaving += diff; savingCount += 1; }
           }
         });
+        totalSaving += orderSaving;
+        savingEstimado += orderSaving;
         if (orderSaving > 0) sumRecommended += (o.total || 0);
       }
     });
@@ -303,6 +320,7 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
       totalMonth, totalYear, totalAll,
       ticketMedioMonth, ticketMedioAll, ticketMedio,
       totalSaving, economiaPercent, savingCount, sumRecommended,
+      savingReal, savingEstimado,
       pedidosAbertos, pedidosAtrasados,
       fornecedoresAtivos, fornecedoresCriticos, prazoMedioEntrega, percEntregasNoPrazo, prazoRealEntrega, fornecedoresSemAvaliacao,
       recebidos,
@@ -613,7 +631,16 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
             <div>
               <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1"><Award className="w-3 h-3" /> 📉 Valor Economizado</span>
               <p className="text-xl font-bold font-sans text-violet-400 mt-1">{formatBRL(dashboard.totalSaving)}</p>
-              <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">{dashboard.savingCount} itens vs catálogo · {dashboard.sumRecommended ? formatBRL(dashboard.totalSaving / Math.max(1, dashboard.savingCount))+'/item' : ''}</span>
+              <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">
+                {dashboard.savingReal > 0 && (
+                  <>{formatBRL(dashboard.savingReal)} medidos por cotação</>
+                )}
+                {dashboard.savingReal > 0 && dashboard.savingEstimado > 0 && ' + '}
+                {dashboard.savingEstimado > 0 && (
+                  <>{formatBRL(dashboard.savingEstimado)} estimados vs catálogo</>
+                )}
+                {dashboard.savingReal === 0 && dashboard.savingEstimado === 0 && 'sem compras comparáveis ainda'}
+              </span>
               <p className="text-[10px] text-zinc-600 font-mono">Sheets: SUM(O) cotação máx-mín</p>
             </div>
             <div className="p-3 bg-zinc-950 rounded text-violet-400 border border-zinc-900"><TrendingUp className="w-5 h-5" /></div>
@@ -808,6 +835,10 @@ export default function PurchasesView({ userRole }: PurchasesViewProps) {
       </div>
 
       </>)}
+
+      {activeTab === 'quotes' && (<QuotationsPanel />)}
+
+      {activeTab === 'logistics' && (<LogisticsPanel />)}
 
       {activeTab === 'orders' && (<>
 

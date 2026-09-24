@@ -1163,6 +1163,146 @@ def test_production_pending_overview(client):
                       query_string={"from": "ontem"}).status_code == 400
 
 
+def test_purchase_quotations_comparison_and_savings(client):
+    """Cotacoes por compra: comparativo, vencedora unica e economia MEDIDA."""
+    h = _login(client)
+    hoje = date.today().isoformat()
+
+    def fornecedor(nome):
+        r = client.post("/api/suppliers", headers=h, json={"name": nome})
+        assert r.status_code == 201, r.get_data(as_text=True)
+        return r.get_json()["id"]
+
+    f1 = fornecedor("Madeireira QA 1")
+    f2 = fornecedor("Madeireira QA 2")
+    f3 = fornecedor("Madeireira QA 3")
+
+    r = client.post("/api/purchases", headers=h, json={
+        "request_date": hoje, "carrier": "Transportes QA", "tracking": "BR123456789",
+        "items": [
+            {"material_name": "MDF QA A", "quantity": 10, "unit_price": 0},
+            {"material_name": "MDF QA B", "quantity": 5, "unit_price": 0},
+        ],
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    order = r.get_json()
+    oid = order["id"]
+    ia, ib = order["items"][0]["id"], order["items"][1]["id"]
+
+    assert order["carrier"] == "Transportes QA", order["carrier"]
+    assert order["tracking"] == "BR123456789", order["tracking"]
+    # pedido sem cotacao nao pode inventar economia
+    assert order["saving_real"] == 0 and order["saving_real_items"] == 0, order["saving_real"]
+
+    # tres cotacoes: A em 100/90/110 e B em 50/45/55
+    precos = [
+        (f1, [(ia, 100), (ib, 50)], 10),
+        (f2, [(ia, 90), (ib, 45)], 5),
+        (f3, [(ia, 110), (ib, 55)], 20),
+    ]
+    qids = []
+    for fid, itens, dias in precos:
+        r = client.post(f"/api/purchases/{oid}/quotations", headers=h, json={
+            "supplier_id": fid, "delivery_days": dias, "payment_terms": "30 dias",
+            "items": [{"purchase_item_id": p, "unit_price": v} for p, v in itens],
+        })
+        assert r.status_code == 201, r.get_data(as_text=True)
+        qids.append(r.get_json()["id"])
+
+    lst = client.get(f"/api/purchases/{oid}/quotations", headers=h).get_json()
+    assert len(lst) == 3, f"esperava 3 cotacoes, veio {len(lst)}"
+    # total = preco unitario x quantidade do item do pedido
+    totais = sorted(round(q["total"], 2) for q in lst)
+    # q1: 100*10 + 50*5 = 1250 | q2: 90*10 + 45*5 = 1125 | q3: 110*10 + 55*5 = 1375
+    assert totais == [1125.0, 1250.0, 1375.0], f"totais: {totais}"
+    assert not any(q["is_winner"] for q in lst), "nenhuma cotacao pode nascer vencedora"
+
+    # aprovar a MAIS BARATA (f2: A=90, B=45)
+    r = client.post(f"/api/purchases/{oid}/quotations/{qids[1]}/approve", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    aprovado = r.get_json()
+    assert aprovado["quotations_count"] == 3, aprovado["quotations_count"]
+
+    lst2 = client.get(f"/api/purchases/{oid}/quotations", headers=h).get_json()
+    vencedoras = [q for q in lst2 if q["is_winner"]]
+    assert len(vencedoras) == 1, f"{len(vencedoras)} vencedora(s) — a vencedora tem que ser unica"
+    assert vencedoras[0]["id"] == qids[1], "a vencedora nao e a aprovada"
+
+    precos_pedido = {i["id"]: i["unit_price"] for i in aprovado["items"]}
+    assert precos_pedido[ia] == 90 and precos_pedido[ib] == 45, precos_pedido
+    assert aprovado["status"] == "APROVADA", aprovado["status"]
+    assert aprovado["supplier_id"] == f2, aprovado["supplier_name"]
+
+    # economia MEDIDA = (maior cotado - escolhido) x quantidade
+    # A: (110-90)*10 = 200 | B: (55-45)*5 = 50  => 250
+    assert aprovado["saving_real"] == 250.0, aprovado["saving_real"]
+    assert aprovado["saving_real_items"] == 2, aprovado["saving_real_items"]
+
+    # cotacao com item de outro pedido nao entra
+    r = client.post(f"/api/purchases/{oid}/quotations", headers=h, json={
+        "supplier_id": f1, "items": [{"purchase_item_id": "id-inexistente", "unit_price": 1}]})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["items"] == [], "item de outro pedido nao pode entrar"
+
+    # validacoes
+    assert client.post(f"/api/purchases/{oid}/quotations", headers=h,
+                       json={"delivery_days": -3}).status_code == 400
+    assert client.post(f"/api/purchases/{oid}/quotations", headers=h,
+                       json={"delivery_days": "muitos"}).status_code == 400
+    assert client.post(f"/api/purchases/{oid}/quotations", headers=h,
+                       json={"supplier_id": "nao-existe"}).status_code == 400
+    assert client.get("/api/purchases/id-inexistente/quotations", headers=h).status_code == 404
+    assert client.post("/api/purchases/id-inexistente/quotations/id-x/approve",
+                       headers=h).status_code == 404
+
+    # editar e excluir cotacao
+    r = client.put(f"/api/quotations/{qids[0]}", headers=h,
+                   json={"payment_terms": "45 dias", "delivery_days": 15})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["payment_terms"] == "45 dias", r.get_json()["payment_terms"]
+    assert client.delete(f"/api/quotations/{qids[0]}", headers=h).status_code == 200
+    # sobraram a vencedora, a terceira e a vazia criada acima
+    assert len(client.get(f"/api/purchases/{oid}/quotations", headers=h).get_json()) == 3
+
+
+def test_purchases_logistics_calendar(client):
+    """Calendario logistico: pedidos por data esperada, com atrasados."""
+    h = _login(client)
+    hoje = date.today()
+    atrasado = (hoje - timedelta(days=4)).isoformat()
+    futuro = (hoje + timedelta(days=9)).isoformat()
+
+    r = client.post("/api/purchases", headers=h, json={
+        "request_date": hoje.isoformat(), "expected_date": atrasado,
+        "carrier": "Transportadora Atrasada", "tracking": "ATR-1",
+        "items": [{"material_name": "Item atrasado", "quantity": 1, "unit_price": 10}],
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    ped_atrasado = r.get_json()["id"]
+
+    r = client.post("/api/purchases", headers=h, json={
+        "request_date": hoje.isoformat(), "expected_date": futuro,
+        "carrier": "Transportadora Futura", "tracking": "FUT-1",
+        "items": [{"material_name": "Item futuro", "quantity": 1, "unit_price": 10}],
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    por_id = {p["id"]: p for p in client.get("/api/purchases", headers=h).get_json()}
+    assert por_id[ped_atrasado]["expected_date"] < hoje.isoformat(), \
+        por_id[ped_atrasado]["expected_date"]
+    assert por_id[ped_atrasado]["carrier"] == "Transportadora Atrasada", \
+        por_id[ped_atrasado]["carrier"]
+    assert por_id[ped_atrasado]["tracking"] == "ATR-1", por_id[ped_atrasado]["tracking"]
+
+    # editar so o rastreio nao pode apagar a transportadora
+    r = client.put(f"/api/purchases/{ped_atrasado}", headers=h, json={"tracking": "ATR-2"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    atualizado = r.get_json()
+    assert atualizado["tracking"] == "ATR-2", atualizado["tracking"]
+    assert atualizado["carrier"] == "Transportadora Atrasada", \
+        f"transportadora foi perdida: {atualizado['carrier']}"
+
+
 def test_financial_filters_and_aging(client):
     """Filtros server-side de /api/financial e o aging das contas em aberto."""
     h = _login(client)

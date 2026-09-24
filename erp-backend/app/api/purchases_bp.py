@@ -6,7 +6,10 @@ from flask import Blueprint, g, jsonify, request
 from app.auth import token_required
 from app.extensions import db
 from app.helpers import body_json, iso, num, parse_date
-from app.models.models import PurchaseItem, PurchaseOrder, StockItem, StockMovement, Supplier
+from app.models.models import (
+    PurchaseItem, PurchaseOrder, PurchaseQuotation, PurchaseQuotationItem,
+    StockItem, StockMovement, Supplier,
+)
 
 bp = Blueprint("purchases", __name__)
 
@@ -165,6 +168,8 @@ def create_purchase():
         request_date=rd,
         expected_date=ed,
         notes=data.get("notes") or "",
+        carrier=(data.get("carrier") or "").strip() or None,
+        tracking=(data.get("tracking") or "").strip() or None,
         created_by=g.current_user.username if hasattr(g, "current_user") else "",
         created_at=datetime.now(timezone.utc),
     )
@@ -233,6 +238,12 @@ def update_purchase(order_id):
     if "notes" in data:
         order.notes = data.get("notes") or ""
 
+    if "carrier" in data:
+        order.carrier = (data.get("carrier") or "").strip() or None
+
+    if "tracking" in data:
+        order.tracking = (data.get("tracking") or "").strip() or None
+
     if "status" in data:
         st = str(data.get("status")).strip().upper() if isinstance(data.get("status"), str) else ""
         if st:
@@ -291,5 +302,167 @@ def receive_purchase(order_id):
 
     order.status = "RECEBIDA"
     order.received_at = datetime.now(timezone.utc)
+    db.session.commit()
+    return jsonify(order.to_dict())
+
+
+# ── COTACOES ──────────────────────────────────────────────────────
+def _aplicar_itens_cotacao(quotation, itens):
+    """Recria os precos da cotacao.
+
+    Recria em vez de casar linha a linha: o comparativo manda a lista inteira a
+    cada gravacao, e casar por id so criaria chance de sobrar preco orfao
+    apontando para um item que ja saiu do pedido.
+    """
+    for antigo in list(quotation.items):
+        db.session.delete(antigo)
+    quotation.items = []
+    for it in itens or []:
+        if not isinstance(it, dict):
+            continue
+        pid = it.get("purchase_item_id")
+        if not pid:
+            continue
+        item = db.session.get(PurchaseItem, pid)
+        if not item or item.order_id != quotation.order_id:
+            continue  # item de outro pedido nao entra nesta cotacao
+        quotation.items.append(PurchaseQuotationItem(
+            purchase_item_id=pid,
+            unit_price=it.get("unit_price") or 0,
+        ))
+
+
+def _parse_delivery_days(valor):
+    """(dias, erro). Dias negativos nao existem: -1 viraria prazo no passado."""
+    if valor in (None, ""):
+        return None, None
+    try:
+        dias = int(valor)
+    except (TypeError, ValueError):
+        return None, "delivery_days deve ser um numero de dias"
+    if dias < 0:
+        return None, "delivery_days nao pode ser negativo"
+    return dias, None
+
+
+@bp.get("/api/purchases/<order_id>/quotations")
+@token_required()
+def list_quotations(order_id):
+    order = db.session.get(PurchaseOrder, order_id)
+    if not order:
+        return jsonify({"detail": "Compra nao encontrada"}), 404
+    return jsonify([q.to_dict() for q in order.quotations])
+
+
+@bp.post("/api/purchases/<order_id>/quotations")
+@token_required()
+def create_quotation(order_id):
+    order = db.session.get(PurchaseOrder, order_id)
+    if not order:
+        return jsonify({"detail": "Compra nao encontrada"}), 404
+
+    data = body_json()
+    supplier_id = data.get("supplier_id")
+    if supplier_id not in (None, ""):
+        if not db.session.get(Supplier, supplier_id):
+            return jsonify({"detail": "Fornecedor nao encontrado"}), 400
+    else:
+        supplier_id = None
+
+    dias, err = _parse_delivery_days(data.get("delivery_days"))
+    if err:
+        return jsonify({"detail": err}), 400
+
+    q = PurchaseQuotation(
+        order_id=order.id,
+        supplier_id=supplier_id,
+        delivery_days=dias,
+        payment_terms=(data.get("payment_terms") or "").strip() or None,
+        notes=(data.get("notes") or "").strip() or None,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.session.add(q)
+    db.session.flush()
+    _aplicar_itens_cotacao(q, data.get("items"))
+    db.session.commit()
+    return jsonify(q.to_dict()), 201
+
+
+@bp.put("/api/quotations/<quotation_id>")
+@token_required()
+def update_quotation(quotation_id):
+    q = db.session.get(PurchaseQuotation, quotation_id)
+    if not q:
+        return jsonify({"detail": "Cotacao nao encontrada"}), 404
+    data = body_json()
+
+    if "supplier_id" in data:
+        sid = data.get("supplier_id")
+        if sid in (None, ""):
+            q.supplier_id = None
+        else:
+            if not db.session.get(Supplier, sid):
+                return jsonify({"detail": "Fornecedor nao encontrado"}), 400
+            q.supplier_id = sid
+
+    if "delivery_days" in data:
+        dias, err = _parse_delivery_days(data.get("delivery_days"))
+        if err:
+            return jsonify({"detail": err}), 400
+        q.delivery_days = dias
+
+    if "payment_terms" in data:
+        q.payment_terms = (data.get("payment_terms") or "").strip() or None
+    if "notes" in data:
+        q.notes = (data.get("notes") or "").strip() or None
+    if "items" in data:
+        _aplicar_itens_cotacao(q, data.get("items"))
+
+    db.session.commit()
+    return jsonify(q.to_dict())
+
+
+@bp.delete("/api/quotations/<quotation_id>")
+@token_required()
+def delete_quotation(quotation_id):
+    q = db.session.get(PurchaseQuotation, quotation_id)
+    if not q:
+        return jsonify({"detail": "Cotacao nao encontrada"}), 404
+    db.session.delete(q)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@bp.post("/api/purchases/<order_id>/quotations/<quotation_id>/approve")
+@token_required()
+def approve_quotation(order_id, quotation_id):
+    """Marca a cotacao vencedora e leva os precos dela para o pedido.
+
+    A vencedora e UNICA — as outras sao desmarcadas. Sem isso a economia
+    medida (saving_real) contaria o mesmo item duas vezes. O pedido sai de
+    SOLICITADA/COTANDO para APROVADA, e o fornecedor passa a ser o da cotacao.
+    """
+    order = db.session.get(PurchaseOrder, order_id)
+    if not order:
+        return jsonify({"detail": "Compra nao encontrada"}), 404
+    q = db.session.get(PurchaseQuotation, quotation_id)
+    if not q or q.order_id != order.id:
+        return jsonify({"detail": "Cotacao nao encontrada nesta compra"}), 404
+    if order.status == "RECEBIDA":
+        return jsonify({"detail": "Compra ja recebida"}), 400
+
+    for outra in order.quotations:
+        outra.is_winner = (outra.id == q.id)
+
+    for qi in q.items:
+        item = db.session.get(PurchaseItem, qi.purchase_item_id)
+        if item and item.order_id == order.id:
+            item.unit_price = qi.unit_price
+
+    if q.supplier_id:
+        order.supplier_id = q.supplier_id
+    if order.status in ("SOLICITADA", "COTANDO"):
+        order.status = "APROVADA"
+
     db.session.commit()
     return jsonify(order.to_dict())
