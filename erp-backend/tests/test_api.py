@@ -3873,3 +3873,254 @@ def test_report_partners(client):
     client.delete(f"/api/clients/{c1['id']}", headers=h)
     client.delete(f"/api/clients/{c2['id']}", headers=h)
     client.delete(f"/api/partners/{pid}", headers=h)
+
+
+def test_proposals_crud_pdf_e_total(client):
+    """Proposta: total vem dos itens, PDF sai como PDF, cliente inexistente 404."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Proposta QA"}).get_json()["id"]
+
+    r = client.post("/api/proposals", headers=h, json={
+        "client_id": cid, "valid_until": date.today().isoformat(),
+        "notes": "Proposta de teste",
+        "items": [
+            {"description": "Armario planejado", "quantity": 1, "unit_price": 3500},
+            {"description": "Instalacao", "quantity": 2, "unit_price": 250},
+        ],
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    p = r.get_json()
+    assert p["number"].startswith("PROP-"), p["number"]
+    assert p["status"] == "RASCUNHO"
+    # 3500*1 + 250*2 = 4000
+    assert p["total_value"] == 4000.0, p["total_value"]
+    assert p["items_total"] == 4000.0
+    assert len(p["items"]) == 2
+    assert p["client_name"] == "Cliente Proposta QA"
+
+    # cliente inexistente -> 404 | sem client_id -> 400
+    assert client.post("/api/proposals", headers=h,
+                       json={"client_id": "nao-existe"}).status_code == 404
+    assert client.post("/api/proposals", headers=h, json={"items": []}).status_code == 400
+
+    # PDF de verdade (magic number), nao um JSON renomeado
+    r = client.get(f"/api/proposals/{p['id']}/pdf", headers=h)
+    assert r.status_code == 200
+    assert r.headers["Content-Type"].startswith("application/pdf")
+    assert r.data[:4] == b"%PDF", r.data[:8]
+
+    # editar itens recalcula o total: o valor NUNCA vem do cliente da API
+    r = client.put(f"/api/proposals/{p['id']}", headers=h, json={
+        "items": [{"description": "So um item", "quantity": 3, "unit_price": 100}],
+        "status": "ENVIADA",
+    })
+    assert r.status_code == 200, r.get_data(as_text=True)
+    atual = r.get_json()
+    assert atual["total_value"] == 300.0, atual["total_value"]
+    assert atual["status"] == "ENVIADA"
+    assert len(atual["items"]) == 1
+
+    # status invalido -> 400
+    assert client.put(f"/api/proposals/{p['id']}", headers=h,
+                      json={"status": "INVENTADO"}).status_code == 400
+    # item sem descricao nao entra, e o total zera junto
+    r = client.put(f"/api/proposals/{p['id']}", headers=h,
+                   json={"items": [{"quantity": 5, "unit_price": 10}]})
+    assert r.get_json()["items"] == []
+    assert r.get_json()["total_value"] == 0.0
+
+    assert client.get("/api/proposals/nao-existe", headers=h).status_code == 404
+    assert client.get("/api/proposals/nao-existe/pdf", headers=h).status_code == 404
+    assert client.delete(f"/api/proposals/{p['id']}", headers=h).status_code == 200
+    assert client.get(f"/api/proposals/{p['id']}", headers=h).status_code == 404
+
+
+def test_proposal_whatsapp_fallback_e_settings(client):
+    """Sem Evolution configurada: 200 com link wa.me (nunca falha silenciosa)."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Zap QA", "phone": "(55) 99999-1234"}).get_json()["id"]
+    p = client.post("/api/proposals", headers=h, json={
+        "client_id": cid,
+        "items": [{"description": "Mesa", "quantity": 1, "unit_price": 800}],
+    }).get_json()
+
+    st = client.get("/api/settings", headers=h)
+    assert st.status_code == 200, st.get_data(as_text=True)
+    assert all(not s["configured"] for s in st.get_json()), "settings deveria comecar vazio"
+
+    r = client.post(f"/api/proposals/{p['id']}/send-whatsapp", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["sent"] is False
+    assert body["fallback_wa_me"].startswith("https://wa.me/55"), body["fallback_wa_me"]
+    assert "Mesa" in body["fallback_wa_me"], "a mensagem tem que ir no link"
+    # fallback NAO marca enviada: abrir o link nao prova que a mensagem saiu
+    assert body["proposal"]["status"] == "RASCUNHO", body["proposal"]["status"]
+    assert body["proposal"]["sent_channel"] == ""
+
+    # cliente sem telefone -> 400 (nao ha para quem enviar)
+    cid2 = client.post("/api/clients", headers=h,
+                       json={"name": "Cliente Sem Fone QA"}).get_json()["id"]
+    p2 = client.post("/api/proposals", headers=h, json={
+        "client_id": cid2,
+        "items": [{"description": "X", "quantity": 1, "unit_price": 1}]}).get_json()
+    assert client.post(f"/api/proposals/{p2['id']}/send-whatsapp", headers=h).status_code == 400
+
+    # chave secreta volta mascarada
+    client.put("/api/settings", headers=h, json={
+        "evolution_key": "chave-secreta-1234", "evolution_url": "https://evo.exemplo.com"})
+    st = {s["key"]: s for s in client.get("/api/settings", headers=h).get_json()}
+    assert st["evolution_key"]["value"].endswith("1234"), st["evolution_key"]["value"]
+    assert "secreta" not in st["evolution_key"]["value"], "a chave nao pode voltar inteira"
+    assert st["evolution_url"]["value"] == "https://evo.exemplo.com"
+    # reenviar o valor mascarado NAO pode destruir a chave guardada
+    client.put("/api/settings", headers=h, json={"evolution_key": st["evolution_key"]["value"]})
+    st2 = {s["key"]: s for s in client.get("/api/settings", headers=h).get_json()}
+    assert st2["evolution_key"]["value"].endswith("1234"), st2["evolution_key"]["value"]
+
+
+def test_commissions_calculation(client):
+    """Comissao: 5% sobre venda fechada de 10.000 = 500."""
+    h = _login(client)
+    admin_id = client.get("/api/auth/me", headers=h).get_json()["id"]
+
+    r = client.post("/api/commission-rules", headers=h,
+                    json={"seller_id": admin_id, "percent": 5})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    regra = r.get_json()
+    assert regra["percent"] == 5.0, regra["percent"]
+    assert regra["seller_name"] == "admin"
+    assert regra["active"] is True
+
+    # venda fechada: cliente com vendedor e valor, movido para etapa de GANHO
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Comissao QA", "estimated_value": 10000, "seller_id": admin_id,
+    }).get_json()["id"]
+    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": "FECHAMENTO"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["seller_id"] == admin_id, r.get_json()["seller_id"]
+    assert r.get_json()["closed_at"], "entrar em etapa de ganho tem que gravar closed_at"
+
+    hoje = date.today()
+    rel = client.get(f"/api/commissions?year={hoje.year}&month={hoje.month}", headers=h)
+    assert rel.status_code == 200, rel.get_data(as_text=True)
+    dados = rel.get_json()
+    linha = [l for l in dados["rows"] if l["seller_id"] == admin_id]
+    assert linha, f"sem linha para o vendedor: {dados['rows']}"
+    assert linha[0]["kind"] == "VENDEDOR"
+    assert linha[0]["sold_value"] == 10000.0, linha[0]["sold_value"]
+    assert linha[0]["commission_value"] == 500.0, linha[0]["commission_value"]
+    assert dados["total_commission"] >= 500.0, dados["total_commission"]
+
+    # mes sem venda nao pode herdar a comissao do mes com venda
+    outro_mes = 1 if hoje.month != 1 else 2
+    vazio = client.get(f"/api/commissions?year={hoje.year}&month={outro_mes}",
+                       headers=h).get_json()
+    assert vazio["total_commission"] == 0.0, vazio["total_commission"]
+
+    # validacoes
+    assert client.post("/api/commission-rules", headers=h,
+                       json={"percent": 5}).status_code == 400, "regra sem dono"
+    assert client.post("/api/commission-rules", headers=h,
+                       json={"seller_id": admin_id, "percent": 150}).status_code == 400
+    assert client.post("/api/commission-rules", headers=h,
+                       json={"seller_id": admin_id, "percent": "muito"}).status_code == 400
+    assert client.post("/api/commission-rules", headers=h,
+                       json={"seller_id": "nao-existe", "percent": 5}).status_code == 404
+    assert client.post("/api/commission-rules", headers=h,
+                       json={"partner_id": "nao-existe", "percent": 5}).status_code == 404
+    assert client.get("/api/commissions?year=1800", headers=h).status_code == 400
+    assert client.get("/api/commissions?year=2026&month=13", headers=h).status_code == 400
+
+    # desativar a regra tira a comissao do calculo
+    assert client.put(f"/api/commission-rules/{regra['id']}",
+                      headers=h, json={"active": False}).status_code == 200
+    depois = client.get(f"/api/commissions?year={hoje.year}&month={hoje.month}",
+                        headers=h).get_json()
+    assert not [l for l in depois["rows"] if l["rule_id"] == regra["id"]], "regra inativa nao conta"
+    # a venda nao some do relatorio: aparece como sem atribuicao
+    assert depois["sem_atribuicao"]["count"] >= 1, depois["sem_atribuicao"]
+
+    assert client.delete(f"/api/commission-rules/{regra['id']}", headers=h).status_code == 200
+    assert client.delete("/api/commission-rules/nao-existe", headers=h).status_code == 404
+
+
+def test_proposal_whatsapp_envia_pela_evolution(client, monkeypatch):
+    """Com Evolution configurada, o envio marca ENVIADA e canal WHATSAPP."""
+    import app.api.proposals_bp as pb
+    from urllib.error import HTTPError
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    chamadas = {}
+
+    def fake_urlopen(req, timeout=None):
+        chamadas["url"] = req.full_url
+        chamadas["apikey"] = req.get_header("Apikey")
+        chamadas["corpo"] = req.data.decode()
+        return _Resp()
+
+    monkeypatch.setattr(pb, "urlopen", fake_urlopen)
+
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Evolution QA", "phone": "55999998888"}).get_json()["id"]
+    p = client.post("/api/proposals", headers=h, json={
+        "client_id": cid,
+        "items": [{"description": "Armario", "quantity": 1, "unit_price": 1200}],
+    }).get_json()
+
+    # sem configuracao nao chama a Evolution nem marca nada
+    r = client.post(f"/api/proposals/{p['id']}/send-whatsapp", headers=h)
+    assert r.get_json()["sent"] is False
+    assert not chamadas, "nao pode chamar a Evolution sem configuracao"
+
+    client.put("/api/settings", headers=h, json={
+        "evolution_url": "https://evo.exemplo.com", "evolution_key": "k-12345678",
+        "evolution_instance": "eme"})
+
+    r = client.post(f"/api/proposals/{p['id']}/send-whatsapp", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["sent"] is True, body
+    assert body["channel"] == "WHATSAPP"
+    assert body["fallback_wa_me"] is None, "quem enviou nao precisa de link"
+    assert body["proposal"]["status"] == "ENVIADA", body["proposal"]["status"]
+    assert body["proposal"]["sent_channel"] == "WHATSAPP"
+    assert body["proposal"]["sent_at"], "envio tem que gravar a data"
+
+    # a chamada foi para o lugar certo, com a chave e o telefone com pais
+    assert chamadas["url"] == "https://evo.exemplo.com/message/sendText/eme", chamadas["url"]
+    assert chamadas["apikey"] == "k-12345678", chamadas["apikey"]
+    assert "55999998888" in chamadas["corpo"], chamadas["corpo"]
+    assert "Armario" in chamadas["corpo"], chamadas["corpo"]
+
+    # Evolution fora do ar: cai no fallback em vez de estourar 500
+    def falha(req, timeout=None):
+        raise HTTPError(req.full_url, 500, "erro interno", None, None)
+
+    monkeypatch.setattr(pb, "urlopen", falha)
+
+    p2 = client.post("/api/proposals", headers=h, json={
+        "client_id": cid,
+        "items": [{"description": "Mesa", "quantity": 1, "unit_price": 300}]}).get_json()
+    r = client.post(f"/api/proposals/{p2['id']}/send-whatsapp", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    b2 = r.get_json()
+    assert b2["sent"] is False, b2
+    assert b2["fallback_wa_me"].startswith("https://wa.me/"), b2["fallback_wa_me"]
+    assert "500" in b2["detail"], b2["detail"]
+    # e nao pode ter marcado como enviada
+    assert b2["proposal"]["status"] == "RASCUNHO", b2["proposal"]["status"]
+    assert b2["proposal"]["sent_channel"] == ""
+
+

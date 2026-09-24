@@ -24,6 +24,7 @@ from app.models.models import (
     Product,
     utcnow,
     Project,
+    User,
 )
 
 bp = Blueprint("clients", __name__)
@@ -31,7 +32,7 @@ bp = Blueprint("clients", __name__)
 CLIENT_FIELDS = (
     "name", "email", "phone", "cpf_cnpj", "address",
     "funnel_status", "lost_reason", "estimated_value", "lead_source", "campaign",
-    "funnel_id", "partner_id",
+    "funnel_id", "partner_id", "seller_id",
     "is_supplier", "contact", "category", "payment_terms", "avg_delivery_days",
 )
 
@@ -188,7 +189,7 @@ def create_client():
         return jsonify({"detail": "name e obrigatorio"}), 400
     client = Client()
     for f in CLIENT_FIELDS:
-        if f in ("funnel_id", "partner_id"):
+        if f in ("funnel_id", "partner_id", "seller_id"):
             continue
         if f in ("is_supplier", "contact", "category", "payment_terms", "avg_delivery_days"):
             continue
@@ -215,6 +216,15 @@ def create_client():
             if not db.session.get(Partner, pid):
                 return jsonify({"detail": "Parceiro nao encontrado"}), 404
             client.partner_id = pid
+    if "seller_id" in data:
+        raw = data.get("seller_id")
+        if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+            client.seller_id = None
+        else:
+            sid = str(raw).strip()
+            if not db.session.get(User, sid):
+                return jsonify({"detail": "Vendedor nao encontrado"}), 404
+            client.seller_id = sid
     _upsert_option(LeadSource, client.lead_source)
     _upsert_option(Campaign, client.campaign)
     db.session.add(client)
@@ -402,7 +412,7 @@ def update_client(client_id):
     old_source = client.lead_source
     old_campaign = client.campaign
     for f in CLIENT_FIELDS:
-        if f in ("funnel_id", "partner_id"):
+        if f in ("funnel_id", "partner_id", "seller_id"):
             continue
         if f in ("is_supplier", "contact", "category", "payment_terms", "avg_delivery_days"):
             continue
@@ -436,6 +446,15 @@ def update_client(client_id):
             if not db.session.get(Partner, pid):
                 return jsonify({"detail": "Parceiro nao encontrado"}), 404
             client.partner_id = pid
+    if "seller_id" in data:
+        raw = data.get("seller_id")
+        if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):
+            client.seller_id = None
+        else:
+            sid = str(raw).strip()
+            if not db.session.get(User, sid):
+                return jsonify({"detail": "Vendedor nao encontrado"}), 404
+            client.seller_id = sid
     _upsert_option(LeadSource, client.lead_source)
     _upsert_option(Campaign, client.campaign)
     if client.funnel_status != old_funnel:

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
-  PurchaseQuotation } from '../types';
+  PurchaseQuotation,
+  Proposal, CommissionRule, CommissionReport, AppSetting } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -1028,6 +1029,106 @@ export const goalService = {
     if (filters.month) params.month = String(filters.month);
     if (filters.scope) params.scope = filters.scope;
     const response = await api.get('/api/goals/summary', { params });
+    return response.data;
+  },
+
+  async create(data: any): Promise<SalesGoal> {
+    const response = await api.post('/api/goals', data);
+    return response.data;
+  },
+
+  async update(id: string, data: any): Promise<SalesGoal> {
+    const response = await api.put(`/api/goals/${id}`, data);
+    return response.data;
+  },
+
+  async remove(id: string): Promise<any> {
+    const response = await api.delete(`/api/goals/${id}`);
+    return response.data;
+  },
+};
+
+export const proposalService = {
+  async list(params: { status?: string; client_id?: string } = {}): Promise<Proposal[]> {
+    const response = await api.get('/api/proposals', { params });
+    return response.data;
+  },
+  async get(id: string): Promise<Proposal> {
+    const response = await api.get(`/api/proposals/${id}`);
+    return response.data;
+  },
+  async create(data: any): Promise<Proposal> {
+    const response = await api.post('/api/proposals', data);
+    return response.data;
+  },
+  async update(id: string, data: any): Promise<Proposal> {
+    const response = await api.put(`/api/proposals/${id}`, data);
+    return response.data;
+  },
+  async remove(id: string): Promise<any> {
+    const response = await api.delete(`/api/proposals/${id}`);
+    return response.data;
+  },
+  /** URL do PDF (aberta em nova aba; o token vai no header, então baixamos via blob). */
+  async downloadPdf(id: string, numero: string): Promise<void> {
+    const response = await api.get(`/api/proposals/${id}/pdf`, { responseType: 'blob' });
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${numero}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
+  /** Envia pelo WhatsApp. Sem Evolution configurada volta 200 com fallback_wa_me. */
+  async sendWhatsapp(id: string): Promise<{
+    sent: boolean; channel: string | null; detail: string;
+    fallback_wa_me: string | null; proposal: Proposal;
+  }> {
+    const response = await api.post(`/api/proposals/${id}/send-whatsapp`);
+    return response.data;
+  },
+};
+
+export const commissionService = {
+  async report(params: { year?: number; month?: number } = {}): Promise<CommissionReport> {
+    const q: Record<string, string> = {};
+    if (params.year) q.year = String(params.year);
+    if (params.month) q.month = String(params.month);
+    const response = await api.get('/api/commissions', { params: q });
+    return response.data;
+  },
+  async listRules(): Promise<CommissionRule[]> {
+    const response = await api.get('/api/commission-rules');
+    return response.data;
+  },
+  /** Quem pode receber comissao (so id e nome) para o seletor da regra. */
+  async ruleOptions(): Promise<{ sellers: { id: string; name: string }[]; partners: { id: string; name: string }[] }> {
+    const response = await api.get('/api/commission-rules/options');
+    return response.data;
+  },
+  async createRule(data: any): Promise<CommissionRule> {
+    const response = await api.post('/api/commission-rules', data);
+    return response.data;
+  },
+  async updateRule(id: string, data: any): Promise<CommissionRule> {
+    const response = await api.put(`/api/commission-rules/${id}`, data);
+    return response.data;
+  },
+  async removeRule(id: string): Promise<any> {
+    const response = await api.delete(`/api/commission-rules/${id}`);
+    return response.data;
+  },
+};
+
+export const settingsService = {
+  async list(): Promise<AppSetting[]> {
+    const response = await api.get('/api/settings');
+    return response.data;
+  },
+  async update(data: Record<string, string>): Promise<{ saved: string[] }> {
+    const response = await api.put('/api/settings', data);
     return response.data;
   },
 };

@@ -10,15 +10,20 @@ import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner } from '../t
 import ClientDetailModal from './ClientDetailModal';
 
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
+import ProposalsPanel from './ProposalsPanel';
+import CommissionsPanel from './CommissionsPanel';
+import PartnersPanel from './PartnersPanel';
+import PlanningPanel from './PlanningPanel';
+import CommercialDashboard from './CommercialDashboard';
 
 /** Abas do módulo Comercial, conforme a spec do cliente (17/09). */
 const COMMERCIAL_TABS: ModuleTab[] = [
-  { id: 'dashboard', label: 'Dashboard comercial' },
+  { id: 'dashboard', label: 'Dashboard comercial', ready: true },
   { id: 'funnel', label: 'Funil de vendas', ready: true },
-  { id: 'proposals', label: 'Orçamentos/Propostas' },
-  { id: 'commissions', label: 'Comissões' },
-  { id: 'partners', label: 'Parceiros/Arquitetos' },
-  { id: 'planning', label: 'Planejamento comercial' },
+  { id: 'proposals', label: 'Orçamentos/Propostas', ready: true },
+  { id: 'commissions', label: 'Comissões', ready: true },
+  { id: 'partners', label: 'Parceiros/Arquitetos', ready: true },
+  { id: 'planning', label: 'Planejamento comercial', ready: true },
 ];
 
 interface ClientsViewProps {
@@ -687,6 +692,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
       <ModuleTabs tabs={COMMERCIAL_TABS} active={activeTab} onChange={setActiveTab} />
       <ActiveTabPlaceholder tabs={COMMERCIAL_TABS} active={activeTab} />
+
+      {activeTab === 'dashboard' && (<CommercialDashboard />)}
+
+      {activeTab === 'proposals' && (<ProposalsPanel />)}
+
+      {activeTab === 'commissions' && (<CommissionsPanel />)}
+
+      {activeTab === 'partners' && (<PartnersPanel />)}
+
+      {activeTab === 'planning' && (<PlanningPanel />)}
 
       {activeTab === 'funnel' && (<>
 

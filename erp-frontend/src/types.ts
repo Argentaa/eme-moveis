@@ -341,6 +341,82 @@ export interface PurchaseQuotation {
   total: number;
 }
 
+// ── Comercial (propostas e comissoes) ────────────────────────────────
+export type ProposalStatus = 'RASCUNHO' | 'ENVIADA' | 'ACEITA' | 'RECUSADA';
+
+export interface ProposalItem {
+  id: string;
+  proposal_id: string;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  position: number;
+  subtotal: number;
+}
+
+export interface Proposal {
+  id: string;
+  number: string;
+  client_id: string;
+  client_name: string | null;
+  project_id: string | null;
+  status: ProposalStatus;
+  /** Total gravado — sempre igual a items_total (o backend recalcula). */
+  total_value: number;
+  items_total: number;
+  valid_until: string | null;
+  notes: string;
+  sent_at: string | null;
+  sent_channel: string;
+  created_by: string;
+  created_at: string;
+  items: ProposalItem[];
+}
+
+export interface CommissionRule {
+  id: string;
+  seller_id: string | null;
+  seller_name: string | null;
+  partner_id: string | null;
+  partner_name: string | null;
+  percent: number;
+  valid_from: string | null;
+  valid_until: string | null;
+  active: boolean;
+  notes: string;
+  created_at: string;
+}
+
+export interface CommissionRow {
+  rule_id: string;
+  kind: 'VENDEDOR' | 'PARCEIRO';
+  seller_id: string | null;
+  partner_id: string | null;
+  name: string;
+  percent: number;
+  sales_count: number;
+  sold_value: number;
+  commission_value: number;
+}
+
+export interface CommissionReport {
+  year: number;
+  month: number | null;
+  total_sold: number;
+  closed_count: number;
+  total_commission: number;
+  rows: CommissionRow[];
+  /** Vendas fechadas que nao entram na conta de ninguem — mostradas, nao somadas. */
+  sem_atribuicao: { count: number; sold_value: number };
+}
+
+export interface AppSetting {
+  key: string;
+  value: string;
+  configured: boolean;
+  secret: boolean;
+}
+
 export interface BudgetGoal {
   id: string;
   year: number;

@@ -99,6 +99,10 @@ class Client(db.Model):
     # Gravado quando o cliente entra na ultima etapa do funil (venda fechada).
     # Necessario para meta comercial e comissao por periodo; dados antigos ficam NULL.
     closed_at = db.Column(DateTime, nullable=True, index=True)
+    # Quem vendeu: base da comissao de vendedor. NULL = sem atribuicao, e o
+    # relatorio mostra como "sem vendedor" em vez de ratear entre todos.
+    seller_id = db.Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    seller = db.relationship("User")
 
     def to_dict(self):
         return {
@@ -118,6 +122,8 @@ class Client(db.Model):
             "funnel_id": self.funnel_id,
             "partner_id": self.partner_id,
             "partner_name": self.partner.name if getattr(self, "partner", None) else None,
+            "seller_id": self.seller_id,
+            "seller_name": self.seller.username if getattr(self, "seller", None) else None,
             "is_supplier": bool(self.is_supplier),
             "contact": self.contact or "",
             "category": self.category or "",
@@ -951,6 +957,131 @@ class SalesGoal(db.Model):
         }
 
 
+class Proposal(db.Model):
+    """Proposta comercial enviada ao cliente.
+
+    Nasce antes do projeto: `project_id` so e preenchido quando o cliente aceita
+    e o projeto e criado. `sent_channel` diz por onde saiu de verdade (WHATSAPP
+    pela Evolution API, WA_ME pelo link, ou MANUAL) — nunca fica implicito.
+    """
+    __tablename__ = "proposals"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    number = db.Column(String(40), nullable=False)
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
+    status = db.Column(String(20), nullable=False, default="RASCUNHO", index=True)
+    total_value = db.Column(Numeric(14, 2), nullable=False, default=0)
+    valid_until = db.Column(Date, nullable=True)
+    notes = db.Column(Text, nullable=True, default="")
+    sent_at = db.Column(DateTime, nullable=True)
+    sent_channel = db.Column(String(20), nullable=True)
+    created_by = db.Column(String(80), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    client = db.relationship("Client")
+    items = db.relationship("ProposalItem", cascade="all, delete-orphan",
+                            passive_deletes=False, order_by="ProposalItem.position",
+                            backref="proposal")
+
+    @property
+    def computed_total(self):
+        """Total somado dos itens — a fonte da verdade do valor da proposta."""
+        return round(sum((num(i.quantity) or 0) * (num(i.unit_price) or 0)
+                         for i in self.items), 2)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "number": self.number,
+            "client_id": self.client_id,
+            "client_name": self.client.name if self.client else None,
+            "project_id": self.project_id,
+            "status": self.status,
+            "total_value": num(self.total_value),
+            "items_total": self.computed_total,
+            "valid_until": self.valid_until.isoformat() if self.valid_until else None,
+            "notes": self.notes or "",
+            "sent_at": iso(self.sent_at),
+            "sent_channel": self.sent_channel or "",
+            "created_by": self.created_by or "",
+            "created_at": iso(self.created_at),
+            "items": [i.to_dict() for i in self.items],
+        }
+
+
+class ProposalItem(db.Model):
+    __tablename__ = "proposal_items"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    proposal_id = db.Column(String(36), ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False, index=True)
+    description = db.Column(String(255), nullable=False)
+    quantity = db.Column(Numeric(14, 2), nullable=False, default=0)
+    unit_price = db.Column(Numeric(14, 2), nullable=False, default=0)
+    position = db.Column(Integer, nullable=False, default=0)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    @property
+    def subtotal(self):
+        return round((num(self.quantity) or 0) * (num(self.unit_price) or 0), 2)
+
+    def to_dict(self):
+        return {"id": self.id, "proposal_id": self.proposal_id,
+                "description": self.description,
+                "quantity": num(self.quantity), "unit_price": num(self.unit_price),
+                "position": self.position, "subtotal": self.subtotal}
+
+
+class AppSetting(db.Model):
+    """Chave/valor de configuracao editavel pelo ADMIN (ex.: Evolution API).
+
+    Fica em tabela e nao em variavel de ambiente porque o cliente troca a
+    instancia do WhatsApp sem deploy. Leitura devolve mascarado (ver blueprint).
+    """
+    __tablename__ = "app_settings"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    key = db.Column(String(80), nullable=False, unique=True, index=True)
+    value = db.Column(Text, nullable=True)
+    updated_at = db.Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    def to_dict(self):
+        return {"id": self.id, "key": self.key, "value": self.value or "",
+                "updated_at": iso(self.updated_at)}
+
+
+class CommissionRule(db.Model):
+    """Regra de comissao: percentual com vigencia, para vendedor OU parceiro.
+
+    E regra, nao valor congelado: mudar o percentual no mes que vem nao reescreve
+    o que ja foi pago nos meses anteriores.
+    """
+    __tablename__ = "commission_rules"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    seller_id = db.Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    partner_id = db.Column(String(36), ForeignKey("partners.id", ondelete="SET NULL"), nullable=True, index=True)
+    percent = db.Column(Numeric(6, 2), nullable=False, default=0)
+    valid_from = db.Column(Date, nullable=True)
+    valid_until = db.Column(Date, nullable=True)
+    active = db.Column(Boolean, nullable=False, default=True)
+    notes = db.Column(Text, nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    seller = db.relationship("User")
+    partner = db.relationship("Partner")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "seller_id": self.seller_id,
+            "seller_name": self.seller.username if self.seller else None,
+            "partner_id": self.partner_id,
+            "partner_name": self.partner.name if self.partner else None,
+            "percent": num(self.percent),
+            "valid_from": self.valid_from.isoformat() if self.valid_from else None,
+            "valid_until": self.valid_until.isoformat() if self.valid_until else None,
+            "active": bool(self.active),
+            "notes": self.notes or "",
+            "created_at": iso(self.created_at),
+        }
+
+
 class ChangelogEntry(db.Model):
     __tablename__ = "changelog_entries"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -1338,6 +1469,18 @@ DEFAULT_CHANGELOG_ENTRIES = [
      "NOVIDADE", "2026-09-24"),
     ("Calendário logístico das compras",
      "Os pedidos aparecem pela data prevista de entrega, do mais atrasado para o mais distante, com transportadora e código de rastreio editáveis na própria linha.",
+     "NOVIDADE", "2026-09-24"),
+    ("Propostas com PDF e envio por WhatsApp",
+     "O orçamento agora vive no sistema: itens, validade e um PDF com a cara da EME. Dá para enviar pelo WhatsApp em um clique — e quando a integração não está configurada, o botão abre o WhatsApp com a mensagem pronta em vez de dar erro.",
+     "NOVIDADE", "2026-09-24"),
+    ("Comissões por vendedor e parceiro",
+     "Regra de percentual com vigência, aplicada sobre as vendas fechadas do mês. Mudar o percentual hoje não altera o que já foi calculado nos meses anteriores.",
+     "NOVIDADE", "2026-09-24"),
+    ("Planejamento comercial com meta e realizado",
+     "Meta do mês ou do ano, geral ou por vendedor/parceiro, com o quanto já foi realizado. Vendas fechadas sem data de fechamento aparecem separadas, para o número não enganar.",
+     "NOVIDADE", "2026-09-24"),
+    ("Parceiros e arquitetos com cadastro completo",
+     "Dá para cadastrar, corrigir contato e desativar quem parou de indicar — e ver o ranking de indicações do período.",
      "NOVIDADE", "2026-09-24"),
     ("Financeiro organizado em abas",
      "Dashboard, Contas a pagar, Contas a receber, Lançamentos, Movimentações, Pendências, Contas bancárias, DRE e Planejamento orçamentário — cada assunto na sua aba, sem precisar rolar uma tela só.",
