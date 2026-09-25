@@ -6,7 +6,7 @@ from flask import Blueprint, g, jsonify
 from app.helpers import body_json, parse_date
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import ChecklistItem, Funnel, Project, User
+from app.models.models import ChecklistItem, Funnel, Project, User, utcnow
 
 bp = Blueprint("projects", __name__)
 
@@ -33,9 +33,10 @@ def _apply(data, project, partial=True):
             if not funnel or funnel.kind != "PROJECTS" or not funnel.active:
                 return "invalid"
             project.funnel_id = fid
-    # auto-preenche actual_end_date ao concluir
-    if getattr(project, "status", None) == "CONCLUIDO" and getattr(project, "actual_end_date", None) is None:
-        project.actual_end_date = date.today()
+    # actual_end_date de conclusao e gravado pelo endpoint /conclude, a partir
+    # da flag explicita. NAO deduzir da chave da coluna: neste funil de
+    # Producao a chave "CONCLUIDO" e a coluna "Medicao In Loco", entao olhar a
+    # chave marcava como entregue um projeto que mal saiu da medicao.
     return None
 
 
@@ -78,6 +79,58 @@ def overdue_projects():
     return jsonify(out)
 
 
+@bp.get("/api/projects/concluded")
+@token_required()
+def concluded_projects():
+    """Projetos concluidos — alimenta a aba "Projetos entregues" do Pos-venda.
+
+    Filtra pela flag explicita `concluded_at`, NAO pela coluna do funil: as
+    colunas sao renomeadas pelo cliente e neste funil de Producao a chave
+    "CONCLUIDO" esta numa coluna do meio ("Medicao In Loco").
+    """
+    rows = (
+        db.session.query(Project)
+        .filter(Project.concluded_at.isnot(None))
+        .order_by(Project.concluded_at.desc())
+        .all()
+    )
+    return jsonify([p.to_dict() for p in rows])
+
+
+@bp.post("/api/projects/<project_id>/conclude")
+@token_required()
+def conclude_project(project_id):
+    """Botao "Concluir projeto": sai da Producao e entra no Pos-venda.
+
+    Idempotente: concluir duas vezes nao reescreve a data original.
+    """
+    project = db.session.get(Project, project_id)
+    if not project:
+        return jsonify({"detail": "Projeto nao encontrado"}), 404
+    if project.concluded_at is None:
+        project.concluded_at = utcnow()
+        if project.actual_end_date is None:
+            project.actual_end_date = date.today()
+    db.session.commit()
+    return jsonify(project.to_dict())
+
+
+@bp.post("/api/projects/<project_id>/reopen")
+@token_required()
+def reopen_project(project_id):
+    """Desfaz a conclusao: o projeto volta para a Producao.
+
+    Existe para o botao nao ser um beco sem saida — concluir por engano tem
+    volta.
+    """
+    project = db.session.get(Project, project_id)
+    if not project:
+        return jsonify({"detail": "Projeto nao encontrado"}), 404
+    project.concluded_at = None
+    db.session.commit()
+    return jsonify(project.to_dict())
+
+
 @bp.get("/api/projects")
 @token_required()
 def list_projects():
@@ -98,8 +151,6 @@ def create_project():
         return jsonify({"detail": "funnel_id invalido"}), 400
     status_val = data.get("status") or "ORCAMENTO"
     actual = parse_date(data.get("actual_end_date"))
-    if status_val == "CONCLUIDO" and actual is None:
-        actual = date.today()
     project = Project(
         title=data["title"].strip(),
         client_id=data["client_id"],
@@ -161,8 +212,6 @@ def update_project_status(project_id):
         project.start_date = parse_date(data.get("start_date"))
     if "planned_end_date" in data:
         project.planned_end_date = parse_date(data.get("planned_end_date"))
-    if project.status == "CONCLUIDO" and project.actual_end_date is None:
-        project.actual_end_date = date.today()
     db.session.commit()
     return jsonify(project.to_dict())
 

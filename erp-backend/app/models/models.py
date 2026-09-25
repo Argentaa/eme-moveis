@@ -89,6 +89,11 @@ class Client(db.Model):
     funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True, index=True)
     partner_id = db.Column(String(36), ForeignKey("partners.id", ondelete="SET NULL"), nullable=True, index=True)
     partner = db.relationship("Partner")
+    # Venda concluida pelo botao "Concluir venda" do Comercial. Explicito, pelo
+    # mesmo motivo do Project.concluded_at: as colunas do funil sao renomeadas
+    # pelo cliente, entao nao da para deduzir "ganhou" do nome da coluna.
+    # Preenchido = o card sai do funil de vendas e o projeto nasce na Producao.
+    sale_concluded_at = db.Column(DateTime, nullable=True, index=True)
 
     # Campos de fornecedor (cadastro central: cliente tambem pode ser fornecedor)
     is_supplier = db.Column(Boolean, nullable=False, default=False, server_default=sa.false(), index=True)
@@ -120,6 +125,7 @@ class Client(db.Model):
             "campaign": self.campaign,
             "negotiation_value": self.negotiation_value,
             "funnel_id": self.funnel_id,
+            "sale_concluded_at": iso(self.sale_concluded_at),
             "partner_id": self.partner_id,
             "partner_name": self.partner.name if getattr(self, "partner", None) else None,
             "seller_id": self.seller_id,
@@ -361,12 +367,22 @@ class Project(db.Model):
     steps = db.Column(JSON, nullable=True, default=list)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
     funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Conclusao explicita (botao "Concluir projeto"), independente da coluna do
+    # funil. NAO usar a chave da coluna para isso: o cliente renomeia as colunas
+    # e neste funil de Producao a chave "CONCLUIDO" esta numa coluna do MEIO
+    # (rotulo "Medicao In Loco") — olhar a chave marcava projeto em medicao
+    # como finalizado. NULL = em producao; preenchido = foi para Pos-venda.
+    concluded_at = db.Column(DateTime, nullable=True, index=True)
 
     client = db.relationship("Client", backref=db.backref("projects", cascade="all, delete-orphan", passive_deletes=True))
 
     @property
+    def is_concluded(self):
+        return self.concluded_at is not None
+
+    @property
     def deadline_status(self):
-        if self.status == "CONCLUIDO":
+        if self.concluded_at is not None:
             return "CONCLUIDO"
         if not self.deadline:
             return "VERDE"
@@ -402,6 +418,8 @@ class Project(db.Model):
             "steps": self.steps or [],
             "created_at": iso(self.created_at),
             "funnel_id": self.funnel_id,
+            "concluded_at": iso(self.concluded_at),
+            "is_concluded": self.is_concluded,
             "environments": [e.to_dict() for e in getattr(self, "environments", [])],
             "total_area_m2": float(sum((num(e.area_m2) or 0) for e in getattr(self, "environments", []))),
             "total_environments": len(getattr(self, "environments", [])),
@@ -1455,6 +1473,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Concluir venda e concluir projeto",
+     "Dois botões explícitos fecham o caminho do serviço: no Comercial, \"Concluir venda\" cria o projeto e tira o card do funil de vendas; na Produção, \"Concluir projeto\" tira o card da produção e o entrega na nova aba \"Projetos entregues\", no Pós-venda — de onde dá para reabrir, se precisar. A conclusão é um estado próprio do projeto, e não o nome da coluna do funil: como as colunas podem ser renomeadas a qualquer momento, amarrar a conclusão ao nome delas daria resultado errado.",
+     "NOVIDADE", "2026-09-25"),
     ("Anexos maiores no cliente e no funil",
      "O limite de anexo subiu para 50 MB. Antes, qualquer arquivo acima de 1 MB era recusado pelo servidor de arquivos estáticos, antes mesmo de chegar ao sistema — e a mensagem na tela dizia 25 MB, número que não tinha relação com o bloqueio real. Agora o limite mostrado na tela é o que vale de verdade, e a mensagem de recusa informa o número certo.",
      "CORRECAO", "2026-09-25"),

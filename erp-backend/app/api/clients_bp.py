@@ -1,11 +1,12 @@
 """CRUD /api/clients."""
 import math
+from datetime import date, timedelta
 
 from flask import Blueprint, g, jsonify, request
 from sqlalchemy.exc import IntegrityError
 import sqlalchemy as sa
 
-from app.helpers import body_json
+from app.helpers import body_json, num, parse_date
 from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
@@ -511,6 +512,69 @@ def update_client(client_id):
         return jsonify({"detail": "cpf_cnpj ja cadastrado"}), 400
     ensure_supplier_mirror(client)
     return jsonify(client.to_dict())
+
+
+@bp.post("/api/clients/<client_id>/conclude-sale")
+@token_required()
+def conclude_sale(client_id):
+    """Botao "Concluir venda" do Comercial.
+
+    Faz as duas coisas numa transacao so: marca a venda como concluida (o card
+    sai do funil de vendas) e cria o projeto na Producao. Separadas, "vender"
+    virava dois passos manuais e o projeto podia nascer sem vinculo com a venda
+    — ou a venda ficar marcada como ganha sem nada em producao.
+
+    A conclusao e a flag `sale_concluded_at`, NAO a coluna do funil: as colunas
+    sao renomeadas pelo cliente e a chave nao e confiavel.
+    """
+    client = db.session.get(Client, client_id)
+    if not client:
+        return jsonify({"detail": "Cliente nao encontrado"}), 404
+
+    data = body_json()
+    title = (data.get("title") or "").strip() or f"Projeto - {client.name}"
+    raw_value = data.get("value")
+    if raw_value in (None, ""):
+        raw_value = num(client.negotiation_value) or num(client.estimated_value) or 0
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return jsonify({"detail": "value invalido"}), 400
+
+    funnel = db.session.query(Funnel).filter_by(kind="PROJECTS", is_default=True).first()
+    if not funnel:
+        return jsonify({"detail": "Funil de Producao nao encontrado"}), 400
+
+    # Primeira coluna do funil (por posicao): o projeto nasce no inicio da
+    # Producao. O resto do caminho e o operador quem move.
+    cols = (
+        db.session.query(FunnelColumn)
+        .filter_by(funnel_id=funnel.id)
+        .order_by(FunnelColumn.position)
+        .all()
+    )
+    first_key = cols[0].column_key if cols else "ORCAMENTO"
+
+    deadline = parse_date(data.get("deadline"))
+    if deadline is None:
+        deadline = date.today() + timedelta(days=30)
+
+    if client.sale_concluded_at is None:
+        client.sale_concluded_at = utcnow()
+
+    project = Project(
+        title=title,
+        client_id=client.id,
+        description=data.get("description") or "",
+        status=first_key,
+        value=value,
+        deadline=deadline,
+        steps=data.get("steps") or [],
+        funnel_id=funnel.id,
+    )
+    db.session.add(project)
+    db.session.commit()
+    return jsonify(project.to_dict()), 201
 
 
 @bp.delete("/api/clients/<client_id>")

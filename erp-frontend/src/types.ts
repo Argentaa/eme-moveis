@@ -45,6 +45,9 @@ export interface Client {
   lead_source?: string | null;
   campaign?: string | null;
   negotiation_value?: number | null;
+  // Venda concluida pelo botao "Concluir venda" do Comercial: o card sai do
+  // funil de vendas e o projeto nasce na Producao.
+  sale_concluded_at?: string | null;
   // Cadastro central: campos de fornecedor (cliente pode ser fornecedor)
   is_supplier?: boolean;
   contact?: string;
@@ -77,6 +80,10 @@ export interface Project {
   planned_end_date: string | null;
   actual_end_date: string | null;
   deadline_status: string;
+  // Conclusao explicita (botao "Concluir projeto"), independente da coluna do
+  // funil — o cliente renomeia as colunas, entao a chave nao serve de regra.
+  concluded_at?: string | null;
+  is_concluded?: boolean;
   environments?: ProjectEnvironment[];
   total_area_m2?: number;
   total_environments?: number;

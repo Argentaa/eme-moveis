@@ -2887,25 +2887,29 @@ def test_project_prazo_status(client):
     assert j["deadline"] is None
     assert j["deadline_status"] == "VERDE"
 
-    # CENARIO CONCLUIDO: status CONCLUIDO com actual_end_date preenchido -> CONCLUIDO independente do prazo
+    # CONCLUSAO E ESTADO EXPLICITO, nao a chave da coluna do funil. Neste
+    # cliente a chave "CONCLUIDO" e a coluna "Medicao In Loco" (posicao 1), e a
+    # ultima coluna e "Entrega e pos-venda". Criar com status CONCLUIDO NAO
+    # pode marcar o projeto como finalizado.
     r = client.post("/api/projects", headers=h, json={
-        "title": "Projeto Concluido", "client_id": cid, "status": "CONCLUIDO",
-        "deadline": deadline_yesterday, "actual_end_date": start_iso
+        "title": "Projeto Chave Enganosa", "client_id": cid, "status": "CONCLUIDO",
+        "deadline": deadline_yesterday,
     })
     assert r.status_code == 201, r.get_data(as_text=True)
     j = r.get_json()
-    assert j["actual_end_date"] == start_iso
-    assert j["deadline_status"] == "CONCLUIDO"
+    assert j["is_concluded"] is False, "status com a chave CONCLUIDO nao conclui o projeto"
+    assert j["deadline_status"] != "CONCLUIDO", j["deadline_status"]
 
-    # Atualizacao via PUT para CONCLUIDO com actual_end_date -> CONCLUIDO
-    r = client.put(f"/api/projects/{pid}", headers=h, json={"status": "CONCLUIDO", "actual_end_date": start_iso})
+    # Concluir pelo botao (endpoint explicito) -> deadline_status CONCLUIDO
+    r = client.post(f"/api/projects/{pid}/conclude", headers=h)
     assert r.status_code == 200, r.get_data(as_text=True)
     upd = r.get_json()
-    assert upd["actual_end_date"] == start_iso
+    assert upd["is_concluded"] is True
+    assert upd["concluded_at"], "concluded_at tem de ser gravado"
+    assert upd["actual_end_date"] == today.isoformat(), "estava None, ganha a data de hoje"
     assert upd["deadline_status"] == "CONCLUIDO"
-    # garantir que GET reflete CONCLUIDO
-    r = client.get(f"/api/projects/{pid}", headers=h)
-    assert r.get_json()["deadline_status"] == "CONCLUIDO"
+    # GET reflete o mesmo estado
+    assert client.get(f"/api/projects/{pid}", headers=h).get_json()["is_concluded"] is True
 
 
 def test_report_production(client):
@@ -4196,3 +4200,70 @@ def test_upload_acima_do_limite_retorna_413_json():
 
         # /api/health tambem expoe o limite, para a tela nao escrever o numero a mao
         assert c.get("/api/health").get_json()["max_upload_mb"] == 1
+
+
+def test_concluir_projeto_sai_da_producao_e_vai_para_pos_venda(client):
+    """Botao "Concluir projeto": flag explicita, NAO a coluna do funil.
+
+    Neste funil de Producao a chave "CONCLUIDO" e a coluna "Medicao In Loco",
+    entao a conclusao nao pode ser deduzida da chave da coluna.
+    """
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Conclusao"}).get_json()["id"]
+    pid = client.post("/api/projects", headers=h, json={
+        "title": "Projeto para concluir", "client_id": cid, "status": "MONTAGEM",
+    }).get_json()["id"]
+
+    # antes: em producao, fora da lista de concluidos
+    assert client.get(f"/api/projects/{pid}", headers=h).get_json()["is_concluded"] is False
+    concluidos = client.get("/api/projects/concluded", headers=h).get_json()
+    assert all(p["id"] != pid for p in concluidos)
+
+    # concluir pelo botao
+    r = client.post(f"/api/projects/{pid}/conclude", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    j = r.get_json()
+    assert j["is_concluded"] is True and j["concluded_at"], j
+
+    # agora aparece na lista que alimenta o Pos-venda
+    concluidos = client.get("/api/projects/concluded", headers=h).get_json()
+    assert any(p["id"] == pid for p in concluidos), "concluido tem de aparecer no pos-venda"
+
+    # idempotente: concluir de novo nao reescreve a data original
+    primeira = client.get(f"/api/projects/{pid}", headers=h).get_json()["concluded_at"]
+    client.post(f"/api/projects/{pid}/conclude", headers=h)
+    assert client.get(f"/api/projects/{pid}", headers=h).get_json()["concluded_at"] == primeira
+
+    # reabrir tira do pos-venda e devolve para a producao
+    r = client.post(f"/api/projects/{pid}/reopen", headers=h)
+    assert r.status_code == 200 and r.get_json()["is_concluded"] is False
+    concluidos = client.get("/api/projects/concluded", headers=h).get_json()
+    assert all(p["id"] != pid for p in concluidos)
+
+
+def test_concluir_venda_cria_projeto_na_producao(client):
+    """Botao "Concluir venda": marca a venda E cria o projeto, na mesma chamada."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Venda"}).get_json()["id"]
+    assert client.get(f"/api/clients/{cid}", headers=h).get_json()["sale_concluded_at"] is None
+
+    r = client.post(f"/api/clients/{cid}/conclude-sale", headers=h,
+                    json={"title": "Cozinha da venda", "value": 5000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    proj = r.get_json()
+    assert proj["client_id"] == cid
+    assert proj["title"] == "Cozinha da venda"
+    assert float(proj["value"]) == 5000
+    assert proj["is_concluded"] is False, "o projeto nasce em producao, nao concluido"
+
+    # a venda fica marcada como concluida -> o card sai do funil de vendas
+    assert client.get(f"/api/clients/{cid}", headers=h).get_json()["sale_concluded_at"]
+
+    ids = [p["id"] for p in client.get("/api/projects", headers=h).get_json()]
+    assert proj["id"] in ids, "o projeto criado tem de aparecer na producao"
+
+    # sem title, cai no nome do cliente
+    cid2 = client.post("/api/clients", headers=h, json={"name": "Cliente Sem Titulo"}).get_json()["id"]
+    r = client.post(f"/api/clients/{cid2}/conclude-sale", headers=h, json={})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["title"] == "Projeto - Cliente Sem Titulo"

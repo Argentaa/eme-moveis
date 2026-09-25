@@ -296,6 +296,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   // Quem esta so no cadastro central (funnel_id null) entra via "Vincular Cliente".
   const funnelClients = clients.filter(c => !!(c as any).funnel_id);
   const filteredClients = funnelClients.filter(c => {
+    // Venda concluida sai do funil de vendas: o projeto ja nasceu na Producao.
+    // A flag e explicita (sale_concluded_at), nao a coluna do funil — o
+    // cliente renomeia as colunas.
+    if ((c as any).sale_concluded_at) return false;
     if (supplierFilter === 'SUPPLIERS' && !(c as any).is_supplier) return false;
     if (supplierFilter === 'CLIENTS' && (c as any).is_supplier) return false;
     return c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -365,13 +369,12 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
     setConvertError('');
     try {
-      await projectService.create({
+      // concludeSale faz as duas coisas numa chamada so: marca a venda como
+      // concluida (o card sai do funil) e cria o projeto na Producao. Antes
+      // isto criava o projeto mas deixava a venda em aberto no funil.
+      await clientService.concludeSale(convertModalClient.id, {
         title: convertTitle.trim(),
-        client_id: convertModalClient.id,
-        description: '',
-        status: 'ORCAMENTO',
         value: Number(convertValue) || 0,
-        deadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().substring(0, 10),
         steps: [
           { id: '1', label: 'Medição técnica in loco', completed: false },
           { id: '2', label: 'Apresentação e plano de corte 3D', completed: false },
@@ -381,12 +384,15 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
           { id: '6', label: 'Instalação final no cliente', completed: false },
         ],
       });
+      // tira o card do funil: a venda foi concluida e o projeto esta na Producao
+      const cid = convertModalClient.id;
+      setClients(prev => prev.map(c => (c.id === cid ? { ...c, sale_concluded_at: new Date().toISOString() } : c)));
       setConvertModalClient(null);
       setConvertTitle('');
       setConvertValue('');
-      alert(`Projeto "${convertTitle}" criado com sucesso! Acesse a aba Projetos para gerenciá-lo.`);
+      alert(`Venda concluída! O projeto "${convertTitle.trim()}" já está na Produção.`);
     } catch (err) {
-      setConvertError(getApiErrorMessage(err, 'Erro ao criar projeto.'));
+      setConvertError(getApiErrorMessage(err, 'Erro ao concluir a venda.'));
     }
   };
 
@@ -876,7 +882,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                                 <XCircle className="w-3.5 h-3.5" />
                               </button>
                             )}
-                            {client.funnel_status === 'FECHAMENTO' && ['ADMIN', 'GERENTE'].includes(userRole) && (
+                            {/* Botao explicito, nao amarrado ao nome da coluna: o
+                                cliente renomeia as etapas do funil, entao exigir
+                                funnel_status === 'FECHAMENTO' esconderia o botao. */}
+                            {client.funnel_status !== 'PERDIDO' && ['ADMIN', 'GERENTE'].includes(userRole) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -887,7 +896,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                                   setConvertError('');
                                 }}
                                 className="p-1 text-zinc-500 hover:text-emerald-400 cursor-pointer"
-                                title="Converter em Projeto"
+                                title="Concluir venda — cria o projeto na Produção"
                               >
                                 <FolderPlus className="w-3.5 h-3.5" />
                               </button>
@@ -1052,13 +1061,14 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
             <div className="bg-zinc-950 p-5 border-b border-zinc-850 flex justify-between items-center">
               <div className="flex items-center gap-2">
                 <FolderPlus className="w-5 h-5 text-emerald-500" />
-                <h3 className="text-base font-serif font-semibold text-white">Converter em Projeto</h3>
+                <h3 className="text-base font-serif font-semibold text-white">Concluir venda</h3>
               </div>
               <button onClick={() => setConvertModalClient(null)} className="text-zinc-500 hover:text-white cursor-pointer font-mono text-xs">Sair</button>
             </div>
             <div className="p-6 space-y-4">
               <p className="text-sm text-zinc-400">
-                Criando projeto para <strong className="text-white">{convertModalClient.name}</strong>. O projeto entrará em <strong className="text-white">Orçamento</strong> no Kanban de Projetos.
+                Fechando a venda de <strong className="text-white">{convertModalClient.name}</strong>.
+                O card sai do funil de vendas e o projeto já entra na Produção.
               </p>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-300 font-mono uppercase block">Título do Projeto *</label>
@@ -1094,7 +1104,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                   onClick={handleConvertToProject}
                   className="px-5 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold cursor-pointer"
                 >
-                  Criar Projeto
+                  Concluir venda
                 </button>
               </div>
             </div>

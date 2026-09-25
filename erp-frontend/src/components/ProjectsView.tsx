@@ -343,6 +343,25 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
     }
   };
 
+  // Botao "Concluir projeto": tira o card da Producao e o poe na aba "Projetos
+  // entregues" do Pos-venda. A conclusao e a flag do backend (concluded_at),
+  // NAO a coluna do funil — o cliente renomeia as colunas, e neste funil a
+  // chave "CONCLUIDO" e a coluna "Medicao In Loco".
+  const handleConclude = async (project: Project) => {
+    if (!confirm(
+      `Concluir o projeto "${project.title}"?\n\n` +
+      'Ele sai da Produção e passa para a aba "Projetos entregues" no Pós-venda.'
+    )) return;
+    try {
+      const updated = await projectService.conclude(project.id);
+      setProjects(prev => prev.map(p => (p.id === project.id ? { ...p, ...updated } : p)));
+    } catch (err) {
+      console.error('Falha ao concluir projeto:', err);
+      alert(getApiErrorMessage(err, 'Erro ao concluir projeto.'));
+      loadData();
+    }
+  };
+
   const shiftStatus = async (id: string, direction: 'LEFT' | 'RIGHT') => {
     const proj = projects.find(p => p.id === id);
     if (!proj) return;
@@ -726,6 +745,10 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
   };
 
   const filteredProjects = projects
+    // Projetos concluidos SAEM da Producao e vao para o Pos-venda. O filtro e
+    // pela flag explicita (is_concluded), nao pela coluna do funil: o cliente
+    // renomeia as colunas e neste funil a chave "CONCLUIDO" e "Medicao In Loco".
+    .filter(p => !p.is_concluded)
     .filter(p =>
       p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.client_name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -998,6 +1021,13 @@ export default function ProjectsView({ userRole }: ProjectsViewProps) {
                             </button>
                           </div>
                           <div className="flex gap-1.5 flex-wrap justify-end">
+                            <button
+                              onClick={() => handleConclude(p)}
+                              className="p-1 text-emerald-400 hover:text-emerald-300 flex items-center gap-0.5 text-[10px] font-mono py-0.5 px-1.5 bg-zinc-900 rounded border border-emerald-900/60 cursor-pointer"
+                              title="Concluir projeto — sai da Produção e vai para o Pós-venda"
+                            >
+                              <CheckCircle className="w-3 h-3" /> Concluir
+                            </button>
                             <button
                               onClick={() => handleOpenSteps(p)}
                               className="p-1 text-zinc-400 hover:text-red-500 flex items-center gap-0.5 text-[10px] font-mono py-0.5 px-1.5 bg-zinc-900 rounded border border-zinc-800 cursor-pointer"

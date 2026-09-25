@@ -125,6 +125,16 @@ export const clientService = {
     return response.data;
   },
 
+  // Botao "Concluir venda" do Comercial: marca a venda como concluida (o card
+  // sai do funil) e cria o projeto na Producao, numa chamada so.
+  async concludeSale(
+    id: string,
+    data: { title?: string; value?: number; description?: string; steps?: unknown[] } = {}
+  ): Promise<Project> {
+    const response = await api.post(`/api/clients/${id}/conclude-sale`, data);
+    return response.data;
+  },
+
   async getDetail(id: string): Promise<ClientDetail> {
     const response = await api.get(`/api/clients/${id}/detail`);
     return response.data;
@@ -320,6 +330,25 @@ export const itemService = {
 export const projectService = {
   async getOverdue(): Promise<any[]> {
     const response = await api.get('/api/projects/overdue');
+    return response.data;
+  },
+
+  // Projetos concluidos — alimenta a aba "Projetos entregues" do Pos-venda.
+  // Filtra pela flag explicita no backend, nao pela coluna do funil.
+  async getConcluded(): Promise<Project[]> {
+    const response = await api.get('/api/projects/concluded');
+    return response.data;
+  },
+
+  // Botao "Concluir projeto": tira da Producao e poe no Pos-venda.
+  async conclude(id: string): Promise<Project> {
+    const response = await api.post(`/api/projects/${id}/conclude`);
+    return response.data;
+  },
+
+  // Desfaz a conclusao: o projeto volta para a Producao.
+  async reopen(id: string): Promise<Project> {
+    const response = await api.post(`/api/projects/${id}/reopen`);
     return response.data;
   },
 

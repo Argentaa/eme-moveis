@@ -23,6 +23,7 @@ import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './Mod
 
 /** Abas do módulo Pós-venda, conforme a spec do cliente (17/09). */
 const TICKETS_TABS: ModuleTab[] = [
+  { id: 'delivered', label: 'Projetos entregues', ready: true },
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'schedule', label: 'Agenda de pós-venda' },
   { id: 'checkins', label: 'Check-ins' },
@@ -117,6 +118,8 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
   const [tickets, setTickets] = useState<ServiceTicket[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  // Projetos concluidos na Producao (aba "Projetos entregues").
+  const [delivered, setDelivered] = useState<Project[]>([]);
   const [users, setUsers] = useState<UserType[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -137,16 +140,20 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [t, c, p, u] = await Promise.all([
+      const [t, c, p, u, d] = await Promise.all([
         ticketService.list(),
         clientService.getAll().catch(() => [] as Client[]),
         projectService.getAll().catch(() => [] as Project[]),
         api.get('/api/auth/users').then((r) => r.data as UserType[]).catch(() => [] as UserType[]),
+        // Projetos concluidos (botao "Concluir projeto" na Producao). O filtro
+        // e a flag explicita no backend, nao a coluna do funil.
+        projectService.getConcluded().catch(() => [] as Project[]),
       ]);
       setTickets(t);
       setClients(c);
       setProjects(p);
       setUsers(u);
+      setDelivered(d);
     } catch (err) {
       console.error('Erro ao carregar chamados:', err);
     } finally {
@@ -157,6 +164,17 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Reabrir um projeto entregue: volta para a Producao e sai desta aba.
+  const handleReopen = async (project: Project) => {
+    if (!confirm(`Reabrir o projeto "${project.title}"?\n\nEle volta para a Produção e sai desta aba.`)) return;
+    try {
+      await projectService.reopen(project.id);
+      setDelivered(prev => prev.filter(p => p.id !== project.id));
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao reabrir projeto.'));
+    }
+  };
 
   const filteredTickets = useMemo(() => {
     return tickets.filter((t) => {
@@ -368,6 +386,63 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
       {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
       <ModuleTabs tabs={TICKETS_TABS} active={activeTab} onChange={setActiveTab} />
       <ActiveTabPlaceholder tabs={TICKETS_TABS} active={activeTab} />
+
+      {activeTab === 'delivered' && (
+        <div className="space-y-4">
+          <div className="glass-panel rounded-lg p-4 border border-zinc-900">
+            <h3 className="text-sm font-semibold text-zinc-200 mb-1">Projetos entregues</h3>
+            <p className="text-[11px] text-zinc-500 font-mono">
+              Projetos concluídos na Produção pelo botão "Concluir".
+              Reabrir devolve o projeto para a Produção.
+            </p>
+          </div>
+
+          {delivered.length === 0 ? (
+            <div className="glass-panel rounded-lg p-6 border border-zinc-900 text-center">
+              <p className="text-sm text-zinc-400">Nenhum projeto entregue ainda.</p>
+              <p className="text-[11px] text-zinc-600 font-mono mt-1">
+                Use o botão "Concluir" no card de um projeto em Produção.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {delivered.map((p) => (
+                <div
+                  key={p.id}
+                  className="glass-panel rounded-lg p-4 border border-zinc-900 flex flex-wrap items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <h4 className="text-sm font-semibold text-zinc-100 truncate">{p.title}</h4>
+                    <span className="text-[11px] text-zinc-400 font-sans">👤 {p.client_name}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-[11px] font-mono shrink-0">
+                    <span className="text-emerald-400 font-bold">
+                      {Number(p.value).toLocaleString('pt-BR', {
+                        style: 'currency', currency: 'BRL', maximumFractionDigits: 0,
+                      })}
+                    </span>
+                    <span className="text-zinc-500">
+                      entregue{' '}
+                      {p.actual_end_date
+                        ? new Date(p.actual_end_date).toLocaleDateString('pt-BR', { timeZone: 'UTC' })
+                        : '—'}
+                    </span>
+                    {['ADMIN', 'GERENTE'].includes(userRole) && (
+                      <button
+                        onClick={() => handleReopen(p)}
+                        className="px-2 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded border border-zinc-800 cursor-pointer"
+                        title="Reabrir: devolve o projeto para a Produção"
+                      >
+                        Reabrir
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {activeTab === 'tickets' && (<>
 
