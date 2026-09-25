@@ -171,6 +171,15 @@ export const partnerService = {
 };
 
 // Attachment Services
+export const systemService = {
+  // Limite de upload vigente, vindo do backend. A tela usa isto em vez de um
+  // numero escrito na mao, que sai de sincronia quando o limite muda.
+  async health(): Promise<{ ok: boolean; max_upload_mb?: number }> {
+    const response = await api.get('/api/health');
+    return response.data;
+  },
+};
+
 export const attachmentService = {
   async list(clientId: string): Promise<Attachment[]> {
     const response = await api.get(`/api/clients/${clientId}/attachments`);

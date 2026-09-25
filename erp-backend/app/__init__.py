@@ -3,6 +3,7 @@ import os
 
 from flask import Flask, jsonify
 from flask_cors import CORS
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.config import configs
 from app.extensions import db
@@ -49,11 +50,31 @@ def create_app(config_name=None):
 
     @app.get("/api/health")
     def health():
-        return jsonify({"ok": True, "app": "eme-moveis-erp"})
+        # max_upload_mb expoe o limite REAL para a tela nao exibir um numero
+        # digitado a mao (foi assim que a tela passou a mentir "25 MB" enquanto
+        # o nginx cortava em 1 MB).
+        return jsonify({
+            "ok": True,
+            "app": "eme-moveis-erp",
+            "max_upload_mb": max(1, int(app.config.get("MAX_CONTENT_LENGTH", 0)) // (1024 * 1024)),
+        })
 
     @app.get("/")
     def root():
         return jsonify({"message": "EME Moveis ERP rodando"})
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_request_entity_too_large(_err):
+        """413 em JSON com o limite REAL, para a tela nao chutar o numero.
+
+        Sem isto o Flask devolve HTML cru e o front fica preso a um limite
+        escrito na mao, que sai de sincronia com o backend.
+        """
+        limit_mb = max(1, int(app.config.get("MAX_CONTENT_LENGTH", 0)) // (1024 * 1024))
+        return jsonify({
+            "detail": f"Arquivo maior que o limite de {limit_mb} MB.",
+            "limit_mb": limit_mb,
+        }), 413
 
     with app.app_context():
         from app import models as _models  # noqa: F401

@@ -26,6 +26,7 @@ import {
   getApiErrorMessage,
   itemService,
   productService,
+  systemService,
 } from '../services/api';
 import { Attachment, Client, ClientDetail, FunnelStatus, NegotiationItem, Product } from '../types';
 
@@ -181,6 +182,16 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
   const [detail, setDetail] = useState<ClientDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  // Limite de upload vigente em MB, lido do backend (null = ainda nao sabemos).
+  // Fica aqui em vez de escrito na mao para nao mentir quando o limite mudar.
+  const [maxUploadMb, setMaxUploadMb] = useState<number | null>(null);
+
+  useEffect(() => {
+    systemService
+      .health()
+      .then(h => { if (h?.max_upload_mb) setMaxUploadMb(h.max_upload_mb); })
+      .catch(() => { /* a tela funciona mesmo sem o numero */ });
+  }, []);
 
   // Histórico
   const [interactionType, setInteractionType] = useState('CONVERSA');
@@ -416,7 +427,16 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
     } catch (err: any) {
       const status = err?.response?.status;
       if (status === 413 || /request entity too large/i.test(String(err?.message || ''))) {
-        setUploadError('Arquivo muito grande para upload. O limite é de 25 MB.');
+        // O limite real vem do backend no corpo do 413 (campo limit_mb). Se a
+        // resposta nao trouxer o numero (ex.: corte no nginx antes do Flask),
+        // nao inventa um valor — antes aqui dizia "25 MB" fixo, que nao tinha
+        // relacao com o bloqueio real de 1 MB do nginx.
+        const limite = err?.response?.data?.limit_mb;
+        setUploadError(
+          limite
+            ? `Arquivo muito grande para upload. O limite é de ${limite} MB.`
+            : 'Arquivo muito grande para upload. Reduza o arquivo e tente de novo.'
+        );
       } else {
         setUploadError(getApiErrorMessage(err, 'Erro ao enviar anexo.'));
       }
@@ -1031,7 +1051,8 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
                       </div>
                       {uploadError && <p className="text-xs text-red-400 font-mono">{uploadError}</p>}
                       <p className="text-[10px] text-zinc-600 font-mono">
-                        Formatos aceitos: PDF, PNG, JPG, DOC, DOCX, XLS, XLSX, DWG, ZIP · limite de 25 MB
+                        Formatos aceitos: PDF, PNG, JPG, DOC, DOCX, XLS, XLSX, DWG, ZIP
+                        {maxUploadMb ? ` · limite de ${maxUploadMb} MB` : ''}
                       </p>
                     </form>
                   )}

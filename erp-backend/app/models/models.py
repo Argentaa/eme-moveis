@@ -1455,6 +1455,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Anexos maiores no cliente e no funil",
+     "O limite de anexo subiu para 50 MB. Antes, qualquer arquivo acima de 1 MB era recusado pelo servidor de arquivos estáticos, antes mesmo de chegar ao sistema — e a mensagem na tela dizia 25 MB, número que não tinha relação com o bloqueio real. Agora o limite mostrado na tela é o que vale de verdade, e a mensagem de recusa informa o número certo.",
+     "CORRECAO", "2026-09-25"),
     ("Montagens com equipe e local",
      "A montagem agora registra qual equipe vai e o endereço, e ganhou uma aba própria em Produção com filtro por equipe e por mês. O que é criado ali aparece também na Agenda.",
      "NOVIDADE", "2026-09-24"),

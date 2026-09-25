@@ -480,9 +480,33 @@ def test_seeds_fontes_e_campanhas_idempotente(client):
 
 def test_config_uploads(client):
     from app.config import Config
-    assert Config.MAX_CONTENT_LENGTH == 25 * 1024 * 1024
+    assert Config.MAX_CONTENT_LENGTH == 50 * 1024 * 1024
     assert Config.UPLOAD_DIR
-    assert client.application.config["MAX_CONTENT_LENGTH"] == 25 * 1024 * 1024
+    assert client.application.config["MAX_CONTENT_LENGTH"] == 50 * 1024 * 1024
+
+
+def test_nginx_aceita_mais_que_o_backend():
+    """O nginx tem de aceitar MAIS que o backend, senao vira gargalo invisivel.
+
+    Sem `client_max_body_size` vale o default do nginx, que e 1 MB: qualquer
+    anexo maior volta 413 do nginx ANTES de chegar no Flask. Foi exatamente o
+    bug relatado — a tela mostrava o limite do backend (25 MB) enquanto o
+    bloqueio real era 1 MB do nginx. Este teste trava o invariante.
+    """
+    import re
+    from pathlib import Path
+
+    from app.config import Config
+
+    conf = Path(__file__).resolve().parents[2] / "erp-frontend" / "nginx.conf"
+    texto = conf.read_text(encoding="utf-8")
+    m = re.search(r"client_max_body_size\s+(\d+)m", texto)
+    assert m, "nginx.conf sem client_max_body_size: vale o default de 1 MB do nginx"
+    limite_nginx = int(m.group(1)) * 1024 * 1024
+    assert limite_nginx > Config.MAX_CONTENT_LENGTH, (
+        f"nginx ({limite_nginx} bytes) tem de ser MAIOR que o backend "
+        f"({Config.MAX_CONTENT_LENGTH} bytes), senao o nginx corta antes"
+    )
 
 
 def test_negotiation_value_soma_itens(client):
@@ -4124,3 +4148,51 @@ def test_proposal_whatsapp_envia_pela_evolution(client, monkeypatch):
     assert b2["proposal"]["sent_channel"] == ""
 
 
+
+
+def test_upload_acima_do_limite_retorna_413_json():
+    """413 precisa voltar em JSON com o limite REAL, nao HTML cru do Flask.
+
+    A tela lia um numero escrito na mao ("25 MB") enquanto o nginx cortava em
+    1 MB — mensagem sem relacao com o bloqueio de verdade. O limite agora vem
+    do backend (corpo do 413 e /api/health), entao nao sai de sincronia.
+    """
+    import io
+
+    app = create_app("test")
+    app.config.update(TESTING=True)
+    # Limite de 1 KB: nao precisa enviar 50 MB para exercitar o 413.
+    app.config["MAX_CONTENT_LENGTH"] = 1024
+
+    with app.test_client() as c:
+        with app.app_context():
+            db.session.query(User).filter_by(username="admin").delete()
+            db.session.add(
+                User(
+                    username="admin",
+                    name="Admin",
+                    email="admin@test.local",
+                    role="ADMIN",
+                    password=hash_password("admin12345"),
+                )
+            )
+            db.session.commit()
+
+        h = _login(c)
+        cid = c.post("/api/clients", headers=h, json={"name": "Cliente Grande"}).get_json()["id"]
+
+        r = c.post(
+            f"/api/clients/{cid}/attachments",
+            headers=h,
+            data={"file": (io.BytesIO(b"x" * 5000), "grande.pdf")},
+            content_type="multipart/form-data",
+        )
+
+        assert r.status_code == 413, r.status_code
+        body = r.get_json()
+        assert body is not None, "413 voltou como HTML em vez de JSON"
+        assert body.get("limit_mb") == 1, body
+        assert "1 MB" in body["detail"], body
+
+        # /api/health tambem expoe o limite, para a tela nao escrever o numero a mao
+        assert c.get("/api/health").get_json()["max_upload_mb"] == 1

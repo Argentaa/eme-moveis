@@ -40,9 +40,11 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 
-    # Diretorio de anexos (uploads) e limite de tamanho (padrao 25 MB)
+    # Diretorio de anexos (uploads) e limite de tamanho (padrao 50 MB).
+    # Ao mudar MAX_UPLOAD_MB, ajuste tambem client_max_body_size no
+    # erp-frontend/nginx.conf (tem de ser MAIOR, senao o nginx corta antes).
     UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(os.getcwd(), "uploads"))
-    MAX_CONTENT_LENGTH = _int_env("MAX_UPLOAD_MB", default=25) * 1024 * 1024
+    MAX_CONTENT_LENGTH = _int_env("MAX_UPLOAD_MB", default=50) * 1024 * 1024
 
 
 class DevConfig(Config):
