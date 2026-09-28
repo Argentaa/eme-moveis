@@ -1515,6 +1515,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Venda concluída conta nos dashboards + venda para fornecedor",
+     "Correção: a venda fechada pelo botão Concluir venda criava o projeto na Produção mas não aparecia no Dashboard inicial nem no Dashboard comercial — agora ela entra na meta, na comissão e no relatório de CRM como qualquer venda fechada, e as vendas que já tinham passado pelo botão foram corrigidas. Novidade: no funil de vendas dá para vender para cliente ou para fornecedor, independente — o modal Vincular tem as duas abas e o fornecedor caminha no mesmo funil.",
+     "CORRECAO", "2026-09-28"),
     ("Estoque completo: perdas, mínimo e dashboard",
      "Fase 7 entregue. Aba Perdas/Avarias: registrar perda ou avaria baixa o estoque e grava a movimentação na mesma operação, com motivo, custo e total de prejuízo por período e por motivo. Aba Estoque mínimo: itens abaixo do mínimo ordenados por criticidade, com quantidade sugerida e botão Gerar pedido de compra (nasce em Compras como SOLICITADA). Aba Dashboard: valor em estoque, itens críticos e prejuízo. No Comercial, o modal Vincular Cliente agora recarrega o cadastro central ao abrir: cliente recém-cadastrado aparece no select sem recarregar a tela.",
      "NOVIDADE", "2026-09-28"),

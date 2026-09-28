@@ -747,7 +747,13 @@ def _build_crm():
              "created_at": iso(c.created_at)}
             for c in clients if c.funnel_status == "PERDIDO"]
 
-    total_closed = sum(1 for c in clients if c.funnel_status == "FECHAMENTO")
+    # Venda fechada = etapa FECHAMENTO OU botao Concluir venda (sale_concluded_at).
+    # O botao tira o card do funil sem passar pela ultima coluna, entao contar
+    # so o status escondia essas vendas do Dashboard comercial (bug real).
+    total_closed = sum(
+        1 for c in clients
+        if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None
+    )
     taxa = round(total_closed / len(clients) * 100, 1) if clients else 0
 
     concluidos = db.session.query(Project).filter_by(status="CONCLUIDO").all()
@@ -854,7 +860,7 @@ def _build_lead_sources():
         g["leads"] += 1
         if c.funnel_status != "PERDIDO":
             g["ativos"] += 1
-        if c.funnel_status == "FECHAMENTO":
+        if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None:
             g["fechados"] += 1
         if c.funnel_status == "PERDIDO":
             g["perdidos"] += 1

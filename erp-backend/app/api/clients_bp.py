@@ -562,6 +562,19 @@ def conclude_sale(client_id):
     if client.sale_concluded_at is None:
         client.sale_concluded_at = utcnow()
 
+    # closed_at e a base da meta comercial, da comissao e dos relatorios de
+    # CRM: sem ele, a venda concluida pelo botao criava o projeto na Producao
+    # mas nao aparecia em nenhum dashboard (bug real: venda de R$ 12.570
+    # concluida pelo botao, projeto criado, zero nos painéis). O caminho pelo
+    # funil grava closed_at na automacao do update; o botao precisa do mesmo.
+    if client.closed_at is None:
+        client.closed_at = client.sale_concluded_at
+        _log_interaction(
+            client.id, "SISTEMA",
+            f"Venda concluída pelo botão Concluir venda ({title}, "
+            f"R$ {value:,.2f}) — projeto criado na Produção.",
+        )
+
     project = Project(
         title=title,
         client_id=client.id,

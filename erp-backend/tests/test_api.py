@@ -4272,6 +4272,53 @@ def test_concluir_venda_cria_projeto_na_producao(client):
     assert r.get_json()["title"] == "Projeto - Cliente Sem Titulo"
 
 
+def test_concluir_venda_grava_closed_at_e_entra_na_meta(client):
+    """Regressao do bug real: venda de R$ 12.570 concluida pelo botao criava o
+    projeto mas nao aparecia no Dashboard inicial (meta) nem no comercial.
+
+    Causa: conclude-sale gravava so sale_concluded_at; meta/comissao/CRM leem
+    closed_at (ou a etapa FECHAMENTO). O botao agora grava closed_at junto.
+    """
+    from datetime import datetime
+    h = _login(client)
+    cur_year = datetime.now().year
+    cr = client.post("/api/clients", headers=h,
+                     json={"name": "Cliente 12570", "estimated_value": 12570})
+    assert cr.status_code == 201, cr.get_data(as_text=True)
+    cid = cr.get_json()["id"]
+
+    r = client.post(f"/api/clients/{cid}/conclude-sale", headers=h, json={})
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    cli = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert cli["sale_concluded_at"], "o botao marca a venda como concluida"
+    assert cli["closed_at"], "o botao tem de gravar closed_at (base da meta/comissao)"
+
+    # Dashboard inicial: meta do ano enxerga a venda no realizado
+    body = client.get("/api/goals/summary", headers=h,
+                      query_string={"year": cur_year}).get_json()
+    assert body["deals_closed"] == 1, body
+    assert body["achieved"] == "R$ 12.570,00", body
+
+    # Dashboard comercial: relatorio CRM conta a venda concluida pelo botao
+    crm = client.get("/api/reports/crm", headers=h).get_json()
+    conv = crm.get("conversao", {})
+    assert conv.get("total_fechamentos") == 1, conv
+
+
+def test_concluir_venda_idempotente_nao_reescreve_closed_at(client):
+    """Concluir duas vezes nao muda a data original de fechamento."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Duplo"}).get_json()["id"]
+    assert client.post(f"/api/clients/{cid}/conclude-sale", headers=h, json={}).status_code == 201
+    primeiro = client.get(f"/api/clients/{cid}", headers=h).get_json()["closed_at"]
+    assert primeiro
+    assert client.post(f"/api/clients/{cid}/conclude-sale", headers=h, json={}).status_code == 201
+    depois = client.get(f"/api/clients/{cid}", headers=h).get_json()["closed_at"]
+    assert depois == primeiro, "segunda conclusao nao reescreve closed_at"
+
+
 # ── Fase 7 — Perdas e avarias de estoque ──────────────────────────
 #
 # O ponto que estes testes protegem: registrar uma perda NAO e so gravar um

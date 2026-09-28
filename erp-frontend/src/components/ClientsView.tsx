@@ -5,8 +5,8 @@ import {
   Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, FolderPlus, Eye, Funnel as FunnelIcon, X
 } from 'lucide-react';
 import { FunnelStatus } from '../types';
-import { clientService, projectService, funnelService, calendarService, leadOptionService, partnerService, getApiErrorMessage } from '../services/api';
-import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner } from '../types';
+import { clientService, projectService, funnelService, calendarService, leadOptionService, partnerService, supplierService, getApiErrorMessage } from '../services/api';
+import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner, Supplier } from '../types';
 import ClientDetailModal from './ClientDetailModal';
 
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
@@ -79,6 +79,12 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [linkValue, setLinkValue] = useState('');
   const [linkError, setLinkError] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
+  // Venda para fornecedor: o funil aceita cliente E fornecedor, independente.
+  // Fornecedor puro mora na tabela suppliers — ao vincular, resolve o cliente
+  // espelho (supplier.client_id) ou cria o cliente a partir do fornecedor.
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [linkSource, setLinkSource] = useState<'CLIENT' | 'SUPPLIER'>('CLIENT');
+  const [linkSupplierId, setLinkSupplierId] = useState('');
   // Recarregando o cadastro central ao abrir o modal: sem isto, um cliente
   // criado ha pouco em Clientes/Fornecedores nao aparece no select porque a
   // lista em memoria e a da montagem da tela.
@@ -190,13 +196,19 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     // antiga e um cliente recem-cadastrado na central nao aparecia no select.
     setLinkSearch('');
     setLinkClientId('');
+    setLinkSupplierId('');
+    setLinkSource('CLIENT');
     setLinkStage('');
     setLinkValue('');
     setLinkError('');
     setShowLinkModal(true);
     setLinkLoading(true);
     try {
-      await loadClients();
+      const [_, sups] = await Promise.all([
+        loadClients(),
+        supplierService.getAll().catch(() => [] as Supplier[]),
+      ]);
+      setSuppliers(sups);
     } finally {
       setLinkLoading(false);
     }
@@ -204,22 +216,56 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
   const handleLinkClient = async () => {
     setLinkError('');
-    if (!linkClientId) {
-      setLinkError('Selecione o cliente do cadastro central.');
-      return;
-    }
     if (!selectedFunnel) {
       setLinkError('Nenhum funil disponivel.');
       return;
     }
     setLinkSaving(true);
     try {
+      // Fornecedor: resolve o cliente espelho ou cria a partir do fornecedor,
+      // para a venda caminhar no mesmo funil, independente da origem.
+      let targetId = linkClientId;
+      if (linkSource === 'SUPPLIER') {
+        if (!linkSupplierId) {
+          setLinkError('Selecione o fornecedor do cadastro central.');
+          setLinkSaving(false);
+          return;
+        }
+        const sup = suppliers.find(s => s.id === linkSupplierId);
+        if (!sup) {
+          setLinkError('Fornecedor não encontrado.');
+          setLinkSaving(false);
+          return;
+        }
+        if ((sup as any).client_id) {
+          targetId = (sup as any).client_id;
+        } else {
+          const created = await clientService.create({
+            name: sup.name,
+            cpf_cnpj: (sup as any).cnpj || '',
+            email: (sup as any).email || '',
+            phone: (sup as any).phone || '',
+            address: (sup as any).address || '',
+            is_supplier: true,
+            contact: (sup as any).contact || '',
+            category: (sup as any).category || '',
+            payment_terms: (sup as any).payment_terms || '',
+            funnel_id: null,
+          } as any);
+          targetId = created.id;
+        }
+      }
+      if (!targetId) {
+        setLinkError('Selecione o cliente do cadastro central.');
+        setLinkSaving(false);
+        return;
+      }
       const payload: any = {
         funnel_id: selectedFunnel.id,
         funnel_status: linkStage || funnelColumns[0]?.column_key || 'PROSPECCAO',
       };
       if (linkValue.trim() !== '') payload.estimated_value = Number(linkValue);
-      await clientService.update(linkClientId, payload);
+      await clientService.update(targetId, payload);
       setShowLinkModal(false);
       loadClients();
     } catch (err: any) {
@@ -1321,14 +1367,34 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
               {linkError && <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">{linkError}</div>}
               <div className="space-y-2">
-                <label className="text-xs text-zinc-300 font-mono uppercase block">Cliente do cadastro *</label>
+                <label className="text-xs text-zinc-300 font-mono uppercase block">Vender para *</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setLinkSource('CLIENT'); setLinkError(''); }}
+                    className={`flex-1 px-3 py-2 text-xs rounded border font-mono cursor-pointer ${linkSource === 'CLIENT' ? 'bg-red-600 border-red-600 text-white font-semibold' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'}`}
+                  >
+                    Cliente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setLinkSource('SUPPLIER'); setLinkError(''); }}
+                    className={`flex-1 px-3 py-2 text-xs rounded border font-mono cursor-pointer ${linkSource === 'SUPPLIER' ? 'bg-red-600 border-red-600 text-white font-semibold' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'}`}
+                  >
+                    🏭 Fornecedor
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase block">{linkSource === 'CLIENT' ? 'Cliente do cadastro *' : 'Fornecedor do cadastro *'}</label>
                 <input
                   type="text"
                   value={linkSearch}
                   onChange={e => setLinkSearch(e.target.value)}
-                  placeholder="Buscar cliente... (digite para filtrar)"
+                  placeholder={linkSource === 'CLIENT' ? 'Buscar cliente... (digite para filtrar)' : 'Buscar fornecedor... (digite para filtrar)'}
                   className="w-full bg-zinc-900 border border-zinc-800 text-white px-3 py-2 text-xs rounded focus:outline-none focus:border-red-600 font-sans mb-1"
                 />
+                {linkSource === 'CLIENT' ? (
                 <select
                   value={linkClientId}
                   onChange={e => setLinkClientId(e.target.value)}
@@ -1340,9 +1406,31 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                     <option key={c.id} value={c.id}>{c.name}{(c as any).is_supplier ? '  🏭' : ''}</option>
                   ))}
                 </select>
+                ) : (
+                <select
+                  value={linkSupplierId}
+                  onChange={e => setLinkSupplierId(e.target.value)}
+                  disabled={linkLoading}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 disabled:opacity-60"
+                >
+                  <option value="">{linkLoading ? '-- Carregando fornecedores... --' : '-- Selecione o Fornecedor --'}</option>
+                  {suppliers
+                    .filter(s => {
+                      const qq = linkSearch.trim().toLowerCase();
+                      return !qq || s.name.toLowerCase().includes(qq) ||
+                        ((s as any).cnpj || '').toLowerCase().includes(qq) ||
+                        ((s as any).email || '').toLowerCase().includes(qq);
+                    })
+                    .map(s => (
+                      <option key={s.id} value={s.id}>{s.name} 🏭</option>
+                    ))}
+                </select>
+                )}
                 <p className="text-[11px] text-zinc-500 font-mono mt-1">
                   {linkLoading
                     ? 'Buscando o cadastro central mais recente...'
+                    : linkSource === 'SUPPLIER'
+                    ? `${suppliers.length} fornecedor(es) no cadastro · ao vincular, a venda caminha no mesmo funil.`
                     : available.length === 0
                     ? 'Todos os clientes já estão neste funil. Cadastre novos em Clientes/Fornecedores.'
                     : `${available.length} cliente(s) fora deste funil · Cadastre novos em Clientes/Fornecedores.`}
