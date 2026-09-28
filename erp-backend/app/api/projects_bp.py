@@ -1,7 +1,7 @@
 """CRUD /api/projects (+ /overdue, /<id>/status) + checklists por etapa."""
 from datetime import date, datetime, timezone
 
-from flask import Blueprint, g, jsonify
+from flask import Blueprint, g, jsonify, request
 
 from app.helpers import body_json, parse_date
 from app.auth import token_required
@@ -10,7 +10,17 @@ from app.models.models import ChecklistItem, Funnel, Project, User, utcnow
 
 bp = Blueprint("projects", __name__)
 
-PROJECT_FIELDS = ("title", "client_id", "description", "status", "value", "deadline", "start_date", "planned_end_date", "actual_end_date", "steps", "funnel_id")
+PROJECT_FIELDS = ("title", "client_id", "description", "status", "value", "deadline", "start_date", "planned_end_date", "actual_end_date", "steps", "funnel_id", "warranty_months")
+
+
+def _safe_int(value):
+    """Converte p/ int com tolerancia (formularios enviam string)."""
+    if value is None or value == "":
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _apply(data, project, partial=True):
@@ -21,6 +31,8 @@ def _apply(data, project, partial=True):
             v = data[f]
             if f in ("deadline", "start_date", "planned_end_date", "actual_end_date"):
                 v = parse_date(v)
+            if f == "warranty_months":
+                v = _safe_int(v)
             setattr(project, f, v)
     if "funnel_id" in data:
         raw = data.get("funnel_id")
@@ -111,6 +123,60 @@ def conclude_project(project_id):
         project.concluded_at = utcnow()
         if project.actual_end_date is None:
             project.actual_end_date = date.today()
+        # Garantia: na conclusao deriva a data-limite a partir do prazo (meses).
+        # Default 0 meses = sem garantia ativa; editar os meses depois nao
+        # re-escreve a conclusao, mas o recalculo abaixo mantem a data coerente.
+        if project.warranty_until is None and (project.warranty_months or 0) > 0:
+            base = project.actual_end_date or date.today()
+            try:
+                mes = (base.month - 1 + project.warranty_months) % 12 + 1
+                ano = base.year + (base.month - 1 + project.warranty_months) // 12
+                project.warranty_until = base.replace(year=ano, month=mes)
+            except ValueError:  # 31/jan + 1 mes -> 28/fev em vez de estourar
+                project.warranty_until = base.replace(day=28)
+                mes = (base.month - 1 + project.warranty_months) % 12 + 1
+                ano = base.year + (base.month - 1 + project.warranty_months) // 12
+                project.warranty_until = project.warranty_until.replace(year=ano, month=mes)
+    db.session.commit()
+    return jsonify(project.to_dict())
+
+
+@bp.patch("/api/projects/<project_id>/warranty")
+@token_required()
+def set_warranty(project_id):
+    """Edita o prazo de garantia (meses) de um projeto ja concluido.
+
+    Recalcula `warranty_until` a partir de `actual_end_date`; zerar os meses
+    esvazia a garantia. Nao aceita projeto em producao (sem concluded_at).
+    """
+    project = db.session.get(Project, project_id)
+    if not project:
+        return jsonify({"detail": "Projeto nao encontrado"}), 404
+    data = request.get_json(silent=True) or {}
+    if "warranty_months" not in data:
+        return jsonify({"detail": "warranty_months obrigatorio"}), 400
+    try:
+        meses = int(data.get("warranty_months") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"detail": "warranty_months deve ser inteiro"}), 400
+    if meses < 0 or meses > 120:
+        return jsonify({"detail": "warranty_months entre 0 e 120"}), 400
+    project.warranty_months = meses
+    if project.concluded_at is None:
+        return jsonify({"detail": "Projeto ainda nao concluido (sem garantia)"}), 409
+    if meses <= 0:
+        project.warranty_until = None
+    else:
+        base = project.actual_end_date or date.today()
+        try:
+            mes = (base.month - 1 + meses) % 12 + 1
+            ano = base.year + (base.month - 1 + meses) // 12
+            project.warranty_until = base.replace(year=ano, month=mes)
+        except ValueError:
+            project.warranty_until = base.replace(day=28)
+            mes = (base.month - 1 + meses) % 12 + 1
+            ano = base.year + (base.month - 1 + meses) // 12
+            project.warranty_until = project.warranty_until.replace(year=ano, month=mes)
     db.session.commit()
     return jsonify(project.to_dict())
 
@@ -163,6 +229,7 @@ def create_project():
         actual_end_date=actual,
         steps=data.get("steps") or [],
         funnel_id=funnel_resolved,
+        warranty_months=_safe_int(data.get("warranty_months")),
     )
     db.session.add(project)
     db.session.commit()

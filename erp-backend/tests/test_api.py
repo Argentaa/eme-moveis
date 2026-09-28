@@ -4319,7 +4319,93 @@ def test_concluir_venda_idempotente_nao_reescreve_closed_at(client):
     assert depois == primeiro, "segunda conclusao nao reescreve closed_at"
 
 
-# ── Fase 7 — Perdas e avarias de estoque ──────────────────────────
+def test_satisfaction_envia_e_responde(client):
+    """POST /api/satisfaction cria com sent_at; resposta marca answered_at."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Sat"}).get_json()["id"]
+    r = client.post("/api/satisfaction", headers=h, json={"client_id": cid})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    sid = r.get_json()["id"]
+    assert r.get_json()["answered"] is False
+    r2 = client.post(f"/api/satisfaction/{sid}/answer", headers=h,
+                     json={"score": 5, "comment": "Excelente"})
+    assert r2.status_code == 200
+    b = r2.get_json()
+    assert b["score"] == 5
+    assert b["answered"] is True
+    assert b["answered_at"]
+    # resposta nao reescreve: segundo answer muda o score mas nao a data
+    antes = b["answered_at"]
+    r3 = client.post(f"/api/satisfaction/{sid}/answer", headers=h, json={"score": 4})
+    b3 = r3.get_json()
+    assert b3["score"] == 4
+    assert b3["answered_at"] == antes
+
+
+def test_satisfaction_sem_duplicata_no_mesmo_dia(client):
+    """Reenviar a mesma pesquisa no mesmo dia nao cria outra linha."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Sat2"}).get_json()["id"]
+    r1 = client.post("/api/satisfaction", headers=h, json={"client_id": cid})
+    r2 = client.post("/api/satisfaction", headers=h, json={"client_id": cid})
+    assert r1.status_code == 201 and r2.status_code == 200
+    assert r1.get_json()["id"] == r2.get_json()["id"]
+
+
+def test_satisfaction_summary_media_e_distribuicao(client):
+    h = _login(client)
+    # dedupe diario: um envio por cliente/dia — usa tres clientes diferentes
+    cids = [client.post("/api/clients", headers=h,
+                        json={"name": f"Cliente Sat3-{i}"}).get_json()["id"] for i in range(3)]
+    s1 = client.post("/api/satisfaction", headers=h, json={"client_id": cids[0]}).get_json()["id"]
+    client.post("/api/satisfaction", headers=h, json={"client_id": cids[1], "score": 5, "comment": "otimo"}).get_json()["id"]
+    client.post("/api/satisfaction", headers=h, json={"client_id": cids[2]}).get_json()["id"]
+    client.post(f"/api/satisfaction/{s1}/answer", headers=h, json={"score": 3})
+    b = client.get("/api/satisfaction/summary", headers=h).get_json()
+    assert b["total"] == 3
+    assert b["answered"] == 2
+    assert b["average"] == 4.0
+    assert b["distribution"]["5"] == 1
+    assert b["distribution"]["3"] == 1
+    assert b["distribution"]["1"] == 0
+
+
+def test_satisfaction_score_invalido(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Sat4"}).get_json()["id"]
+    r = client.post("/api/satisfaction", headers=h, json={"client_id": cid, "score": 9})
+    assert r.status_code == 400
+    r2 = client.post("/api/satisfaction", headers=h, json={})
+    assert r2.status_code == 400
+
+
+def test_garantia_concluir_projeto_deriva_data_e_campo_manual_e_fallback(client):
+    """Concluir projeto com warranty_months deriva warranty_until; ticket sem
+    projeto usa campo manual; ticket com projeto usa o prazo do projeto."""
+    h = _login(client)
+    # base 15/nov/2026 + 2 meses = 15/jan/2027 (futuro, garantia vigente)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Gar"}).get_json()["id"]
+    pid = client.post("/api/projects", headers=h, json={
+        "title": "Guarda 15nov", "client_id": cid,
+        "actual_end_date": "2026-11-15", "warranty_months": 2,
+    }).get_json()["id"]
+    p = client.post(f"/api/projects/{pid}/conclude", headers=h).get_json()
+    assert p["concluded_at"]
+    assert p["warranty_months"] == 2
+    assert p["warranty_until"] == "2027-01-15", p["warranty_until"]
+    assert p["in_warranty"] is True
+    # edita garantia para 0 -> esvazia
+    p2 = client.patch(f"/api/projects/{pid}/warranty", headers=h, json={"warranty_months": 0}).get_json()
+    assert p2["warranty_until"] is None
+    assert p2["in_warranty"] is False
+    # ticket ligado ao projeto (sem campo manual) herda a derivada
+    p3 = client.patch(f"/api/projects/{pid}/warranty", headers=h, json={"warranty_months": 1}).get_json()
+    assert p3["warranty_until"] == "2026-12-15"
+    tk = client.post("/api/tickets", headers=h, json={
+        "client_id": cid, "project_id": pid, "description": "Arrependido na porta"},
+        ).get_json()
+    assert tk["in_warranty"] is True, tk
+    assert tk["warranty_until"] == "2026-12-15"
 #
 # O ponto que estes testes protegem: registrar uma perda NAO e so gravar um
 # registro — ela tem de mexer no estoque e no extrato de movimentacoes, na

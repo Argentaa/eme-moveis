@@ -85,6 +85,15 @@ def _ensure_calendar_event(ticket):
 def _enrich(ticket):
     d = ticket.to_dict()
     d["photos"] = [p.to_dict() for p in ticket.photos]
+    # Garantia derivada (Fase 8): se o projeto tem warranty_until, a cobertura
+    # e decidida pelo prazo do projeto — o campo manual vira fallback so quando
+    # o projeto nao tem data. Exposed como in_warranty para o front nao depender
+    # da regra (a aba Garantias usa a mesma logica para os dois lados).
+    if ticket.project is not None and getattr(ticket.project, "warranty_until", None) is not None:
+        d["in_warranty"] = ticket.project.warranty_until >= date.today()
+        d["warranty_until"] = iso(ticket.project.warranty_until)
+    else:
+        d["warranty_until"] = None
     return d
 
 

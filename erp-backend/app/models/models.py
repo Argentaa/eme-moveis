@@ -373,6 +373,11 @@ class Project(db.Model):
     # (rotulo "Medicao In Loco") — olhar a chave marcava projeto em medicao
     # como finalizado. NULL = em producao; preenchido = foi para Pos-venda.
     concluded_at = db.Column(DateTime, nullable=True, index=True)
+    # Garantia (Fase 8): prazo em meses e a data-limite derivada na conclusao.
+    # A derivacao calcula warranty_until = concluded_at + warranty_months;
+    # deixar o cliente editar os meses sem mexer na data final.
+    warranty_months = db.Column(Integer, nullable=True, default=0)
+    warranty_until = db.Column(Date, nullable=True)
 
     client = db.relationship("Client", backref=db.backref("projects", cascade="all, delete-orphan", passive_deletes=True))
 
@@ -420,6 +425,9 @@ class Project(db.Model):
             "funnel_id": self.funnel_id,
             "concluded_at": iso(self.concluded_at),
             "is_concluded": self.is_concluded,
+            "warranty_months": self.warranty_months,
+            "warranty_until": iso(self.warranty_until),
+            "in_warranty": self.warranty_until is not None and self.warranty_until >= date.today(),
             "environments": [e.to_dict() for e in getattr(self, "environments", [])],
             "total_area_m2": float(sum((num(e.area_m2) or 0) for e in getattr(self, "environments", []))),
             "total_environments": len(getattr(self, "environments", [])),
@@ -1297,6 +1305,45 @@ class ChecklistItem(db.Model):
         }
 
 
+class SatisfactionSurvey(db.Model):
+    """Pesquisa de satisfacao pos-entrega (Fase 8).
+
+    Uma linha por envio. O envio pode ser por WhatsApp (o botao reusa o fluxo
+    da proposta) ou direto; a resposta chega com `score`/`comment` preenchidos
+    e `answered_at` gravado. Sem resposta = `answered_at` NULL.
+    """
+    __tablename__ = "satisfaction_surveys"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = db.Column(String(36), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
+    ticket_id = db.Column(String(36), ForeignKey("service_tickets.id", ondelete="SET NULL"), nullable=True)
+    score = db.Column(Integer, nullable=True)  # 1 a 5
+    comment = db.Column(Text, nullable=True, default="")
+    sent_at = db.Column(DateTime, nullable=False, default=utcnow)
+    answered_at = db.Column(DateTime, nullable=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    client = db.relationship("Client", backref=db.backref("satisfaction_surveys", cascade="all, delete-orphan", passive_deletes=False))
+    project = db.relationship("Project")
+    ticket = db.relationship("ServiceTicket")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "client_id": self.client_id,
+            "client_name": self.client.name if self.client else None,
+            "project_id": self.project_id,
+            "project_title": self.project.title if self.project else None,
+            "ticket_id": self.ticket_id,
+            "ticket_number": self.ticket.number if self.ticket else None,
+            "score": self.score,
+            "comment": self.comment or "",
+            "sent_at": iso(self.sent_at),
+            "answered_at": iso(self.answered_at),
+            "answered": self.answered_at is not None,
+            "created_at": iso(self.created_at),
+        }
+
+
 class ProjectEnvironment(db.Model):
     __tablename__ = "project_environments"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -1515,6 +1562,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Pós-venda — pesquisa de satisfação e garantia dos projetos",
+     "Fase 8 (parte 1). Pesquisa de satisfação: envie por cliente/projeto, registre a resposta (nota 1 a 5 e comentário) e acompanhe o resumo — média, distribuição e % de respondentes. Garantia: ao concluir um projeto, informe os meses de garantia e a data-limite é calculada automaticamente; os chamados de um projeto em garantia são marcados como cobertos. As vendas que já tinham sido concluídas pelo botão são corrigidas automaticamente na migração.",
+     "NOVIDADE", "2026-09-28"),
     ("Venda concluída conta nos dashboards + venda para fornecedor",
      "Correção: a venda fechada pelo botão Concluir venda criava o projeto na Produção mas não aparecia no Dashboard inicial nem no Dashboard comercial — agora ela entra na meta, na comissão e no relatório de CRM como qualquer venda fechada, e as vendas que já tinham passado pelo botão foram corrigidas. Novidade: no funil de vendas dá para vender para cliente ou para fornecedor, independente — o modal Vincular tem as duas abas e o fornecedor caminha no mesmo funil.",
      "CORRECAO", "2026-09-28"),
