@@ -63,6 +63,10 @@ def list_events():
     client_id = request.args.get("client_id") or None
     if client_id:
         q = q.filter_by(client_id=client_id)
+    # Filtro por tipo (a aba Agenda de pos-venda pede type=POS_VENDA).
+    event_type = (request.args.get("type") or "").strip().upper()
+    if event_type:
+        q = q.filter_by(type=event_type)
     try:
         month = int(request.args.get("month") or 0)
         year = int(request.args.get("year") or 0)

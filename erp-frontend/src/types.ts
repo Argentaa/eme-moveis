@@ -84,6 +84,11 @@ export interface Project {
   // funil — o cliente renomeia as colunas, entao a chave nao serve de regra.
   concluded_at?: string | null;
   is_concluded?: boolean;
+  // Garantia (Fase 8): prazo em meses + data-limite derivada na conclusao.
+  // in_warranty e calculado no backend (data de hoje <= warranty_until).
+  warranty_months?: number;
+  warranty_until?: string | null;
+  in_warranty?: boolean;
   environments?: ProjectEnvironment[];
   total_area_m2?: number;
   total_environments?: number;
@@ -618,7 +623,8 @@ export type Recurrence = 'UNICO' | 'MENSAL' | 'TRIMESTRAL' | 'ANUAL';
 export interface Interaction {
   id: string;
   client_id: string;
-  type: 'CONVERSA' | 'PROPOSTA' | 'ORCAMENTO' | 'ALTERACAO_PROJETO' | 'OBSERVACAO' | 'SISTEMA';
+  client_name?: string | null;
+  type: 'CONVERSA' | 'PROPOSTA' | 'ORCAMENTO' | 'ALTERACAO_PROJETO' | 'OBSERVACAO' | 'SISTEMA' | 'LIGACAO' | 'VISITA' | 'WHATSAPP';
   content: string;
   created_by: string;
   automatic: boolean;
@@ -730,6 +736,7 @@ export interface ServiceTicket {
   cause: string;
   solution: string;
   in_warranty: boolean | null;
+  warranty_until?: string | null;
   assigned_user_id: string | null;
   assigned_user_name: string | null;
   opened_at: string;
@@ -755,4 +762,47 @@ export interface ChecklistItem {
   notes: string;
   position: number;
   created_at: string;
+}
+
+// ── Pós-venda (Fase 8) ──
+
+export interface SatisfactionSurvey {
+  id: string;
+  client_id: string;
+  client_name: string | null;
+  project_id: string | null;
+  project_title: string | null;
+  ticket_id: string | null;
+  ticket_number: string | null;
+  score: number | null;
+  comment: string;
+  sent_at: string;
+  answered_at: string | null;
+  answered: boolean;
+  created_at: string;
+}
+
+export interface SatisfactionSummary {
+  total: number;
+  answered: number;
+  response_rate: number;
+  average: number;
+  distribution: Record<string, number>;
+  recent: SatisfactionSurvey[];
+}
+
+export interface PosvendaCheckin extends Interaction {
+  client_name?: string | null;
+}
+
+export interface FollowupEvent {
+  id: string;
+  title: string;
+  description: string | null;
+  type: string;
+  status: string;
+  start_date: string;
+  start_time: string | null;
+  project_id: string | null;
+  client_id: string | null;
 }

@@ -16,21 +16,22 @@ import {
   Upload,
   Image as ImageIcon,
 } from 'lucide-react';
-import { ticketService, clientService, projectService, getApiErrorMessage, api } from '../services/api';
-import { ServiceTicket, Client, Project, User as UserType } from '../types';
+import { ticketService, clientService, projectService, getApiErrorMessage, api, satisfactionService, posvendaService } from '../services/api';
+import { ServiceTicket, Client, Project, User as UserType, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent } from '../types';
+import { PosvendaDashboard, SatisfactionTab, WarrantiesTab, ScheduleTab, CheckinsTab, PendingTab } from './PosvendaPanels';
 
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
 
 /** Abas do módulo Pós-venda, conforme a spec do cliente (17/09). */
 const TICKETS_TABS: ModuleTab[] = [
   { id: 'delivered', label: 'Projetos entregues', ready: true },
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'schedule', label: 'Agenda de pós-venda' },
-  { id: 'checkins', label: 'Check-ins' },
-  { id: 'satisfaction', label: 'Pesquisa de satisfação' },
+  { id: 'dashboard', label: 'Dashboard', ready: true },
+  { id: 'schedule', label: 'Agenda de pós-venda', ready: true },
+  { id: 'checkins', label: 'Check-ins', ready: true },
+  { id: 'satisfaction', label: 'Pesquisa de satisfação', ready: true },
   { id: 'tickets', label: 'Solicitações/Ocorrências', ready: true },
-  { id: 'warranties', label: 'Garantias' },
-  { id: 'pending', label: 'Pendências' },
+  { id: 'warranties', label: 'Garantias', ready: true },
+  { id: 'pending', label: 'Pendências', ready: true },
 ];
 
 interface TicketsViewProps {
@@ -120,6 +121,11 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   // Projetos concluidos na Producao (aba "Projetos entregues").
   const [delivered, setDelivered] = useState<Project[]>([]);
+  // Fase 8: dados das abas de pos-venda (satisfacao, check-ins, agenda).
+  const [surveys, setSurveys] = useState<SatisfactionSurvey[]>([]);
+  const [satSummary, setSatSummary] = useState<SatisfactionSummary | null>(null);
+  const [checkins, setCheckins] = useState<PosvendaCheckin[]>([]);
+  const [followups, setFollowups] = useState<FollowupEvent[]>([]);
   const [users, setUsers] = useState<UserType[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -140,7 +146,7 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [t, c, p, u, d] = await Promise.all([
+      const [t, c, p, u, d, sv, ss, ck, fu] = await Promise.all([
         ticketService.list(),
         clientService.getAll().catch(() => [] as Client[]),
         projectService.getAll().catch(() => [] as Project[]),
@@ -148,12 +154,22 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
         // Projetos concluidos (botao "Concluir projeto" na Producao). O filtro
         // e a flag explicita no backend, nao a coluna do funil.
         projectService.getConcluded().catch(() => [] as Project[]),
+        // Fase 8: pos-venda. Cada chamada tem fallback vazio para uma aba
+        // nunca derrubar as outras.
+        satisfactionService.list().catch(() => [] as SatisfactionSurvey[]),
+        satisfactionService.summary().catch(() => null as SatisfactionSummary | null),
+        posvendaService.listCheckins().catch(() => [] as PosvendaCheckin[]),
+        posvendaService.listFollowups().catch(() => [] as FollowupEvent[]),
       ]);
       setTickets(t);
       setClients(c);
       setProjects(p);
       setUsers(u);
       setDelivered(d);
+      setSurveys(sv);
+      setSatSummary(ss);
+      setCheckins(ck);
+      setFollowups(fu);
     } catch (err) {
       console.error('Erro ao carregar chamados:', err);
     } finally {
@@ -373,7 +389,7 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
           <h1 className="text-3xl font-serif text-white tracking-wide flex items-center gap-3">
             <Wrench className="w-7 h-7 text-zinc-400" /> Pos-venda
           </h1>
-          <p className="text-sm text-zinc-400 font-mono mt-1">Chamados de assistencia tecnica.</p>
+          <p className="text-sm text-zinc-400 font-mono mt-1">Entregas, garantias, satisfação e acompanhamento.</p>
         </div>
         <button
           onClick={handleOpenCreate}
@@ -442,6 +458,54 @@ export default function TicketsView({ userRole }: TicketsViewProps) {
             </div>
           )}
         </div>
+      )}
+
+      {activeTab === 'dashboard' && (
+        <PosvendaDashboard
+          clients={clients} projects={projects} delivered={delivered} tickets={tickets}
+          surveys={surveys} satSummary={satSummary} checkins={checkins} followups={followups}
+          userRole={userRole} reload={loadData}
+        />
+      )}
+
+      {activeTab === 'schedule' && (
+        <ScheduleTab
+          clients={clients} projects={projects} delivered={delivered} tickets={tickets}
+          surveys={surveys} satSummary={satSummary} checkins={checkins} followups={followups}
+          userRole={userRole} reload={loadData}
+        />
+      )}
+
+      {activeTab === 'checkins' && (
+        <CheckinsTab
+          clients={clients} projects={[...projects, ...delivered]} delivered={delivered} tickets={tickets}
+          surveys={surveys} satSummary={satSummary} checkins={checkins} followups={followups}
+          userRole={userRole} reload={loadData}
+        />
+      )}
+
+      {activeTab === 'satisfaction' && (
+        <SatisfactionTab
+          clients={clients} projects={[...projects, ...delivered]} delivered={delivered} tickets={tickets}
+          surveys={surveys} satSummary={satSummary} checkins={checkins} followups={followups}
+          userRole={userRole} reload={loadData}
+        />
+      )}
+
+      {activeTab === 'warranties' && (
+        <WarrantiesTab
+          clients={clients} projects={projects} delivered={delivered} tickets={tickets}
+          surveys={surveys} satSummary={satSummary} checkins={checkins} followups={followups}
+          userRole={userRole} reload={loadData}
+        />
+      )}
+
+      {activeTab === 'pending' && (
+        <PendingTab
+          clients={clients} projects={projects} delivered={delivered} tickets={tickets}
+          surveys={surveys} satSummary={satSummary} checkins={checkins} followups={followups}
+          userRole={userRole} reload={loadData}
+        />
       )}
 
       {activeTab === 'tickets' && (<>

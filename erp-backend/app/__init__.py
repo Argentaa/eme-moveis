@@ -38,6 +38,7 @@ def create_app(config_name=None):
     from app.api.stock_bp import bp as stock_bp
     from app.api.suppliers_bp import bp as suppliers_bp
     from app.api.satisfaction_bp import bp as satisfaction_bp
+    from app.api.posvenda_bp import bp as posvenda_bp
     from app.api.purchases_bp import bp as purchases_bp
     from app.api.tickets_bp import bp as tickets_bp
     from app.api.production_bp import bp as production_bp
@@ -46,7 +47,7 @@ def create_app(config_name=None):
     from app.api.proposals_bp import bp as proposals_bp
     from app.api.commissions_bp import bp as commissions_bp
 
-    for blueprint in (auth_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp, lead_options_bp, attachments_bp, products_bp, changelog_bp, suppliers_bp, satisfaction_bp, purchases_bp, budget_bp, tickets_bp, production_bp, bank_accounts_bp, partners_bp, vendors_bp, goals_bp, dashboard_bp, proposals_bp, commissions_bp):
+    for blueprint in (auth_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp, lead_options_bp, attachments_bp, products_bp, changelog_bp, suppliers_bp, satisfaction_bp, posvenda_bp, purchases_bp, budget_bp, tickets_bp, production_bp, bank_accounts_bp, partners_bp, vendors_bp, goals_bp, dashboard_bp, proposals_bp, commissions_bp):
         app.register_blueprint(blueprint)
 
     @app.get("/api/health")

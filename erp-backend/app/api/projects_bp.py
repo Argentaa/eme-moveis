@@ -7,6 +7,7 @@ from app.helpers import body_json, parse_date
 from app.auth import token_required
 from app.extensions import db
 from app.models.models import ChecklistItem, Funnel, Project, User, utcnow
+from app.api.posvenda_bp import _ensure_followups
 
 bp = Blueprint("projects", __name__)
 
@@ -137,6 +138,9 @@ def conclude_project(project_id):
                 mes = (base.month - 1 + project.warranty_months) % 12 + 1
                 ano = base.year + (base.month - 1 + project.warranty_months) // 12
                 project.warranty_until = project.warranty_until.replace(year=ano, month=mes)
+        # Pos-venda (8.5): concluir ja agenda os contatos programados
+        # (7/30 dias por default). Idempotente: reconcluir nao duplica.
+        _ensure_followups(project)
     db.session.commit()
     return jsonify(project.to_dict())
 

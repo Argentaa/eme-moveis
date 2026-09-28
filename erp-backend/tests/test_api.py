@@ -4559,3 +4559,89 @@ def test_perda_filtra_por_tipo_e_periodo(client):
     s = client.get("/api/stock/losses/summary?date_from=2026-01-01&date_to=2026-01-31", headers=h).get_json()
     assert s["count"] == 1
     assert s["date_from"] == "2026-01-01" and s["date_to"] == "2026-01-31"
+
+
+# ── Fase 8 (parte 2) — check-ins, follow-ups e envio da pesquisa ──
+#
+# O ponto que estes testes protegem: o pos-venda proativo tem tres pecas
+# encadeadas — concluir agenda os contatos, o check-in registra o contato
+# feito, e a pesquisa sai por WhatsApp. Se uma peca quebrar, a aba vira
+# enfeite: os testes prendem o encadeamento.
+
+
+def test_checkin_registra_com_marcador_e_lista(client):
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Checkin"}).get_json()["id"]
+    r = client.post("/api/posvenda/checkins", headers=h, json={
+        "client_id": cid, "type": "whatsapp", "content": "Perguntou da porta, tudo certo"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    b = r.get_json()
+    assert b["type"] == "WHATSAPP"
+    assert b["content"].startswith("[CHECK-IN PÓS-VENDA]")
+    assert b["client_name"] == "Cliente Checkin"
+    lista = client.get("/api/posvenda/checkins", headers=h).get_json()
+    assert any(c["id"] == b["id"] for c in lista)
+    # tipo invalido e conteudo vazio sao recusados
+    r2 = client.post("/api/posvenda/checkins", headers=h,
+                     json={"client_id": cid, "type": "CONVERSA", "content": "x"})
+    assert r2.status_code == 400
+    r3 = client.post("/api/posvenda/checkins", headers=h,
+                     json={"client_id": cid, "type": "LIGACAO", "content": "  "})
+    assert r3.status_code == 400
+
+
+def test_interaction_aceita_ligacao_visita_whatsapp(client):
+    """Os tipos novos nao sao coagidos para OBSERVACAO."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Tipos"}).get_json()["id"]
+    for t in ("LIGACAO", "VISITA", "WHATSAPP"):
+        r = client.post(f"/api/clients/{cid}/interactions", headers=h,
+                        json={"type": t, "content": f"contato {t}"})
+        assert r.status_code == 201, r.get_data(as_text=True)
+        assert r.get_json()["type"] == t, r.get_json()
+
+
+def test_concluir_agenda_followups_e_generate_nao_duplica(client):
+    from datetime import date, timedelta
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={"name": "Cliente Agenda"}).get_json()["id"]
+    hoje = date.today().isoformat()
+    pid = client.post("/api/projects", headers=h, json={
+        "title": "Guarda Agenda", "client_id": cid, "actual_end_date": hoje}).get_json()["id"]
+    client.post(f"/api/projects/{pid}/conclude", headers=h)
+    agenda = client.get("/api/calendar?type=POS_VENDA", headers=h).get_json()
+    meus = [e for e in agenda if e["project_id"] == pid]
+    assert len(meus) == 2, meus  # default 7 e 30 dias
+    assert sorted(e["start_date"] for e in meus) == sorted(
+        (date.fromisoformat(hoje) + timedelta(days=d)).isoformat()
+        for d in (7, 30))
+    # gerar de novo nao duplica — nem por projeto, nem geral
+    g1 = client.post("/api/posvenda/followups/generate", headers=h,
+                     json={"project_id": pid}).get_json()
+    assert g1["created"] == 0
+    g2 = client.post("/api/posvenda/followups/generate", headers=h, json={}).get_json()
+    assert g2["created"] == 0
+    # projeto em producao nao agenda
+    pid2 = client.post("/api/projects", headers=h, json={
+        "title": "Guarda Aberto", "client_id": cid}).get_json()["id"]
+    r = client.post("/api/posvenda/followups/generate", headers=h, json={"project_id": pid2})
+    assert r.status_code == 409
+
+
+def test_satisfaction_send_whatsapp_fallback_sem_evolution(client):
+    """Sem Evolution configurada: 200 com wa.me pronto, sem marcar resposta."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Zap", "phone": "(55) 99999-1234"}).get_json()["id"]
+    sid = client.post("/api/satisfaction", headers=h, json={"client_id": cid}).get_json()["id"]
+    r = client.post(f"/api/satisfaction/{sid}/send-whatsapp", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    b = r.get_json()
+    assert b["sent"] is False
+    assert b["fallback_wa_me"].startswith("https://wa.me/55999991234?text=")
+    assert b["survey"]["answered"] is False
+    # cliente sem telefone: 400 explicito
+    cid2 = client.post("/api/clients", headers=h, json={"name": "Cliente SemFone"}).get_json()["id"]
+    sid2 = client.post("/api/satisfaction", headers=h, json={"client_id": cid2}).get_json()["id"]
+    r2 = client.post(f"/api/satisfaction/{sid2}/send-whatsapp", headers=h)
+    assert r2.status_code == 400

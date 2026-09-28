@@ -1562,6 +1562,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Pós-venda completo: dashboard, agenda, check-ins e pendências",
+     "Fase 8 entregue. O Pós-venda agora tem 8 abas: Projetos entregues, Dashboard (satisfação, garantias, follow-ups, chamados), Agenda de pós-venda (concluir um projeto agenda os contatos de 7 e 30 dias sozinho; dá para gerar, concluir e configurar os dias), Check-ins (ligação, visita ou WhatsApp, feitos × programados), Pesquisa de satisfação (envio, resposta e botão WhatsApp), Solicitações, Garantias (prazo em meses por projeto, chamado coberto sozinho) e Pendências (chamados por tempo e atrasados).",
+     "NOVIDADE", "2026-09-28"),
     ("Pós-venda — pesquisa de satisfação e garantia dos projetos",
      "Fase 8 (parte 1). Pesquisa de satisfação: envie por cliente/projeto, registre a resposta (nota 1 a 5 e comentário) e acompanhe o resumo — média, distribuição e % de respondentes. Garantia: ao concluir um projeto, informe os meses de garantia e a data-limite é calculada automaticamente; os chamados de um projeto em garantia são marcados como cobertos. As vendas que já tinham sido concluídas pelo botão são corrigidas automaticamente na migração.",
      "NOVIDADE", "2026-09-28"),

@@ -39,7 +39,11 @@ CLIENT_FIELDS = (
 
 SUPPLIER_OPTIONAL_FIELDS = ("contact", "category", "payment_terms")
 
-INTERACTION_TYPES = ("CONVERSA", "PROPOSTA", "ORCAMENTO", "OBSERVACAO")
+INTERACTION_TYPES = ("CONVERSA", "PROPOSTA", "ORCAMENTO", "OBSERVACAO",
+                     # Fase 8 (check-ins de pos-venda): contato proativo pos-entrega.
+                     # LIGACAO/VISITA/WHATSAPP entram aqui para o historico nao
+                     # coagir tudo para OBSERVACAO.
+                     "LIGACAO", "VISITA", "WHATSAPP")
 
 ITEM_RECURRENCES = ("UNICO", "MENSAL", "TRIMESTRAL", "ANUAL")
 

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { User, Client, Project, FinancialRecord, StockItem, StockMovement, StockLoss, StockLossKind, StockLossSummary, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
   PurchaseQuotation,
-  Proposal, CommissionRule, CommissionReport, AppSetting } from '../types';
+  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -349,6 +349,12 @@ export const projectService = {
   // Desfaz a conclusao: o projeto volta para a Producao.
   async reopen(id: string): Promise<Project> {
     const response = await api.post(`/api/projects/${id}/reopen`);
+    return response.data;
+  },
+
+  // Garantia (Fase 8): edita os meses; o backend recalcula warranty_until.
+  async setWarranty(id: string, warranty_months: number): Promise<Project> {
+    const response = await api.patch(`/api/projects/${id}/warranty`, { warranty_months });
     return response.data;
   },
 
@@ -965,11 +971,12 @@ export const recurringService = {
 
 // Calendar Services
 export const calendarService = {
-  async getAll(month?: number, year?: number, clientId?: string): Promise<any[]> {
+  async getAll(month?: number, year?: number, clientId?: string, eventType?: string): Promise<any[]> {
     const params: Record<string, number | string> = {};
     if (month) params.month = month;
     if (year) params.year = year;
     if (clientId) params.client_id = clientId;
+    if (eventType) params.type = eventType;
     const response = await api.get('/api/calendar', { params });
     return response.data;
   },
@@ -1205,6 +1212,51 @@ export const dashboardService = {
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
     const response = await api.get('/api/reports/crm', { params });
+    return response.data;
+  },
+};
+
+// ── Pós-venda (Fase 8) ──
+
+export const satisfactionService = {
+  async list(): Promise<SatisfactionSurvey[]> {
+    const response = await api.get('/api/satisfaction');
+    return response.data;
+  },
+  async create(data: { client_id: string; project_id?: string | null; ticket_id?: string | null; score?: number | null; comment?: string }): Promise<SatisfactionSurvey> {
+    const response = await api.post('/api/satisfaction', data);
+    return response.data;
+  },
+  async answer(id: string, data: { score: number; comment?: string }): Promise<SatisfactionSurvey> {
+    const response = await api.post(`/api/satisfaction/${id}/answer`, data);
+    return response.data;
+  },
+  async summary(): Promise<SatisfactionSummary> {
+    const response = await api.get('/api/satisfaction/summary');
+    return response.data;
+  },
+  // Envia por WhatsApp (Evolution) com fallback wa.me — mesmo contrato da proposta.
+  async sendWhatsapp(id: string): Promise<{ sent: boolean; channel: string | null; detail: string; fallback_wa_me: string | null; survey: SatisfactionSurvey }> {
+    const response = await api.post(`/api/satisfaction/${id}/send-whatsapp`);
+    return response.data;
+  },
+};
+
+export const posvendaService = {
+  async listCheckins(): Promise<PosvendaCheckin[]> {
+    const response = await api.get('/api/posvenda/checkins');
+    return response.data;
+  },
+  async createCheckin(data: { client_id: string; type: string; content: string; project_id?: string | null }): Promise<PosvendaCheckin> {
+    const response = await api.post('/api/posvenda/checkins', data);
+    return response.data;
+  },
+  async listFollowups(): Promise<FollowupEvent[]> {
+    const response = await api.get('/api/calendar', { params: { type: 'POS_VENDA' } });
+    return response.data;
+  },
+  async generateFollowups(project_id?: string): Promise<{ created: number; projects: number; days: number[] }> {
+    const response = await api.post('/api/posvenda/followups/generate', project_id ? { project_id } : {});
     return response.data;
   },
 };

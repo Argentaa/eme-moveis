@@ -27,7 +27,10 @@ from app.models.models import AppSetting, Client, Proposal, ProposalItem, utcnow
 bp = Blueprint("proposals", __name__)
 
 STATUSES = ("RASCUNHO", "ENVIADA", "ACEITA", "RECUSADA")
-SETTING_KEYS = ("evolution_url", "evolution_key", "evolution_instance")
+SETTING_KEYS = ("evolution_url", "evolution_key", "evolution_instance",
+                # Fase 8: dias apos a entrega em que o pos-venda agenda contato
+                # automatico (ex.: "7,30"). Editavel na aba Agenda de pos-venda.
+                "posvenda_followup_days")
 # chaves que nunca voltam inteiras na leitura
 SECRET_KEYS = ("evolution_key",)
 

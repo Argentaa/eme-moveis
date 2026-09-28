@@ -11,13 +11,17 @@ reexecutar o POST do mesmo envio nao duplica (mesmo client_id+project_id no
 mesmo dia nao cria outra linha).
 """
 from datetime import date, datetime
+import json
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from flask import Blueprint, jsonify, request
 
 from app.helpers import body_json, iso
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import SatisfactionSurvey, utcnow
+from app.models.models import AppSetting, SatisfactionSurvey, utcnow
 
 bp = Blueprint("satisfaction", __name__)
 
@@ -120,4 +124,71 @@ def satisfaction_summary():
         "average": media,
         "distribution": dist,
         "recent": [s.to_dict() for s in surveys[-8:][::-1]],
+    })
+
+
+def _so_digitos(valor):
+    return "".join(ch for ch in str(valor or "") if ch.isdigit())
+
+
+def _com_pais(telefone):
+    d = _so_digitos(telefone)
+    if d and not d.startswith("55"):
+        d = "55" + d
+    return d
+
+
+# ── envio por WhatsApp (reusa o fluxo da proposta, 4.3) ────────────────
+@bp.post("/api/satisfaction/<survey_id>/send-whatsapp")
+@token_required()
+def send_survey_whatsapp(survey_id):
+    """Envia a pesquisa por WhatsApp via Evolution API, com fallback wa.me.
+
+    Mesmo contrato da proposta: `sent=True` so quando a Evolution confirma;
+    sem configuracao (ou falha), 200 com `fallback_wa_me` para o vendedor
+    enviar na mao. O envio nao marca resposta — so atualiza `sent_at`.
+    """
+    survey = db.session.get(SatisfactionSurvey, survey_id)
+    if not survey:
+        return jsonify({"detail": "Pesquisa nao encontrada"}), 404
+    telefone = _so_digitos(getattr(survey.client, "phone", "") if survey.client else "")
+    if not telefone:
+        return jsonify({"detail": "Cliente sem telefone cadastrado"}), 400
+    nome = survey.client.name if survey.client else "cliente"
+    projeto = f' sobre "{survey.project.title}"' if survey.project else ""
+    mensagem = (
+        f"Olá {nome}! Aqui é da EME Móveis. "
+        f"Gostaríamos de saber como ficou{projeto} — "
+        "responda com uma nota de 1 a 5 e, se quiser, um comentário. Obrigado!"
+    )
+    cfg = {s.key: (s.value or "") for s in db.session.query(AppSetting).all()}
+    url = cfg.get("evolution_url", "").rstrip("/")
+    chave = cfg.get("evolution_key", "")
+    instancia = cfg.get("evolution_instance", "")
+
+    if url and chave and instancia:
+        try:
+            corpo = json.dumps({"number": _com_pais(telefone), "text": mensagem}).encode()
+            pedido = Request(f"{url}/message/sendText/{instancia}", data=corpo, method="POST")
+            pedido.add_header("apikey", chave)
+            pedido.add_header("Content-Type", "application/json")
+            with urlopen(pedido, timeout=8) as resp:
+                status = getattr(resp, "status", 200)
+            if status < 300:
+                survey.sent_at = utcnow()
+                db.session.commit()
+                return jsonify({"sent": True, "channel": "WHATSAPP", "detail": "",
+                                "fallback_wa_me": None, "survey": survey.to_dict()})
+            erro = f"Evolution API respondeu {status}"
+        except HTTPError as e:
+            erro = f"Evolution API respondeu {e.code}"
+        except (URLError, OSError, ValueError) as e:
+            erro = f"falha ao falar com a Evolution API ({type(e).__name__})"
+    else:
+        erro = "Evolution API nao configurada"
+
+    return jsonify({
+        "sent": False, "channel": None, "detail": erro,
+        "fallback_wa_me": f"https://wa.me/{_com_pais(telefone)}?text={quote(mensagem)}",
+        "survey": survey.to_dict(),
     })
