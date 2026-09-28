@@ -1344,6 +1344,113 @@ class SatisfactionSurvey(db.Model):
         }
 
 
+class WhatsappInstance(db.Model):
+    """Instancia do WhatsApp na Evolution API (uma por tenant; aqui: eme-moveis).
+
+    Guarda o `hash` devolvido no create (chave propria da instancia) e o
+    estado conhecido. O QR code NUNCA e persistido: vale ~3 min, entao o
+    endpoint /qr busca um novo a cada chamada (GET /instance/connect).
+    """
+    __tablename__ = "whatsapp_instances"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    name = db.Column(String(80), nullable=False, unique=True, index=True)
+    api_key = db.Column(Text, nullable=True, default="")  # hash da instancia
+    status = db.Column(String(20), nullable=False, default="desconectada")
+    phone = db.Column(String(30), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    updated_at = db.Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    def to_dict(self, include_key=False):
+        d = {
+            "id": self.id,
+            "name": self.name,
+            "status": self.status,
+            "phone": self.phone or "",
+            "created_at": iso(self.created_at),
+            "updated_at": iso(self.updated_at),
+        }
+        if include_key:
+            d["has_key"] = bool(self.api_key)
+        return d
+
+
+class WhatsappConversation(db.Model):
+    """Conversa com um numero de WhatsApp (uma linha por telefone+instancia).
+
+    NAO cria Client sozinho a partir do trafego (regra do produto): quando o
+    telefone normalizado bate com UM unico cliente, `client_id` aponta para
+    ele (link de leitura); se bater com mais de um, fica NULL (ambiguo).
+    """
+    __tablename__ = "whatsapp_conversations"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    instance = db.Column(String(80), nullable=False, default="eme-moveis", index=True)
+    phone = db.Column(String(30), nullable=False, index=True)  # so digitos
+    name = db.Column(String(160), nullable=True, default="")  # pushName / perfil
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
+    last_message_at = db.Column(DateTime, nullable=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    client = db.relationship("Client")
+    __table_args__ = (UniqueConstraint("instance", "phone", name="uq_waconv_instance_phone"),)
+
+    def to_dict(self, last=None, unread=0):
+        return {
+            "id": self.id,
+            "instance": self.instance,
+            "phone": self.phone,
+            "name": self.name or "",
+            "client_id": self.client_id,
+            "client_name": self.client.name if self.client else None,
+            "last_message_at": iso(self.last_message_at),
+            "last_body": (last.body if last else "") or "",
+            "last_direction": last.direction if last else "",
+            "unread": unread,
+            "created_at": iso(self.created_at),
+        }
+
+
+class WhatsappMessage(db.Model):
+    """Mensagem de uma conversa (in = recebida, out = enviada pelo ERP).
+
+    `provider_id` e o id da Evolution: unique = dedupe de redelivery do
+    webhook. Midia de SAIDA fica em disco (UPLOAD_DIR, mesmo padrao dos
+    anexos); midia de ENTRADA guarda kind/caption/mimetype — os bytes sao
+    buscados sob demanda (fase 2), nunca inventados.
+    """
+    __tablename__ = "whatsapp_messages"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    conversation_id = db.Column(String(36), ForeignKey("whatsapp_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider_id = db.Column(String(120), nullable=True, unique=True, index=True)
+    direction = db.Column(String(8), nullable=False, default="in")  # in | out
+    kind = db.Column(String(16), nullable=False, default="text")  # text|image|audio|video|document
+    body = db.Column(Text, nullable=True, default="")
+    media_stored = db.Column(String(255), nullable=True)  # arquivo em UPLOAD_DIR (saida)
+    media_filename = db.Column(String(255), nullable=True)
+    media_mime = db.Column(String(120), nullable=True)
+    media_size = db.Column(Integer, nullable=True)
+    status = db.Column(String(20), nullable=False, default="stored")  # stored|sent|failed
+    created_by = db.Column(String(80), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    conversation = db.relationship(
+        "WhatsappConversation",
+        backref=db.backref("messages", cascade="all, delete-orphan", passive_deletes=False),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "conversation_id": self.conversation_id,
+            "provider_id": self.provider_id,
+            "direction": self.direction,
+            "kind": self.kind,
+            "body": self.body or "",
+            "has_media": bool(self.media_stored),
+            "media_filename": self.media_filename or "",
+            "media_mime": self.media_mime or "",
+            "media_size": self.media_size,
+            "status": self.status,
+            "created_by": self.created_by or "",
+            "created_at": iso(self.created_at),
+        }
 class ProjectEnvironment(db.Model):
     __tablename__ = "project_environments"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -1739,6 +1846,9 @@ DEFAULT_CHANGELOG_ENTRIES = [
     ("Painel inicial completo",
      "O Painel Geral agora traz: resumo principal (saldo bancário, contas a receber e a pagar em aberto, faturamento do mês e projetos em produção), fluxo de caixa do mês por semana, meta comercial com percentual atingido, resumo comercial, resumo da produção, o bloco \"O que precisa da minha atenção\" e a Agenda do Dia.",
      "NOVIDADE", "2026-09-23"),
+    ("Chat interno de WhatsApp",
+     "Nova aba WhatsApp: configure a Evolution uma vez (a instância é criada sozinha), conecte o número pelo QR code e converse com clientes sem sair do ERP — dá para enviar texto, foto e arquivo direto pelo chat. Mensagem recebida aparece na hora e nada cria cliente sozinho.",
+     "NOVIDADE", "2026-09-28"),
     ("Fluxo de caixa por semana",
      "O fluxo de caixa do mês agora pode ser visto semana a semana, com entradas, saídas, saldo de cada semana e saldo acumulado — tanto em Realizado quanto em Projetado.",
      "NOVIDADE", "2026-09-23"),

@@ -806,3 +806,42 @@ export interface FollowupEvent {
   project_id: string | null;
   client_id: string | null;
 }
+
+export interface WhatsappStatus {
+  configured: boolean;
+  instance: string;
+  /** Estado real na Evolution: open | close | connecting | qr | unknown */
+  connection: string;
+  phone: string;
+  webhook?: string;
+}
+
+export interface WhatsappConversation {
+  id: string;
+  instance: string;
+  phone: string;
+  name: string;
+  client_id: string | null;
+  client_name: string | null;
+  last_message_at: string | null;
+  last_body: string;
+  last_direction: string;
+  unread: number;
+  created_at: string;
+}
+
+export interface WhatsappMessage {
+  id: string;
+  conversation_id: string;
+  provider_id: string | null;
+  direction: 'in' | 'out';
+  kind: 'text' | 'image' | 'audio' | 'video' | 'document';
+  body: string;
+  has_media: boolean;
+  media_filename: string;
+  media_mime: string;
+  media_size: number | null;
+  status: string;
+  created_by: string;
+  created_at: string;
+}

@@ -30,7 +30,9 @@ STATUSES = ("RASCUNHO", "ENVIADA", "ACEITA", "RECUSADA")
 SETTING_KEYS = ("evolution_url", "evolution_key", "evolution_instance",
                 # Fase 8: dias apos a entrega em que o pos-venda agenda contato
                 # automatico (ex.: "7,30"). Editavel na aba Agenda de pos-venda.
-                "posvenda_followup_days")
+                "posvenda_followup_days",
+                # WhatsApp: base publica do ERP para o webhook da Evolution.
+                "whatsapp_webhook_base")
 # chaves que nunca voltam inteiras na leitura
 SECRET_KEYS = ("evolution_key",)
 

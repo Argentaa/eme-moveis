@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { User, Client, Project, FinancialRecord, StockItem, StockMovement, StockLoss, StockLossKind, StockLossSummary, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
   PurchaseQuotation,
-  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent } from '../types';
+  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -1258,5 +1258,49 @@ export const posvendaService = {
   async generateFollowups(project_id?: string): Promise<{ created: number; projects: number; days: number[] }> {
     const response = await api.post('/api/posvenda/followups/generate', project_id ? { project_id } : {});
     return response.data;
+  },
+};
+
+export const whatsappService = {
+  async status(): Promise<WhatsappStatus> {
+    const response = await api.get('/api/whatsapp/status');
+    return response.data;
+  },
+  async setup(data: { url: string; global_key: string; instance?: string; webhook_base?: string }): Promise<{ saved: boolean; instance: { name: string; status: string; phone: string }; webhook: string; create_status: number }> {
+    const response = await api.post('/api/whatsapp/setup', data);
+    return response.data;
+  },
+  async qr(): Promise<{ base64: string; pairingCode: string; code: string }> {
+    const response = await api.get('/api/whatsapp/qr');
+    return response.data;
+  },
+  async conversations(): Promise<WhatsappConversation[]> {
+    const response = await api.get('/api/whatsapp/conversations');
+    return response.data;
+  },
+  async messages(conversationId: string): Promise<WhatsappMessage[]> {
+    const response = await api.get(`/api/whatsapp/conversations/${conversationId}/messages`);
+    return response.data;
+  },
+  async sendText(conversationId: string, text: string): Promise<WhatsappMessage> {
+    const response = await api.post(`/api/whatsapp/conversations/${conversationId}/send`, { text });
+    return response.data;
+  },
+  async sendMedia(conversationId: string, file: File, caption?: string): Promise<WhatsappMessage> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (caption) formData.append('caption', caption);
+    // Multipart exige override do Content-Type padrao (ver attachmentService).
+    const response = await api.post(`/api/whatsapp/conversations/${conversationId}/send`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+  async start(phone: string, name?: string): Promise<WhatsappConversation> {
+    const response = await api.post('/api/whatsapp/conversations', { phone, name });
+    return response.data;
+  },
+  mediaUrl(messageId: string): string {
+    return `/api/whatsapp/messages/${messageId}/media`;
   },
 };

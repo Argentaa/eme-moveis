@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Building2, Layers, Users, Landmark, Package, Shield, FileBarChart, CalendarDays, Sparkles,
-  Power, Menu, X, User, ArrowRight, HelpCircle, Eye, EyeOff, Moon, Sun, ShoppingCart, Wrench, Truck
+  Power, Menu, X, User, ArrowRight, HelpCircle, Eye, EyeOff, Moon, Sun, ShoppingCart, Wrench, Truck, MessageCircle
 } from 'lucide-react';
 
 // Assets
@@ -22,12 +22,13 @@ import StockView from './components/StockView';
 import PurchasesView from './components/PurchasesView';
 import SuppliersView from './components/SuppliersView';
 import TicketsView from './components/TicketsView';
+import WhatsappView from './components/WhatsappView';
 import UsersView from './components/UsersView';
 import ReportsView from './components/ReportsView';
 import CalendarView from './components/CalendarView';
 import NovidadesView from './components/NovidadesView';
 
-type TabId = 'dashboard' | 'clients' | 'suppliers' | 'projects' | 'financial' | 'stock' | 'purchases' | 'tickets' | 'users' | 'reports' | 'calendar' | 'novidades';
+type TabId = 'dashboard' | 'clients' | 'suppliers' | 'projects' | 'financial' | 'stock' | 'purchases' | 'tickets' | 'whatsapp' | 'users' | 'reports' | 'calendar' | 'novidades';
 type ThemeMode = 'dark' | 'light';
 
 const TAB_STORAGE_KEY = 'eme_tab';
@@ -64,6 +65,7 @@ const TABS: TabItem[] = [
   { id: 'stock', label: 'Estoque', icon: Package, roles: ['ADMIN', 'GERENTE', 'ESTOQUE', 'PROJETISTA'] },
   { id: 'purchases', label: 'Compras', icon: ShoppingCart, roles: ['ADMIN', 'GERENTE', 'ESTOQUE'] },
   { id: 'tickets', label: 'Pós-venda', icon: Wrench, roles: ['ADMIN', 'GERENTE'] },
+  { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, roles: ['ADMIN', 'GERENTE'] },
   { id: 'reports', label: 'Relatórios', icon: FileBarChart, roles: ['ADMIN', 'GERENTE'] },
   { id: 'calendar', label: 'Agenda', icon: CalendarDays, roles: ['ADMIN', 'GERENTE', 'PROJETISTA'] },
   { id: 'novidades', label: 'Novidades', icon: Sparkles, roles: ['ADMIN', 'GERENTE', 'ESTOQUE', 'PROJETISTA'] },
@@ -447,6 +449,7 @@ export default function App() {
               {activeTab === 'stock' && <StockView userRole={currentUser.role} />}
               {activeTab === 'purchases' && <PurchasesView userRole={currentUser.role} />}
               {activeTab === 'tickets' && <TicketsView userRole={currentUser.role} />}
+              {activeTab === 'whatsapp' && <WhatsappView userRole={currentUser.role} />}
               {activeTab === 'reports' && <ReportsView userRole={currentUser.role} />}
               {activeTab === 'calendar' && <CalendarView userRole={currentUser.role} />}
               {activeTab === 'novidades' && <NovidadesView userRole={currentUser.role} onUnreadChange={setUnreadNews} />}

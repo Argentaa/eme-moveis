@@ -4645,3 +4645,152 @@ def test_satisfaction_send_whatsapp_fallback_sem_evolution(client):
     sid2 = client.post("/api/satisfaction", headers=h, json={"client_id": cid2}).get_json()["id"]
     r2 = client.post(f"/api/satisfaction/{sid2}/send-whatsapp", headers=h)
     assert r2.status_code == 400
+
+
+# ── WhatsApp interno (Evolution) ──
+#
+# O ponto que estes testes protegem: o webhook e porta aberta — sem chave,
+# sem token, sem conversa. E telefone ambiguo nunca vincula cliente.
+def _wa_hook(client, token, payload):
+    return client.post(f"/api/whatsapp/webhook?token={token}", json=payload)
+
+
+def _wa_upsert(instance, mid, phone, text, from_me=False, push="Joao"):
+    return {
+        "event": "messages.upsert",
+        "instance": instance,
+        "data": {
+            "key": {"remoteJid": f"{phone}@s.whatsapp.net", "fromMe": from_me, "id": mid},
+            "pushName": push,
+            "message": {"conversation": text},
+            "messageType": "conversation",
+        },
+    }
+
+
+def test_whatsapp_webhook_sem_chave_401(client):
+    """Sem evolution_key configurada, o webhook recusa (nunca aberto)."""
+    r = client.post("/api/whatsapp/webhook?token=qualquer", json={"event": "x"})
+    assert r.status_code == 401
+
+
+def test_whatsapp_webhook_token_errado_401(client):
+    from app.api.whatsapp_bp import webhook_token
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+        db.session.commit()
+    r = _wa_hook(client, "errado", {"event": "messages.upsert", "instance": "eme-moveis", "data": {}})
+    assert r.status_code == 401
+    tok = webhook_token("segredo-local", "eme-moveis")
+    r2 = client.post("/api/whatsapp/webhook", json={"event": "connection.update"})
+    assert r2.status_code == 401  # sem token nenhum tambem recusa
+    assert len(tok) == 32
+
+
+def test_whatsapp_webhook_grava_e_dedupa(client):
+    """Inbound texto cria conversa+mensagem; redelivery nao duplica."""
+    from app.api.whatsapp_bp import webhook_token
+    from app.models.models import AppSetting
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Zap In", "phone": "55999998888"}).get_json()["id"]
+    with client.application.app_context():
+        from app.extensions import db
+        if not db.session.query(AppSetting).filter_by(key="evolution_key").first():
+            db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+            db.session.commit()
+    tok = webhook_token("segredo-local", "eme-moveis")
+    r = _wa_hook(client, tok, _wa_upsert("eme-moveis", "MID-1", "5555999998888", "Ola, preciso de ajuda"))
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["stored"] == 1
+    convs = client.get("/api/whatsapp/conversations", headers=h).get_json()
+    assert len(convs) == 1
+    assert convs[0]["phone"] == "5555999998888"
+    assert convs[0]["client_id"] == cid  # link unico pelo telefone
+    assert convs[0]["last_body"] == "Ola, preciso de ajuda"
+    msgs = client.get(f"/api/whatsapp/conversations/{convs[0]['id']}/messages", headers=h).get_json()
+    assert len(msgs) == 1 and msgs[0]["direction"] == "in"
+    r2 = _wa_hook(client, tok, _wa_upsert("eme-moveis", "MID-1", "5555999998888", "Ola, preciso de ajuda"))
+    assert r2.get_json()["duplicate"] == 1
+    msgs2 = client.get(f"/api/whatsapp/conversations/{convs[0]['id']}/messages", headers=h).get_json()
+    assert len(msgs2) == 1  # nao duplicou
+
+
+def test_whatsapp_webhook_ignora_fromme_e_outros_eventos(client):
+    from app.api.whatsapp_bp import webhook_token
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        if not db.session.query(AppSetting).filter_by(key="evolution_key").first():
+            db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+            db.session.commit()
+    tok = webhook_token("segredo-local", "eme-moveis")
+    antes = len(client.get("/api/whatsapp/conversations", headers=h).get_json())
+    r = _wa_hook(client, tok, _wa_upsert("eme-moveis", "MID-ECO", "5555999000111", "eco", from_me=True))
+    assert r.get_json()["ignored"] == 1
+    r2 = client.post(f"/api/whatsapp/webhook?token={tok}",
+                     json={"event": "connection.update", "instance": "eme-moveis", "data": {}})
+    assert r2.get_json()["skipped"] == "connection.update"
+    depois = len(client.get("/api/whatsapp/conversations", headers=h).get_json())
+    assert antes == depois  # nada criado
+
+
+def test_whatsapp_telefone_ambiguo_nao_vincula(client):
+    """O MESMO telefone em DOIS clientes: conversa sem client_id (pior e entregar errado)."""
+    from app.api.whatsapp_bp import webhook_token
+    from app.models.models import AppSetting, Client
+    h = _login(client)
+    c1 = client.post("/api/clients", headers=h,
+                     json={"name": "Cliente A", "phone": "(55) 99999-7777"}).get_json()["id"]
+    c2 = client.post("/api/clients", headers=h,
+                     json={"name": "Cliente B", "phone": "5555999997777"}).get_json()["id"]
+    with client.application.app_context():
+        from app.extensions import db
+        rows = db.session.query(Client).filter(Client.id.in_([c1, c2])).all()
+        assert len(rows) == 2  # o par e ambiguo de verdade
+        if not db.session.query(AppSetting).filter_by(key="evolution_key").first():
+            db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+            db.session.commit()
+    tok = webhook_token("segredo-local", "eme-moveis")
+    r = _wa_hook(client, tok, _wa_upsert("eme-moveis", "MID-AMB", "5555999997777", "qual e meu pedido?"))
+    assert r.get_json()["stored"] == 1
+    convs = client.get("/api/whatsapp/conversations", headers=h).get_json()
+    alvo = next(c for c in convs if c["phone"] == "5555999997777")
+    assert alvo["client_id"] is None
+
+
+def test_whatsapp_send_text_mockado(client, monkeypatch):
+    """Envio grava out; a Evolution e mockada (sem rede nos testes)."""
+    import app.api.whatsapp_bp as wabp
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        for k, v in (("evolution_url", "https://evo.invalida"), ("evolution_key", "segredo-local"),
+                     ("evolution_instance", "eme-moveis")):
+            if not db.session.query(AppSetting).filter_by(key=k).first():
+                db.session.add(AppSetting(key=k, value=v))
+        db.session.commit()
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999000222", "name": "Maria"}).get_json()
+    monkeypatch.setattr(wabp, "_evo_call", lambda *a, **k: (200, {"key": {"id": "OUT-1"}}))
+    r = client.post(f"/api/whatsapp/conversations/{conv['id']}/send", headers=h,
+                    json={"text": "Boa tarde, Maria!"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    b = r.get_json()
+    assert b["direction"] == "out" and b["body"] == "Boa tarde, Maria!" and b["status"] == "sent"
+    msgs = client.get(f"/api/whatsapp/conversations/{conv['id']}/messages", headers=h).get_json()
+    assert len(msgs) == 1
+
+
+def test_whatsapp_status_sem_config(client):
+    h = _login(client)
+    r = client.get("/api/whatsapp/status", headers=h)
+    assert r.status_code == 200
+    b = r.get_json()
+    assert b["configured"] in (True, False)
+    assert "connection" in b
