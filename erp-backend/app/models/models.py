@@ -1420,6 +1420,7 @@ class WhatsappMessage(db.Model):
     id = db.Column(String(36), primary_key=True, default=new_uuid)
     conversation_id = db.Column(String(36), ForeignKey("whatsapp_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
     provider_id = db.Column(String(120), nullable=True, unique=True, index=True)
+    remote_jid = db.Column(String(120), nullable=True)  # chave p/ buscar midia na Evolution sob demanda
     direction = db.Column(String(8), nullable=False, default="in")  # in | out
     kind = db.Column(String(16), nullable=False, default="text")  # text|image|audio|video|document
     body = db.Column(Text, nullable=True, default="")
@@ -1444,6 +1445,8 @@ class WhatsappMessage(db.Model):
             "kind": self.kind,
             "body": self.body or "",
             "has_media": bool(self.media_stored),
+            "media_pending": bool(self.direction == "in" and self.kind != "text"
+                                 and not self.media_stored),
             "media_filename": self.media_filename or "",
             "media_mime": self.media_mime or "",
             "media_size": self.media_size,
@@ -1847,7 +1850,7 @@ DEFAULT_CHANGELOG_ENTRIES = [
      "O Painel Geral agora traz: resumo principal (saldo bancário, contas a receber e a pagar em aberto, faturamento do mês e projetos em produção), fluxo de caixa do mês por semana, meta comercial com percentual atingido, resumo comercial, resumo da produção, o bloco \"O que precisa da minha atenção\" e a Agenda do Dia.",
      "NOVIDADE", "2026-09-23"),
     ("Chat interno de WhatsApp",
-     "Nova aba WhatsApp: configure a Evolution uma vez (a instância é criada sozinha), conecte o número pelo QR code e converse com clientes sem sair do ERP — dá para enviar texto, foto e arquivo direto pelo chat. Mensagem recebida aparece na hora e nada cria cliente sozinho.",
+     "Nova aba WhatsApp: configure a Evolution uma vez (a instância é criada sozinha), conecte o número pelo QR code e converse com clientes sem sair do ERP — dá para enviar texto, foto e arquivo direto pelo chat. Foto e áudio recebidos mostram preview na conversa e podem ser baixados; mensagem recebida aparece na hora e nada cria cliente sozinho.",
      "NOVIDADE", "2026-09-28"),
     ("Fluxo de caixa por semana",
      "O fluxo de caixa do mês agora pode ser visto semana a semana, com entradas, saídas, saldo de cada semana e saldo acumulado — tanto em Realizado quanto em Projetado.",

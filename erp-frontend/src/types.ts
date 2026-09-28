@@ -838,6 +838,7 @@ export interface WhatsappMessage {
   kind: 'text' | 'image' | 'audio' | 'video' | 'document';
   body: string;
   has_media: boolean;
+  media_pending: boolean;
   media_filename: string;
   media_mime: string;
   media_size: number | null;

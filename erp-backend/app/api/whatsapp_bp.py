@@ -205,14 +205,21 @@ def _store_inbound(instance, item):
         if isinstance(message.get(mkey), dict):
             media_node = message.get(mkey)
             break
+    remote_jid = str(key.get("remoteJid") or "")[:120] or None
+    try:
+        media_len = int((media_node or {}).get("fileLength") or 0) or None
+    except (TypeError, ValueError):
+        media_len = None
     row = WhatsappMessage(
         conversation_id=conv.id,
         provider_id=provider_id or None,
+        remote_jid=remote_jid,
         direction="in",
         kind=kind if kind in MEDIA_KINDS or kind == "text" else "text",
         body=(texto or "")[:4000],
         media_filename=(str(media_node.get("fileName") or "")[:255] if media_node else None),
         media_mime=(str(media_node.get("mimetype") or "")[:120] if media_node else None),
+        media_size=media_len,
         status="stored",
     )
     db.session.add(row)
@@ -510,12 +517,48 @@ def send_message(conv_id):
 @token_required()
 def download_media(msg_id):
     row = db.session.get(WhatsappMessage, msg_id)
-    if not row or not row.media_stored:
+    if not row:
         return jsonify({"detail": "Midia nao encontrada"}), 404
-    path = os.path.join(current_app.config["UPLOAD_DIR"], row.media_stored)
-    if not os.path.exists(path):
-        return jsonify({"detail": "Arquivo ausente no disco"}), 404
-    return send_file(path, mimetype=row.media_mime or "application/octet-stream",
+    if row.media_stored:
+        path = os.path.join(current_app.config["UPLOAD_DIR"], row.media_stored)
+        if not os.path.exists(path):
+            return jsonify({"detail": "Arquivo ausente no disco"}), 404
+        return send_file(path, mimetype=row.media_mime or "application/octet-stream",
+                         as_attachment=True, download_name=row.media_filename or "arquivo")
+    # Entrada ainda sem bytes: busca sob demanda na Evolution e guarda em disco.
+    if row.direction != "in" or not row.provider_id or not row.remote_jid:
+        return jsonify({"detail": "Midia nao encontrada"}), 404
+    cfg = _cfg()
+    global_key = cfg.get("evolution_key", "")
+    instance = cfg.get("evolution_instance", "") or DEFAULT_INSTANCE
+    if not (cfg.get("evolution_url") and global_key):
+        return jsonify({"detail": "WhatsApp nao configurado (rode o setup)"}), 409
+    status, resp = _evo_call(
+        "POST", f"/chat/getBase64FromMediaMessage/{instance}", global_key,
+        {"message": {"key": {"id": row.provider_id,
+                             "remoteJid": row.remote_jid,
+                             "fromMe": False}}},
+        timeout=30)
+    b64 = (resp or {}).get("base64") or ""
+    try:
+        blob = base64.b64decode(b64) if b64 else b""
+    except (ValueError, TypeError):
+        blob = b""
+    if status >= 300 or status == 0 or not blob:
+        return jsonify({"detail": (resp or {}).get("error")
+                        or "Midia indisponivel na Evolution (mensagem antiga?)"}), 502
+    mime = str((resp or {}).get("mimetype") or row.media_mime or "")
+    ext = os.path.splitext(row.media_filename or "")[1].lower() or ".bin"
+    stored = uuid.uuid4().hex + ext
+    path = os.path.join(current_app.config["UPLOAD_DIR"], stored)
+    os.makedirs(current_app.config["UPLOAD_DIR"], exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(blob)
+    row.media_stored = stored
+    row.media_mime = mime[:120]
+    row.media_size = len(blob)
+    db.session.commit()
+    return send_file(path, mimetype=mime or "application/octet-stream",
                      as_attachment=True, download_name=row.media_filename or "arquivo")
 
 

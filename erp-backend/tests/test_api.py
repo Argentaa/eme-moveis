@@ -4794,3 +4794,75 @@ def test_whatsapp_status_sem_config(client):
     b = r.get_json()
     assert b["configured"] in (True, False)
     assert "connection" in b
+
+
+def _wa_image_upsert(instance, mid, phone, filename="foto.jpg", mime="image/jpeg", push="Joao"):
+    return {
+        "event": "messages.upsert",
+        "instance": instance,
+        "data": {
+            "key": {"remoteJid": f"{phone}@s.whatsapp.net", "fromMe": False, "id": mid},
+            "pushName": push,
+            "message": {"imageMessage": {"caption": "olha a foto", "fileName": filename,
+                                         "mimetype": mime, "fileLength": 11}},
+            "messageType": "imageMessage",
+        },
+    }
+
+
+def test_whatsapp_midia_recebida_baixa_sob_demanda(client, monkeypatch):
+    """Imagem recebida: lista marca media_pending; download busca na Evolution (mock)."""
+    import base64
+    import app.api.whatsapp_bp as wabp
+    from app.api.whatsapp_bp import webhook_token
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        for k, v in (("evolution_url", "https://evo.invalida"), ("evolution_key", "segredo-local"),
+                     ("evolution_instance", "eme-moveis")):
+            if not db.session.query(AppSetting).filter_by(key=k).first():
+                db.session.add(AppSetting(key=k, value=v))
+        db.session.commit()
+    tok = webhook_token("segredo-local", "eme-moveis")
+    r = _wa_hook(client, tok, _wa_image_upsert("eme-moveis", "MID-IMG-1", "5555999000333"))
+    assert r.get_json()["stored"] == 1
+    convs = client.get("/api/whatsapp/conversations", headers=h).get_json()
+    alvo = next(c for c in convs if c["phone"] == "5555999000333")
+    msgs = client.get(f"/api/whatsapp/conversations/{alvo['id']}/messages", headers=h).get_json()
+    assert len(msgs) == 1
+    m = msgs[0]
+    assert m["kind"] == "image" and m["has_media"] is False and m["media_pending"] is True
+    blob = b"FAKEJPEG123"
+    monkeypatch.setattr(wabp, "_evo_call",
+                        lambda *a, **k: (200, {"base64": base64.b64encode(blob).decode(),
+                                              "mimetype": "image/jpeg"}))
+    d1 = client.get(f"/api/whatsapp/messages/{m['id']}/media", headers=h)
+    assert d1.status_code == 200, d1.get_data(as_text=True)[:200]
+    assert d1.data == blob
+    msgs2 = client.get(f"/api/whatsapp/conversations/{alvo['id']}/messages", headers=h).get_json()
+    assert msgs2[0]["has_media"] is True and msgs2[0]["media_pending"] is False
+
+
+def test_whatsapp_midia_recebida_indisponivel_502(client, monkeypatch):
+    """Evolution sem a midia (mensagem antiga): 502 honesto, nada inventado."""
+    import app.api.whatsapp_bp as wabp
+    from app.api.whatsapp_bp import webhook_token
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        for k, v in (("evolution_url", "https://evo.invalida"), ("evolution_key", "segredo-local"),
+                     ("evolution_instance", "eme-moveis")):
+            if not db.session.query(AppSetting).filter_by(key=k).first():
+                db.session.add(AppSetting(key=k, value=v))
+        db.session.commit()
+    tok = webhook_token("segredo-local", "eme-moveis")
+    _wa_hook(client, tok, _wa_image_upsert("eme-moveis", "MID-IMG-2", "5555999000444"))
+    convs = client.get("/api/whatsapp/conversations", headers=h).get_json()
+    alvo = next(c for c in convs if c["phone"] == "5555999000444")
+    msgs = client.get(f"/api/whatsapp/conversations/{alvo['id']}/messages", headers=h).get_json()
+    monkeypatch.setattr(wabp, "_evo_call", lambda *a, **k: (404, {"error": "Message not found"}))
+    d = client.get(f"/api/whatsapp/messages/{msgs[0]['id']}/media", headers=h)
+    assert d.status_code == 502
+    assert "indisponivel" in d.get_json()["detail"] or "not found" in d.get_json()["detail"].lower()

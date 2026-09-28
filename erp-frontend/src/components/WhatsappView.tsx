@@ -32,6 +32,35 @@ function fmtTime(iso: string | null): string {
   return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function MediaPreview({ m }: { m: WhatsappMessage }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!m.has_media) return;
+    if (m.kind !== 'image' && m.kind !== 'audio' && m.kind !== 'video') return;
+    let alive = true;
+    let objUrl = '';
+    api.get(whatsappService.mediaUrl(m.id), { responseType: 'blob' })
+      .then((resp) => {
+        if (!alive) return;
+        objUrl = URL.createObjectURL(resp.data);
+        setUrl(objUrl);
+      })
+      .catch(() => { /* sem bytes: fica só o botão Baixar */ });
+    return () => {
+      alive = false;
+      if (objUrl) URL.revokeObjectURL(objUrl);
+    };
+  }, [m.id, m.has_media]);
+  if (!url) return null;
+  if (m.kind === 'image') {
+    return <img src={url} alt={m.media_filename || 'Foto recebida'} className="max-h-64 rounded-lg mb-1" />;
+  }
+  if (m.kind === 'audio') {
+    return <audio src={url} controls className="max-w-full mb-1" />;
+  }
+  return <video src={url} controls className="max-h-64 rounded-lg mb-1" />;
+}
+
 export default function WhatsappView({ userRole }: WhatsappViewProps) {
   const [activeTab, setActiveTab] = useModuleTab('whatsapp', WHATSAPP_TABS, 'conversas');
   const isAdmin = userRole === 'ADMIN';
@@ -169,6 +198,8 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      // Se a mídia veio da Evolution agora, recarrega p/ mostrar o preview.
+      if (selected) await loadMessages(selected.id);
     } catch {
       setSendError('Não foi possível baixar o arquivo.');
     }
@@ -311,11 +342,12 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
                   ) : messages.map((m) => (
                     <div key={m.id} className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
                       <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${m.direction === 'out' ? 'bg-emerald-800' : 'bg-zinc-800'}`}>
+                        <MediaPreview m={m} />
                         {m.kind !== 'text' && (
                           <div className="text-xs opacity-80 mb-1">[{kindLabel(m.kind)}]{m.media_filename ? ` ${m.media_filename}` : ''}</div>
                         )}
                         {m.body && <div className="whitespace-pre-wrap break-words">{m.body}</div>}
-                        {m.has_media && (
+                        {(m.has_media || m.media_pending) && (
                           <button type="button" onClick={() => handleDownload(m)}
                             className="mt-1 flex items-center gap-1 text-xs underline opacity-90">
                             <Download size={12} /> Baixar arquivo
