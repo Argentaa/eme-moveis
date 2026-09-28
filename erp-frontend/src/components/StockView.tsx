@@ -3,18 +3,18 @@ import {
   Package, AlertTriangle, Search, Plus, Trash2, ArrowUpRight, 
   ArrowDownRight, RefreshCw, Send, ListTodo, Layers, Landmark, User, ShieldAlert, Edit3
 } from 'lucide-react';
-import { stockService, getApiErrorMessage } from '../services/api';
-import { StockItem, StockMovement, Category } from '../types';
+import { stockService, purchaseService, getApiErrorMessage } from '../services/api';
+import { StockItem, StockMovement, StockLoss, StockLossKind, StockLossSummary, Category } from '../types';
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
 
 /** Abas do módulo Estoque, conforme a spec do cliente (17/09). */
 const STOCK_TABS: ModuleTab[] = [
-  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'dashboard', label: 'Dashboard', ready: true },
   { id: 'current', label: 'Estoque atual', ready: true },
   { id: 'movements', label: 'Movimentações', ready: true },
   { id: 'items', label: 'Materiais/Produtos', ready: true },
-  { id: 'losses', label: 'Perdas/Avarias' },
-  { id: 'minimum', label: 'Estoque mínimo' },
+  { id: 'losses', label: 'Perdas/Avarias', ready: true },
+  { id: 'minimum', label: 'Estoque mínimo', ready: true },
 ];
 
 interface StockViewProps {
@@ -68,6 +68,60 @@ export default function StockView({ userRole }: StockViewProps) {
   });
 
   const [submitError, setSubmitError] = useState('');
+
+  // ── Perdas e avarias (Fase 7) ──────────────────────────────────
+  const [losses, setLosses] = useState<StockLoss[]>([]);
+  const [lossSummary, setLossSummary] = useState<StockLossSummary | null>(null);
+  const [lossLoading, setLossLoading] = useState(false);
+  const [lossKindFilter, setLossKindFilter] = useState<'' | StockLossKind>('');
+  const [lossDateFrom, setLossDateFrom] = useState('');
+  const [lossDateTo, setLossDateTo] = useState('');
+  const [isLossModalOpen, setIsLossModalOpen] = useState(false);
+  const [lossSaving, setLossSaving] = useState(false);
+  const [lossForm, setLossForm] = useState({
+    stock_item_id: '',
+    kind: 'PERDA' as StockLossKind,
+    quantity: '1',
+    reason: '',
+    cost: '',
+    loss_date: '',
+  });
+
+  // ── Estoque mínimo → pedido de compra (Fase 7) ─────────────────
+  const [minSelected, setMinSelected] = useState<Record<string, boolean>>({});
+  const [minQty, setMinQty] = useState<Record<string, string>>({});
+  const [orderSending, setOrderSending] = useState(false);
+  const [orderMsg, setOrderMsg] = useState('');
+  const canStockManage = ['ADMIN', 'GERENTE', 'ESTOQUE'].includes(userRole);
+
+  const loadLosses = async (over?: { kind?: string; from?: string; to?: string }) => {
+    setLossLoading(true);
+    try {
+      const params: any = {};
+      const k = over?.kind ?? lossKindFilter;
+      const f = over?.from ?? lossDateFrom;
+      const t = over?.to ?? lossDateTo;
+      if (k) params.kind = k;
+      if (f) params.date_from = f;
+      if (t) params.date_to = t;
+      const [rows, summary] = await Promise.all([
+        stockService.getLosses(params),
+        stockService.getLossSummary(params),
+      ]);
+      setLosses(rows);
+      setLossSummary(summary);
+    } catch (err) {
+      console.error('Erro ao buscar perdas:', err);
+    } finally {
+      setLossLoading(false);
+    }
+  };
+
+  // Perdas carregam junto (barato) e sob demanda ao trocar filtro/aba.
+  useEffect(() => {
+    loadLosses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadData = async () => {
     setLoading(true);
@@ -217,6 +271,102 @@ export default function StockView({ userRole }: StockViewProps) {
     }
   };
 
+  const handleOpenLossModal = (item?: StockItem) => {
+    setLossForm({
+      stock_item_id: item ? item.id : (stock[0]?.id || ''),
+      kind: 'PERDA',
+      quantity: '1',
+      reason: '',
+      cost: '',
+      loss_date: new Date().toISOString().slice(0, 10),
+    });
+    setSubmitError('');
+    setIsLossModalOpen(true);
+  };
+
+  const handleSubmitLoss = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitError('');
+    const qty = Number(lossForm.quantity);
+    if (!lossForm.stock_item_id) {
+      setSubmitError('Selecione o material.');
+      return;
+    }
+    if (!qty || qty <= 0) {
+      setSubmitError('Quantidade deve ser maior que zero.');
+      return;
+    }
+    setLossSaving(true);
+    try {
+      await stockService.createLoss({
+        stock_item_id: lossForm.stock_item_id,
+        kind: lossForm.kind,
+        quantity: qty,
+        reason: lossForm.reason || undefined,
+        cost: lossForm.cost.trim() === '' ? null : Number(lossForm.cost),
+        loss_date: lossForm.loss_date || undefined,
+      });
+      setIsLossModalOpen(false);
+      await Promise.all([loadData(), loadLosses()]);
+    } catch (err: any) {
+      setSubmitError(getApiErrorMessage(err, 'Erro ao registrar perda.'));
+    } finally {
+      setLossSaving(false);
+    }
+  };
+
+  // ── Estoque mínimo: criticidade = saldo / mínimo (menor = mais crítico).
+  // Ordena os zerados primeiro, depois pela razão.
+  const minimumItems = stock
+    .filter(item => item.quantity <= item.min_quantity)
+    .sort((a, b) => {
+      const ra = a.min_quantity > 0 ? a.quantity / a.min_quantity : (a.quantity <= 0 ? -1 : 0);
+      const rb = b.min_quantity > 0 ? b.quantity / b.min_quantity : (b.quantity <= 0 ? -1 : 0);
+      return ra - rb;
+    });
+
+  const suggestedOrderQty = (item: StockItem): number => {
+    const diff = item.min_quantity - item.quantity;
+    if (diff > 0) return Math.ceil(diff);
+    return Math.ceil(item.min_quantity) || 1;
+  };
+
+  const handleGenerateOrder = async () => {
+    setOrderMsg('');
+    const chosen = minimumItems.filter(item => minSelected[item.id]);
+    if (chosen.length === 0) {
+      setOrderMsg('Selecione ao menos um material para gerar o pedido.');
+      return;
+    }
+    for (const item of chosen) {
+      const q = Number(minQty[item.id] ?? suggestedOrderQty(item));
+      if (!q || q <= 0) {
+        setOrderMsg(`Quantidade inválida para "${item.name}".`);
+        return;
+      }
+    }
+    setOrderSending(true);
+    try {
+      const order = await purchaseService.create({
+        supplier_id: null,
+        notes: `Gerado pelo Estoque mínimo em ${new Date().toLocaleDateString('pt-BR')}`,
+        status: 'SOLICITADA',
+        items: chosen.map(item => ({
+          stock_item_id: item.id,
+          material_name: item.name,
+          quantity: Number(minQty[item.id] ?? suggestedOrderQty(item)),
+          unit_price: Number(item.price) || 0,
+        })),
+      });
+      setOrderMsg(`Pedido ${order.number} criado em Compras com ${chosen.length} item(ns).`);
+      setMinSelected({});
+    } catch (err: any) {
+      setOrderMsg(getApiErrorMessage(err, 'Erro ao gerar pedido de compra.'));
+    } finally {
+      setOrderSending(false);
+    }
+  };
+
   const handleDeleteItem = async (id: string, name: string) => {
     if (!['ADMIN', 'GERENTE'].includes(userRole)) {
       alert('Acesso negado: Apenas administradores ou gerentes podem apagar itens da base de estoque.');
@@ -282,6 +432,283 @@ export default function StockView({ userRole }: StockViewProps) {
       {/* Sub-tabs do módulo — lista completa da spec do cliente (17/09) */}
       <ModuleTabs tabs={STOCK_TABS} active={activeTab} onChange={setActiveTab} />
       <ActiveTabPlaceholder tabs={STOCK_TABS} active={activeTab} />
+
+      {activeTab === 'dashboard' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="glass-panel p-5 rounded-lg border border-zinc-900">
+              <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block">Materiais cadastrados</span>
+              <span className="text-3xl font-bold text-white">{stock.length}</span>
+            </div>
+            <div className="glass-panel p-5 rounded-lg border border-zinc-900">
+              <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block">Valor em estoque</span>
+              <span className="text-3xl font-bold text-emerald-400">
+                {stock.reduce((acc, i) => acc + Number(i.quantity || 0) * Number(i.price || 0), 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
+              </span>
+            </div>
+            <div className={`glass-panel p-5 rounded-lg border ${minimumItems.length > 0 ? 'border-red-950 glow-red' : 'border-zinc-900'}`}>
+              <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block">Abaixo do mínimo</span>
+              <span className={`text-3xl font-bold ${minimumItems.length > 0 ? 'text-red-500' : 'text-white'}`}>{minimumItems.length}</span>
+            </div>
+            <div className="glass-panel p-5 rounded-lg border border-zinc-900">
+              <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider block">Prejuízo em perdas</span>
+              <span className="text-3xl font-bold text-amber-400">
+                {(lossSummary?.total_cost ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
+              </span>
+              <span className="text-[11px] font-mono text-zinc-500 block mt-1">{lossSummary?.count ?? 0} registro(s) no período</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="glass-panel p-5 rounded-lg border border-zinc-900">
+              <h3 className="text-sm font-semibold text-white mb-3">Mais críticos (saldo × mínimo)</h3>
+              {minimumItems.length === 0 ? (
+                <p className="text-xs text-zinc-500 font-mono py-4 text-center">Nenhum material abaixo do mínimo.</p>
+              ) : (
+                <ul className="divide-y divide-zinc-900 text-sm">
+                  {minimumItems.slice(0, 5).map(item => (
+                    <li key={item.id} className="py-2 flex justify-between items-center gap-2">
+                      <span className="text-zinc-200 truncate">{item.name}</span>
+                      <span className="font-mono text-xs whitespace-nowrap">
+                        <span className={item.quantity <= 0 ? 'text-red-500 font-bold' : 'text-amber-400'}>{item.quantity}</span>
+                        <span className="text-zinc-500"> / {item.min_quantity} {item.unit}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {minimumItems.length > 0 && (
+                <button onClick={() => setActiveTab('minimum')} className="mt-3 text-xs font-mono text-red-400 hover:text-red-300 cursor-pointer">
+                  Ver todos no Estoque mínimo →
+                </button>
+              )}
+            </div>
+            <div className="glass-panel p-5 rounded-lg border border-zinc-900">
+              <h3 className="text-sm font-semibold text-white mb-3">Prejuízo por motivo</h3>
+              {(!lossSummary || lossSummary.by_reason.length === 0) ? (
+                <p className="text-xs text-zinc-500 font-mono py-4 text-center">Nenhuma perda registrada.</p>
+              ) : (
+                <ul className="divide-y divide-zinc-900 text-sm">
+                  {lossSummary.by_reason.slice(0, 5).map(b => (
+                    <li key={b.key} className="py-2 flex justify-between items-center gap-2">
+                      <span className="text-zinc-200 truncate">{b.key}</span>
+                      <span className="font-mono text-xs text-amber-400 whitespace-nowrap">
+                        {b.cost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button onClick={() => setActiveTab('losses')} className="mt-3 text-xs font-mono text-red-400 hover:text-red-300 cursor-pointer">
+                Ver todas em Perdas/Avarias →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'losses' && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+            <div>
+              <h3 className="text-lg font-serif text-white">Perdas e avarias</h3>
+              <p className="text-xs text-zinc-500 font-mono mt-0.5">Registrar aqui baixa o estoque e grava a movimentação na mesma operação.</p>
+            </div>
+            {canStockManage && (
+              <button
+                onClick={() => handleOpenLossModal()}
+                className="bg-red-650 hover:bg-red-700 text-white text-xs font-semibold px-4 py-2.5 rounded shadow flex items-center gap-1 cursor-pointer w-fit"
+              >
+                <Plus className="w-3.5 h-3.5" /> Registrar perda
+              </button>
+            )}
+          </div>
+
+          <div className="glass-panel p-4 rounded-lg flex flex-col md:flex-row gap-3 md:items-end">
+            <div>
+              <label className="text-[10px] font-mono text-zinc-500 uppercase block mb-1">Tipo</label>
+              <select value={lossKindFilter} onChange={e => setLossKindFilter(e.target.value as '' | StockLossKind)} className="bg-zinc-900 border border-zinc-800 text-white text-xs rounded px-3 py-2 focus:outline-none focus:border-red-600 font-mono">
+                <option value="">Todos</option>
+                <option value="PERDA">Perda</option>
+                <option value="AVARIA">Avaria</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-zinc-500 uppercase block mb-1">De</label>
+              <input type="date" value={lossDateFrom} onChange={e => setLossDateFrom(e.target.value)} className="bg-zinc-900 border border-zinc-800 text-white text-xs rounded px-3 py-2 focus:outline-none focus:border-red-600 font-mono" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-zinc-500 uppercase block mb-1">Até</label>
+              <input type="date" value={lossDateTo} onChange={e => setLossDateTo(e.target.value)} className="bg-zinc-900 border border-zinc-800 text-white text-xs rounded px-3 py-2 focus:outline-none focus:border-red-600 font-mono" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => loadLosses()} disabled={lossLoading} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded border border-zinc-700 cursor-pointer disabled:opacity-50">
+                {lossLoading ? 'Filtrando...' : 'Filtrar'}
+              </button>
+              <button onClick={() => { setLossKindFilter(''); setLossDateFrom(''); setLossDateTo(''); loadLosses({ kind: '', from: '', to: '' }); }} className="px-4 py-2 text-zinc-400 hover:text-white text-xs cursor-pointer">
+                Limpar
+              </button>
+            </div>
+          </div>
+
+          {lossSummary && (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="glass-panel p-4 rounded-lg border border-zinc-900">
+                <span className="text-[10px] font-mono text-zinc-500 uppercase block">Registros</span>
+                <span className="text-2xl font-bold text-white">{lossSummary.count}</span>
+              </div>
+              <div className="glass-panel p-4 rounded-lg border border-zinc-900">
+                <span className="text-[10px] font-mono text-zinc-500 uppercase block">Qtd. perdida</span>
+                <span className="text-2xl font-bold text-white">{lossSummary.total_quantity}</span>
+              </div>
+              <div className="glass-panel p-4 rounded-lg border border-zinc-900">
+                <span className="text-[10px] font-mono text-zinc-500 uppercase block">Prejuízo total</span>
+                <span className="text-2xl font-bold text-amber-400">{lossSummary.total_cost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+              </div>
+              <div className="glass-panel p-4 rounded-lg border border-zinc-900">
+                <span className="text-[10px] font-mono text-zinc-500 uppercase block">Perda × avaria</span>
+                <div className="text-xs font-mono text-zinc-300 mt-1 space-y-0.5">
+                  {lossSummary.by_kind.map(b => (
+                    <div key={b.key} className="flex justify-between gap-2">
+                      <span>{b.key}</span>
+                      <span className="text-white">{b.count} · {b.cost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="glass-panel p-5 rounded-lg border border-zinc-900">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-zinc-300 font-mono">
+                <thead className="text-xs uppercase text-zinc-500 bg-zinc-950/60 border-b border-zinc-900">
+                  <tr>
+                    <th className="py-3 px-4 font-normal">Data</th>
+                    <th className="py-3 px-4 font-normal">Material</th>
+                    <th className="py-3 px-4 font-normal text-center">Tipo</th>
+                    <th className="py-3 px-4 font-normal text-right">Qtd</th>
+                    <th className="py-3 px-4 font-normal text-right">Custo</th>
+                    <th className="py-3 px-4 font-normal">Motivo</th>
+                    <th className="py-3 px-4 font-normal">Operador</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-900 text-xs">
+                  {losses.map(l => (
+                    <tr key={l.id} className="hover:bg-zinc-900/30">
+                      <td className="py-3 px-4 text-zinc-400 whitespace-nowrap">{new Date(l.loss_date + 'T12:00:00').toLocaleDateString('pt-BR')}</td>
+                      <td className="py-3 px-4 font-sans font-semibold text-white">{l.item_name || '—'}</td>
+                      <td className="py-3 px-4 text-center">
+                        <span className={`inline-block px-2.5 py-0.5 text-[10px] font-bold uppercase rounded-full ${l.kind === 'PERDA' ? 'bg-red-950/30 text-red-400 border border-red-900/40' : 'bg-amber-950/30 text-amber-400 border border-amber-900/40'}`}>
+                          {l.kind}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right font-bold text-white">{l.quantity} {l.unit || ''}</td>
+                      <td className="py-3 px-4 text-right text-amber-400">{l.cost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                      <td className="py-3 px-4 text-zinc-300">{l.reason || <span className="text-zinc-600">—</span>}</td>
+                      <td className="py-3 px-4 text-zinc-400 font-sans">{l.created_by ? `👤 ${l.created_by}` : '—'}</td>
+                    </tr>
+                  ))}
+                  {losses.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-zinc-500">
+                        {lossLoading ? 'Carregando...' : 'Nenhuma perda registrada no período.'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'minimum' && (
+        <div className="space-y-4">
+          <div className="glass-panel rounded-lg p-4 border border-zinc-900">
+            <h3 className="text-sm font-semibold text-white">Estoque mínimo</h3>
+            <p className="text-xs text-zinc-500 font-mono mt-1">
+              Materiais com saldo no ou abaixo do mínimo, do mais crítico para o menos. Marque e gere o pedido de compra — ele nasce em Compras como SOLICITADA.
+            </p>
+          </div>
+
+          {orderMsg && (
+            <div className={`p-3 rounded text-xs font-mono border ${orderMsg.includes('criado') ? 'bg-emerald-950/40 border-emerald-900 text-emerald-300' : 'bg-red-950/40 border-red-900 text-red-300'}`}>
+              {orderMsg}
+            </div>
+          )}
+
+          <div className="glass-panel p-5 rounded-lg border border-zinc-900">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-zinc-300 font-mono">
+                <thead className="text-xs uppercase text-zinc-500 bg-zinc-950/60 border-b border-zinc-900">
+                  <tr>
+                    <th className="py-3 px-4 font-normal w-10"></th>
+                    <th className="py-3 px-4 font-normal">Material</th>
+                    <th className="py-3 px-4 font-normal text-right">Saldo</th>
+                    <th className="py-3 px-4 font-normal text-right">Mínimo</th>
+                    <th className="py-3 px-4 font-normal text-center">Situação</th>
+                    <th className="py-3 px-4 font-normal text-right">Qtd. pedido</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-900 text-xs">
+                  {minimumItems.map(item => {
+                    const zerado = item.quantity <= 0;
+                    return (
+                      <tr key={item.id} className="hover:bg-zinc-900/30">
+                        <td className="py-3 px-4">
+                          <input
+                            type="checkbox"
+                            checked={!!minSelected[item.id]}
+                            onChange={e => setMinSelected(prev => ({ ...prev, [item.id]: e.target.checked }))}
+                            className="w-4 h-4 accent-red-600 cursor-pointer"
+                          />
+                        </td>
+                        <td className="py-3 px-4 font-sans font-semibold text-white">
+                          {item.name}
+                          <span className="block text-[10px] font-mono font-normal text-zinc-500">{item.sku} · {item.supplier || 'Interno / Diversos'}</span>
+                        </td>
+                        <td className={`py-3 px-4 text-right font-bold ${zerado ? 'text-red-500' : 'text-amber-400'}`}>{item.quantity} {item.unit}</td>
+                        <td className="py-3 px-4 text-right text-zinc-400">{item.min_quantity} {item.unit}</td>
+                        <td className="py-3 px-4 text-center">
+                          <span className={`inline-block px-2.5 py-0.5 text-[10px] font-bold uppercase rounded-full ${zerado ? 'bg-red-950/30 text-red-400 border border-red-900/40' : 'bg-amber-950/30 text-amber-400 border border-amber-900/40'}`}>
+                            {zerado ? 'Zerado' : 'Abaixo do mínimo'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <input
+                            type="number"
+                            min={1}
+                            value={minQty[item.id] ?? String(suggestedOrderQty(item))}
+                            onChange={e => setMinQty(prev => ({ ...prev, [item.id]: e.target.value }))}
+                            className="w-20 bg-zinc-900 border border-zinc-800 text-white text-xs rounded px-2 py-1.5 text-right focus:outline-none focus:border-red-600 font-mono"
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {minimumItems.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-zinc-500">Nada abaixo do mínimo. Estoque saudável.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {minimumItems.length > 0 && canStockManage && (
+              <div className="flex justify-end pt-4">
+                <button
+                  onClick={handleGenerateOrder}
+                  disabled={orderSending}
+                  className="px-6 py-2.5 bg-red-650 hover:bg-red-700 text-white text-xs font-semibold rounded disabled:opacity-50 cursor-pointer"
+                >
+                  {orderSending ? 'Gerando...' : 'Gerar pedido de compra'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {['current', 'items', 'movements'].includes(activeTab) && (<>
 
@@ -803,6 +1230,129 @@ export default function StockView({ userRole }: StockViewProps) {
       )}
 
       </>)}
+
+      {/* Loss Modal — baixa o estoque e grava a movimentação PERDA junto */}
+      {isLossModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
+          <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
+            <div className="bg-zinc-950 p-6 border-b border-zinc-850 flex justify-between items-center">
+              <div>
+                <h3 className="text-lg font-serif font-bold text-white">Registrar perda / avaria</h3>
+                <p className="text-xs text-zinc-400 font-mono">Baixa o saldo e grava o motivo e o custo para o relatório.</p>
+              </div>
+              <button
+                onClick={() => setIsLossModalOpen(false)}
+                className="text-zinc-500 hover:text-white font-mono text-xs uppercase"
+              >
+                Sair
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitLoss} className="p-7 space-y-6 font-sans">
+              {submitError && (
+                <div className="p-3 bg-red-950/50 border border-red-900 text-red-400 text-xs rounded font-mono">
+                  {submitError}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase block">Material *</label>
+                <select
+                  value={lossForm.stock_item_id}
+                  onChange={(e) => setLossForm({ ...lossForm, stock_item_id: e.target.value })}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600"
+                >
+                  <option value="">-- Selecione o item --</option>
+                  {stock.map(item => (
+                    <option key={item.id} value={item.id}>{item.name} (SKU: {item.sku}) - Saldo: {item.quantity} {item.unit}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase block">Tipo</label>
+                  <select
+                    value={lossForm.kind}
+                    onChange={(e) => setLossForm({ ...lossForm, kind: e.target.value as StockLossKind })}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                  >
+                    <option value="PERDA">PERDA (sumiu, quebrou, venceu)</option>
+                    <option value="AVARIA">AVARIA (danificado, não serve)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase block">Quantidade *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    required
+                    value={lossForm.quantity}
+                    onChange={(e) => setLossForm({ ...lossForm, quantity: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase block">Custo (R$)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={lossForm.cost}
+                    onChange={(e) => setLossForm({ ...lossForm, cost: e.target.value })}
+                    placeholder="Vazio = preço do item × qtd"
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-mono uppercase block">Data</label>
+                  <input
+                    type="date"
+                    value={lossForm.loss_date}
+                    onChange={(e) => setLossForm({ ...lossForm, loss_date: e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase block">Motivo</label>
+                <textarea
+                  value={lossForm.reason}
+                  onChange={(e) => setLossForm({ ...lossForm, reason: e.target.value })}
+                  placeholder="Ex: Chapa trincou no transporte; cimento venceu no depósito."
+                  rows={3}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600"
+                />
+              </div>
+
+              <div className="pt-4 flex justify-end gap-3 border-t border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setIsLossModalOpen(false)}
+                  className="px-4 py-2 text-xs bg-zinc-900 text-zinc-400 rounded border border-zinc-850 font-mono cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={lossSaving}
+                  className="px-5 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  {lossSaving ? 'Registrando...' : 'Registrar perda'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

@@ -608,6 +608,48 @@ class StockMovement(db.Model):
         }
 
 
+class StockLoss(db.Model):
+    """Perda ou avaria de estoque.
+
+    Registrar uma perda SEMPRE decrementa `StockItem.quantity` e grava um
+    `StockMovement` tipo PERDA na MESMA transacao (ver stock_bp.create_loss):
+    o historico de movimentacoes continua sendo a fonte unica do que aconteceu
+    com o estoque, e a perda guarda o motivo e o custo para o relatorio.
+    """
+
+    __tablename__ = "stock_losses"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    stock_item_id = db.Column(
+        String(36), ForeignKey("stock_items.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    quantity = db.Column(Numeric(14, 3), nullable=False)
+    kind = db.Column(String(10), nullable=False)  # PERDA | AVARIA
+    reason = db.Column(Text, nullable=True, default="")
+    cost = db.Column(Numeric(14, 2), nullable=True, default=0)
+    loss_date = db.Column(Date, nullable=False, default=date.today)
+    created_by = db.Column(String(80), nullable=True, default="")
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    item = db.relationship("StockItem")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "stock_item_id": self.stock_item_id,
+            "item_name": self.item.name if self.item else None,
+            "item_sku": self.item.sku if self.item else None,
+            "unit": self.item.unit if self.item else None,
+            "quantity": num(self.quantity),
+            "kind": self.kind,
+            "reason": self.reason,
+            "cost": num(self.cost),
+            "loss_date": iso(self.loss_date),
+            "created_by": self.created_by,
+            "created_at": iso(self.created_at),
+        }
+
+
 class CalendarEvent(db.Model):
     __tablename__ = "calendar_events"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -1473,6 +1515,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Estoque completo: perdas, mínimo e dashboard",
+     "Fase 7 entregue. Aba Perdas/Avarias: registrar perda ou avaria baixa o estoque e grava a movimentação na mesma operação, com motivo, custo e total de prejuízo por período e por motivo. Aba Estoque mínimo: itens abaixo do mínimo ordenados por criticidade, com quantidade sugerida e botão Gerar pedido de compra (nasce em Compras como SOLICITADA). Aba Dashboard: valor em estoque, itens críticos e prejuízo. No Comercial, o modal Vincular Cliente agora recarrega o cadastro central ao abrir: cliente recém-cadastrado aparece no select sem recarregar a tela.",
+     "NOVIDADE", "2026-09-28"),
     ("Concluir venda e concluir projeto",
      "Dois botões explícitos fecham o caminho do serviço: no Comercial, \"Concluir venda\" cria o projeto e tira o card do funil de vendas; na Produção, \"Concluir projeto\" tira o card da produção e o entrega na nova aba \"Projetos entregues\", no Pós-venda — de onde dá para reabrir, se precisar. A conclusão é um estado próprio do projeto, e não o nome da coluna do funil: como as colunas podem ser renomeadas a qualquer momento, amarrar a conclusão ao nome delas daria resultado errado.",
      "NOVIDADE", "2026-09-25"),

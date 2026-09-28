@@ -79,6 +79,10 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [linkValue, setLinkValue] = useState('');
   const [linkError, setLinkError] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
+  // Recarregando o cadastro central ao abrir o modal: sem isto, um cliente
+  // criado ha pouco em Clientes/Fornecedores nao aparece no select porque a
+  // lista em memoria e a da montagem da tela.
+  const [linkLoading, setLinkLoading] = useState(false);
 
   // Lead Options (fonte e campanha)
   const [campaigns, setCampaigns] = useState<LeadOption[]>([]);
@@ -179,17 +183,23 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   }, [selectedFunnel?.id, selectedFunnel?.name, showFunnelManager]);
 
-  const handleOpenCreateModal = () => {
+  const handleOpenCreateModal = async () => {
     // Legado: criacao direta foi substituida por "Vincular Cliente".
     // Todo cadastro nasce em Clientes/Fornecedores; aqui so se importa pro funil.
-    // Recarrega para trazer cadastros centrais criados recentemente.
-    loadClients();
+    // Recarrega ANTES de abrir: sem o await, o modal renderizava com a lista
+    // antiga e um cliente recem-cadastrado na central nao aparecia no select.
     setLinkSearch('');
     setLinkClientId('');
     setLinkStage('');
     setLinkValue('');
     setLinkError('');
     setShowLinkModal(true);
+    setLinkLoading(true);
+    try {
+      await loadClients();
+    } finally {
+      setLinkLoading(false);
+    }
   };
 
   const handleLinkClient = async () => {
@@ -1322,15 +1332,18 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 <select
                   value={linkClientId}
                   onChange={e => setLinkClientId(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600"
+                  disabled={linkLoading}
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 disabled:opacity-60"
                 >
-                  <option value="">-- Selecione o Cliente --</option>
+                  <option value="">{linkLoading ? '-- Carregando clientes... --' : '-- Selecione o Cliente --'}</option>
                   {options.map(c => (
                     <option key={c.id} value={c.id}>{c.name}{(c as any).is_supplier ? '  🏭' : ''}</option>
                   ))}
                 </select>
                 <p className="text-[11px] text-zinc-500 font-mono mt-1">
-                  {available.length === 0
+                  {linkLoading
+                    ? 'Buscando o cadastro central mais recente...'
+                    : available.length === 0
                     ? 'Todos os clientes já estão neste funil. Cadastre novos em Clientes/Fornecedores.'
                     : `${available.length} cliente(s) fora deste funil · Cadastre novos em Clientes/Fornecedores.`}
                 </p>

@@ -473,11 +473,47 @@ export interface StockMovement {
   id: string;
   item_id: string;
   item_name: string;
-  type: 'ENTRADA' | 'SAIDA';
+  // PERDA entra pelo registro de perda/avaria, nunca pelo formulário de
+  // movimentação (que só lança ENTRADA ou SAIDA).
+  type: 'ENTRADA' | 'SAIDA' | 'PERDA';
   quantity: number;
   reason: string;
   created_by: string;
   date: string;
+}
+
+export type StockLossKind = 'PERDA' | 'AVARIA';
+
+export interface StockLoss {
+  id: string;
+  stock_item_id: string;
+  item_name: string | null;
+  item_sku: string | null;
+  unit: string | null;
+  quantity: number;
+  kind: StockLossKind;
+  reason: string;
+  cost: number;
+  loss_date: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface StockLossSummaryBlock {
+  key: string;
+  count: number;
+  quantity: number;
+  cost: number;
+}
+
+export interface StockLossSummary {
+  count: number;
+  total_quantity: number;
+  total_cost: number;
+  by_kind: StockLossSummaryBlock[];
+  by_reason: StockLossSummaryBlock[];
+  date_from: string | null;
+  date_to: string | null;
 }
 
 // ── Relatórios ──────────────────────────────────────────────────

@@ -958,8 +958,11 @@ def test_cash_flow_weekly_report(client):
     assert s1["accumulated"] == "R$ 1.000,00"
     assert s3["accumulated"] == "R$ 700,00"
     assert body["rows"][4]["accumulated"] == "R$ 700,00"
-    # abril ficou fora
-    assert "777" not in r.get_data(as_text=True)
+    # abril ficou fora — checar pela DESCRICAO, nao pelo texto do payload
+    # inteiro: o payload traz `generated_at` com o horario da geracao, e um
+    # milissegundo contendo "777" fazia este teste falhar por acidente
+    # (nao deterministico, falhava ~1 vez a cada mil execucoes).
+    assert "Fora do mes" not in r.get_data(as_text=True)
 
     rp = client.get("/api/reports/cash-flow-weekly", headers=h,
                     query_string={"year": 2026, "month": 3, "mode": "projetado"})
@@ -4267,3 +4270,159 @@ def test_concluir_venda_cria_projeto_na_producao(client):
     r = client.post(f"/api/clients/{cid2}/conclude-sale", headers=h, json={})
     assert r.status_code == 201, r.get_data(as_text=True)
     assert r.get_json()["title"] == "Projeto - Cliente Sem Titulo"
+
+
+# ── Fase 7 — Perdas e avarias de estoque ──────────────────────────
+#
+# O ponto que estes testes protegem: registrar uma perda NAO e so gravar um
+# registro — ela tem de mexer no estoque e no extrato de movimentacoes, na
+# mesma transacao. Se um dia alguem "simplificar" isso, o estoque passa a
+# divergir do que o sistema mostra.
+
+
+def _stock_item(client, h, *, sku, quantity=20, min_quantity=5, price=100):
+    cat = client.post("/api/stock/categories", headers=h,
+                      json={"name": f"Categoria {sku}", "category_type": "STOCK"}).get_json()
+    r = client.post("/api/stock", headers=h, json={
+        "name": f"Item {sku}", "sku": sku, "category_id": cat["id"],
+        "quantity": quantity, "min_quantity": min_quantity, "unit": "un", "price": price,
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    return r.get_json()
+
+
+def test_perda_decrementa_estoque_e_grava_movimento(client):
+    h = _login(client)
+    item = _stock_item(client, h, sku="PERDA-01", quantity=20, price=100)
+
+    r = client.post("/api/stock/losses", headers=h, json={
+        "stock_item_id": item["id"], "quantity": 5, "kind": "PERDA",
+        "reason": "quebrou no transporte",
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    perda = r.get_json()
+
+    # 1) o estoque caiu de 20 para 15
+    depois = client.get(f"/api/stock/{item['id']}", headers=h).get_json()
+    assert float(depois["quantity"]) == 15.0
+
+    # 2) e existe EXATAMENTE 1 movimento do item, do tipo PERDA
+    movs = client.get("/api/stock/movements/history", headers=h).get_json()
+    do_item = [m for m in movs if m["item_id"] == item["id"]]
+    assert len(do_item) == 1, do_item
+    assert do_item[0]["type"] == "PERDA"
+    assert float(do_item[0]["quantity"]) == 5.0
+    assert "quebrou no transporte" in do_item[0]["reason"]
+
+    # 3) o custo, sem ser informado, e o preco cadastrado x a quantidade (100 * 5)
+    assert perda["cost"] == 500.0
+    assert perda["kind"] == "PERDA"
+    assert perda["item_name"] == item["name"]
+    assert perda["item_sku"] == "PERDA-01"
+
+
+def test_perda_recusa_quantidade_maior_que_o_estoque(client):
+    """Perda maior que o saldo nao pode virar estoque negativo.
+
+    Se o usuario perdeu mais do que o sistema diz que existe, o saldo ja estava
+    errado antes — recusar forca corrigir, em vez de gravar um numero impossivel.
+    """
+    h = _login(client)
+    item = _stock_item(client, h, sku="PERDA-02", quantity=3)
+
+    r = client.post("/api/stock/losses", headers=h, json={
+        "stock_item_id": item["id"], "quantity": 10, "kind": "PERDA",
+    })
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert "estoque atual" in r.get_json()["detail"]
+
+    # nada mudou: nem estoque, nem perda, nem movimento
+    assert float(client.get(f"/api/stock/{item['id']}", headers=h).get_json()["quantity"]) == 3.0
+    assert client.get("/api/stock/losses", headers=h).get_json() == []
+    assert client.get("/api/stock/movements/history", headers=h).get_json() == []
+
+
+def test_perda_valida_tipo_quantidade_e_item(client):
+    h = _login(client)
+    item = _stock_item(client, h, sku="PERDA-03", quantity=10)
+
+    r = client.post("/api/stock/losses", headers=h,
+                    json={"stock_item_id": item["id"], "quantity": 1, "kind": "EXTRAVIO"})
+    assert r.status_code == 400 and "PERDA ou AVARIA" in r.get_json()["detail"]
+
+    r = client.post("/api/stock/losses", headers=h,
+                    json={"stock_item_id": item["id"], "quantity": 0, "kind": "AVARIA"})
+    assert r.status_code == 400
+
+    r = client.post("/api/stock/losses", headers=h,
+                    json={"stock_item_id": "nao-existe", "quantity": 1, "kind": "PERDA"})
+    assert r.status_code == 404
+
+    # avaria e um tipo valido, e custo negativo e recusado
+    r = client.post("/api/stock/losses", headers=h, json={
+        "stock_item_id": item["id"], "quantity": 1, "kind": "avaria", "cost": -5,
+    })
+    assert r.status_code == 400
+
+    r = client.post("/api/stock/losses", headers=h, json={
+        "stock_item_id": item["id"], "quantity": 1, "kind": "avaria",
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["kind"] == "AVARIA"  # normalizado para maiusculo
+
+
+def test_perda_resumo_soma_por_tipo_e_por_motivo(client):
+    """O resumo existe para dizer ONDE esta o prejuizo, nao so quanto."""
+    h = _login(client)
+    a = _stock_item(client, h, sku="PERDA-04A", quantity=50, price=10)
+    b = _stock_item(client, h, sku="PERDA-04B", quantity=50, price=100)
+
+    for payload in (
+        {"stock_item_id": a["id"], "quantity": 5, "kind": "PERDA", "reason": "transporte"},
+        {"stock_item_id": a["id"], "quantity": 3, "kind": "PERDA", "reason": "transporte"},
+        {"stock_item_id": b["id"], "quantity": 2, "kind": "AVARIA", "reason": "umidade"},
+    ):
+        assert client.post("/api/stock/losses", headers=h, json=payload).status_code == 201
+
+    s = client.get("/api/stock/losses/summary", headers=h).get_json()
+    assert s["count"] == 3
+    # 5*10 + 3*10 + 2*100 = 50 + 30 + 200
+    assert s["total_cost"] == 280.0
+    assert s["total_quantity"] == 10.0
+
+    por_tipo = {bloco["key"]: bloco for bloco in s["by_kind"]}
+    assert por_tipo["PERDA"]["count"] == 2
+    assert por_tipo["PERDA"]["cost"] == 80.0
+    assert por_tipo["AVARIA"]["count"] == 1
+    assert por_tipo["AVARIA"]["cost"] == 200.0
+
+    # por motivo, do maior prejuizo para o menor — e onde se decide o que atacar
+    assert [bloco["key"] for bloco in s["by_reason"]] == ["umidade", "transporte"]
+    assert s["by_reason"][0]["cost"] == 200.0
+
+
+def test_perda_filtra_por_tipo_e_periodo(client):
+    h = _login(client)
+    item = _stock_item(client, h, sku="PERDA-05", quantity=50)
+
+    for payload in (
+        {"stock_item_id": item["id"], "quantity": 1, "kind": "PERDA", "loss_date": "2026-01-10"},
+        {"stock_item_id": item["id"], "quantity": 2, "kind": "AVARIA", "loss_date": "2026-03-20"},
+    ):
+        assert client.post("/api/stock/losses", headers=h, json=payload).status_code == 201
+
+    todas = client.get("/api/stock/losses", headers=h).get_json()
+    assert len(todas) == 2
+    # mais recente primeiro
+    assert todas[0]["loss_date"] == "2026-03-20"
+
+    so_perda = client.get("/api/stock/losses?kind=PERDA", headers=h).get_json()
+    assert len(so_perda) == 1 and so_perda[0]["kind"] == "PERDA"
+
+    so_jan = client.get("/api/stock/losses?date_from=2026-01-01&date_to=2026-01-31", headers=h).get_json()
+    assert len(so_jan) == 1 and so_jan[0]["loss_date"] == "2026-01-10"
+
+    # o resumo respeita o mesmo filtro
+    s = client.get("/api/stock/losses/summary?date_from=2026-01-01&date_to=2026-01-31", headers=h).get_json()
+    assert s["count"] == 1
+    assert s["date_from"] == "2026-01-01" and s["date_to"] == "2026-01-31"

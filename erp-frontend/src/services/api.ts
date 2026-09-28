@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, Client, Project, FinancialRecord, StockItem, StockMovement, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
+import { User, Client, Project, FinancialRecord, StockItem, StockMovement, StockLoss, StockLossKind, StockLossSummary, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
   PurchaseQuotation,
   Proposal, CommissionRule, CommissionReport, AppSetting } from '../types';
 
@@ -620,6 +620,24 @@ export const stockService = {
 
   async createMovement(data: { item_id: string; type: 'ENTRADA' | 'SAIDA'; quantity: number; reason: string }): Promise<StockMovement> {
     const response = await api.post('/api/stock/movements', data);
+    return response.data;
+  },
+
+  async getLosses(params?: { kind?: StockLossKind; date_from?: string; date_to?: string }): Promise<StockLoss[]> {
+    const response = await api.get('/api/stock/losses', { params });
+    return response.data;
+  },
+
+  async createLoss(data: {
+    stock_item_id: string; quantity: number; kind: StockLossKind;
+    reason?: string; cost?: number | null; loss_date?: string;
+  }): Promise<StockLoss> {
+    const response = await api.post('/api/stock/losses', data);
+    return response.data;
+  },
+
+  async getLossSummary(params?: { kind?: StockLossKind; date_from?: string; date_to?: string }): Promise<StockLossSummary> {
+    const response = await api.get('/api/stock/losses/summary', { params });
     return response.data;
   },
 
