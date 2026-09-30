@@ -1520,7 +1520,13 @@ def test_dre_detalhado_por_categoria(client):
     body = r.get_json()
     fev = next(row for row in body["rows"] if "Fevereiro" in row["period"])
     assert "Vendas" in fev["income_detail"] and "Serviços" in fev["income_detail"], fev
-    assert "Fixos" in fev["outcome_detail"] and "Insumos" in fev["outcome_detail"], fev
+    # Sem coluna propria: despesas por categoria vao aninhadas (lista completa)
+    assert not any(c.get("key") == "outcome_detail" for c in body["columns"]), body["columns"]
+    assert "outcome_detail" not in fev, fev
+    breakdown = {d["categoria"]: d for d in fev["outcome_breakdown"]}
+    assert breakdown["Fixos"]["participacao"] == 75.0, breakdown
+    assert breakdown["Insumos"]["participacao"] == 25.0, breakdown
+    assert breakdown["Fixos"]["total_fmt"] == "R$ 3.000,00", breakdown
     cats = {c["categoria"]: c for c in body["by_category"]}
     assert cats["Vendas"]["tipo"] == "receita" and cats["Vendas"]["participacao"] == 80.0, cats
     assert cats["Fixos"]["tipo"] == "despesa" and cats["Fixos"]["participacao"] == 75.0, cats

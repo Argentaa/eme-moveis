@@ -513,6 +513,17 @@ def _build_dre():
             parts.append("+%d outra(s)" % (len(ranked) - 3))
         return " · ".join(parts)
 
+    def _breakdown(cats, total):
+        out = []
+        for name, val in sorted(cats.items(), key=lambda kv: kv[1], reverse=True):
+            out.append({
+                "categoria": name,
+                "total": round(val, 2),
+                "total_fmt": _fmt_brl(val),
+                "participacao": round(val / total * 100, 1) if total > 0 else 0.0,
+            })
+        return out
+
     kind, _first = sorted(buckets)[0] if buckets else ("m", 1)
     result_rows = []
     acc = 0.0
@@ -539,7 +550,10 @@ def _build_dre():
             "income": _fmt_brl(b["income"]),
             "income_detail": _detail(b["income_cats"], b["income"]),
             "outcome": _fmt_brl(b["outcome"]),
-            "outcome_detail": _detail(b["outcome_cats"], b["outcome"]),
+            # Detalhamento das despesas por categoria (lista completa, maior
+            # primeiro). Nao ha coluna propria: o front mostra aninhado ao
+            # clicar no periodo.
+            "outcome_breakdown": _breakdown(b["outcome_cats"], b["outcome"]),
             "result": _fmt_brl(result),
             "accumulated": _fmt_brl(acc),
         })
@@ -586,7 +600,6 @@ def _build_dre():
             {"key": "income", "label": "Receitas"},
             {"key": "income_detail", "label": "Receitas por categoria"},
             {"key": "outcome", "label": "Despesas"},
-            {"key": "outcome_detail", "label": "Despesas por categoria"},
             {"key": "result", "label": "Resultado"},
             {"key": "accumulated", "label": "Resultado Acumulado"},
         ],

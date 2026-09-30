@@ -5,8 +5,8 @@
  * filtros, e passa `report`/`loading`/`exporting`/`onExport`. Existe para o
  * DRE e o Dashboard da producao nao duplicarem a mesma tabela.
  */
-import React from 'react';
-import { FileSpreadsheet, FileText, Loader2, RefreshCw } from 'lucide-react';
+import React, { useState } from 'react';
+import { ChevronDown, FileSpreadsheet, FileText, Loader2, RefreshCw } from 'lucide-react';
 import { ReportResult } from '../types';
 
 export const TONE_CLASSES: Record<string, string> = {
@@ -36,11 +36,30 @@ interface ReportPanelProps {
   error?: string;
   /** Filtros extras (selects de periodo etc.) renderizados acima do resumo. */
   children?: React.ReactNode;
+  /**
+   * Detalhe aninhado por linha: `detailKey` e a chave da linha que guarda a
+   * lista (ex.: "outcome_breakdown"); clicar na linha abre/fecha o aninhado.
+   * `renderDetail` desenha cada item; sem ele, mostra categoria/valor/%.
+   */
+  detailKey?: string;
+  detailTitle?: string;
+  renderDetail?: (item: any) => React.ReactNode;
 }
 
 export default function ReportPanel({
   report, loading, exporting, onExport, loadingLabel = 'Carregando relatório...', error, children,
+  detailKey, detailTitle, renderDetail,
 }: ReportPanelProps) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggle = (idx: number) =>
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  const hasDetail = (row: any) =>
+    !!detailKey && Array.isArray(row[detailKey]) && row[detailKey].length > 0;
   return (
     <div className="space-y-5">
       {children && (
@@ -116,13 +135,46 @@ export default function ReportPanel({
                 </thead>
                 <tbody className="divide-y divide-zinc-900">
                   {report.rows.map((row, idx) => (
-                    <tr key={idx} className="hover:bg-zinc-900/40">
-                      {report.columns.map(col => (
-                        <td key={col.key} className="py-3 px-5 font-sans text-xs whitespace-nowrap">
-                          {row[col.key] ?? '-'}
-                        </td>
-                      ))}
-                    </tr>
+                    <React.Fragment key={idx}>
+                      <tr
+                        className={hasDetail(row) ? 'hover:bg-zinc-900/40 cursor-pointer' : 'hover:bg-zinc-900/40'}
+                        onClick={hasDetail(row) ? () => toggle(idx) : undefined}
+                        title={hasDetail(row) ? 'Clique para ver o detalhamento' : undefined}
+                      >
+                        {report.columns.map((col, ci) => (
+                          <td key={col.key} className="py-3 px-5 font-sans text-xs whitespace-nowrap">
+                            {ci === 0 && hasDetail(row) && (
+                              <ChevronDown
+                                className={`inline w-3.5 h-3.5 mr-1.5 -mt-0.5 text-zinc-500 transition-transform ${expanded.has(idx) ? 'rotate-180' : ''}`}
+                              />
+                            )}
+                            {row[col.key] ?? '-'}
+                          </td>
+                        ))}
+                      </tr>
+                      {hasDetail(row) && expanded.has(idx) && (
+                        <tr className="bg-zinc-950/60">
+                          <td colSpan={report.columns.length} className="py-3 px-5">
+                            {detailTitle && (
+                              <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider mb-2">
+                                {detailTitle}
+                              </p>
+                            )}
+                            <div className="space-y-1.5">
+                              {(row[detailKey as string] as unknown as any[]).map((item, i) => (
+                                <div key={i} className="text-xs font-mono">
+                                  {renderDetail ? renderDetail(item) : (
+                                    <span className="text-zinc-300">
+                                      {item.categoria} · {item.total_fmt} · {item.participacao}%
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
 
                   {report.rows.length === 0 && (

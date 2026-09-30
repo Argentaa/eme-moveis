@@ -1672,6 +1672,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Gráficos legíveis no escuro e DRE com despesas por mês",
+     "Correção: nos gráficos de categorias, nomes longos eram cortados no eixo e o valor no tooltip saía em preto no modo escuro, impossível de ler — agora o nome encurta com reticências (o completo aparece ao passar o mouse) e todo o texto do tooltip é claro. No DRE, a coluna de despesas por categoria saiu da tabela: agora dá para clicar no período e abrir o detalhamento das despesas daquele mês aninhado na linha.",
+     "CORRECAO", "2026-09-30"),
     ("Dashboards com mais gráficos e DRE detalhado",
      "Dashboard Executivo: o demonstrativo mensal virou o resultado dos últimos 12 meses em barras, com receitas, despesas e resultado — passe o mouse em qualquer barra e veja o valor. Financeiro: o gráfico do fluxo de caixa ganhou linha de saldo acumulado e tooltip completo por mês (entradas, saídas, saldo, acumulado e o que está em aberto), mais dois gráficos novos de receitas e despesas por categoria com participação. DRE: agora mostra de onde veio cada real (categorias de receita), para onde foi cada real (categorias de despesa), margem líquida, principal receita e principal despesa, com gráfico por período e barras por categoria. Produção: saíram as horas produtivas e o total de m² — a casa não mensura por eles; entraram gráficos de ocorrências por tipo e custo das ocorrências, e a tabela detalha o valor de cada projeto.",
      "MELHORIA", "2026-09-30"),

@@ -16,6 +16,7 @@ import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResul
 import OverdueProjectsCard from './OverdueProjectsCard';
 import UpcomingEventsCard from './UpcomingEventsCard';
 import UpcomingPaymentsCard from './UpcomingPaymentsCard';
+import { chartTooltipProps, shortTick } from './FinancialView';
 
 interface DashboardViewProps {
   userRole: string;
@@ -669,7 +670,7 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
                   <XAxis dataKey="name" stroke="#52525b" tickLine={false} />
                   <YAxis stroke="#52525b" axisLine={false} tickLine={false} tickFormatter={brlTick} width={80} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px' }}
+                    {...chartTooltipProps}
                     formatter={(v: number, name: string) => [v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), name]}
                     labelFormatter={(label: string) => `Mês ${label}`}
                   />
@@ -701,9 +702,9 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
                   <XAxis type="number" stroke="#52525b" hide />
-                  <YAxis dataKey="name" type="category" stroke="#a1a1aa" width={110} tickLine={false} axisLine={false} />
+                  <YAxis dataKey="name" type="category" stroke="#a1a1aa" width={150} tickLine={false} axisLine={false} tick={{ fill: '#a1a1aa', fontSize: 11 }} tickFormatter={(v: string) => shortTick(v)} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px' }}
+                    {...chartTooltipProps}
                     formatter={(v: number) => [v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), 'Total']}
                   />
                   <Bar dataKey="amount" name="Total (R$)" fill="#7f1d1d" radius={[0, 4, 4, 0]} barSize={12} />

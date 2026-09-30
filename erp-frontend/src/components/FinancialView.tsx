@@ -2216,6 +2216,17 @@ function CashFlowChart({ data }: { data: ReportResult }) {
   );
 }
 
+/** Tooltip com texto claro (o padrão do Recharts sai escuro no modo escuro). */
+export const chartTooltipProps = {
+  contentStyle: { backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px' },
+  itemStyle: { color: '#f4f4f5' },
+  labelStyle: { color: '#fff', fontWeight: 700 },
+} as const;
+
+/** Encurta o rótulo do eixo (o nome completo aparece no tooltip). */
+export const shortTick = (v: string, max = 18) =>
+  v.length > max ? `${v.slice(0, max - 1)}…` : v;
+
 /** Barras horizontais por categoria (receitas ou despesas pagas). */
 export function CategoryBars({ items, color }: { items: { name: string; amount: number }[]; color: string }) {
   const data = [...items].sort((a, b) => b.amount - a.amount).slice(0, 8);
@@ -2228,9 +2239,15 @@ export function CategoryBars({ items, color }: { items: { name: string; amount: 
         <BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
           <XAxis type="number" stroke="#52525b" hide />
-          <YAxis dataKey="name" type="category" stroke="#a1a1aa" width={120} tickLine={false} axisLine={false} fontSize={11} />
+          <YAxis
+            dataKey="name" type="category" stroke="#a1a1aa" width={150}
+            tickLine={false} axisLine={false} fontSize={11}
+            tick={{ fill: '#a1a1aa', fontSize: 11 }}
+            tickFormatter={(v: string) => shortTick(v)}
+          />
           <Tooltip
-            contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px' }}
+            {...chartTooltipProps}
+            cursor={{ fill: '#27272a', opacity: 0.4 }}
             formatter={(v: number, _name: string, entry: any) => {
               const total = data.reduce((acc, d) => acc + d.amount, 0);
               const share = total > 0 ? ` (${((entry.payload.amount / total) * 100).toFixed(1)}%)` : '';

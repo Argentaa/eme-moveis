@@ -25,6 +25,10 @@ const tooltipStyle = {
   backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px',
 };
 
+const tooltipItemStyle = { color: '#f4f4f5' };
+
+const tooltipLabelStyle = { color: '#fff', fontWeight: 700 };
+
 export default function ProductionDashboard() {
   const [report, setReport] = useState<ReportResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -111,6 +115,8 @@ export default function ProductionDashboard() {
                     <YAxis stroke="#71717a" axisLine={false} tickLine={false} allowDecimals={false} />
                     <Tooltip
                       contentStyle={tooltipStyle}
+                      itemStyle={tooltipItemStyle}
+                      labelStyle={tooltipLabelStyle}
                       formatter={(v: number) => [`${v} ocorrência(s)`, 'Total']}
                     />
                     <Bar dataKey="total" name="Ocorrências" radius={[4, 4, 0, 0]} maxBarSize={56}>
@@ -141,6 +147,8 @@ export default function ProductionDashboard() {
                     />
                     <Tooltip
                       contentStyle={tooltipStyle}
+                      itemStyle={tooltipItemStyle}
+                      labelStyle={tooltipLabelStyle}
                       formatter={(v: number) => [fmtBRL(v), 'Custo']}
                     />
                     <Bar dataKey="total" name="Custo" radius={[4, 4, 0, 0]} maxBarSize={56}>

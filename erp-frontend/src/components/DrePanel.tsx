@@ -43,6 +43,10 @@ const tooltipStyle = {
   backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px',
 };
 
+const tooltipItemStyle = { color: '#f4f4f5' };
+
+const tooltipLabelStyle = { color: '#fff', fontWeight: 700 };
+
 export default function DrePanel() {
   const [year, setYear] = useState(new Date().getFullYear());
   const [period, setPeriod] = useState('mensal');
@@ -113,6 +117,19 @@ export default function DrePanel() {
         onExport={exportar}
         loadingLabel="Calculando DRE..."
         error={error}
+        detailKey="outcome_breakdown"
+        detailTitle="Despesas do período por categoria — clique na linha para abrir/fechar"
+        renderDetail={(d: DreCategory) => (
+          <div className="flex items-center gap-3">
+            <span className="w-40 shrink-0 truncate text-zinc-300" title={d.categoria}>{d.categoria}</span>
+            <div className="flex-1 h-1.5 bg-zinc-900 rounded overflow-hidden border border-zinc-800">
+              <div className="h-full bg-red-500/70 rounded" style={{ width: `${Math.min(100, d.participacao)}%` }} />
+            </div>
+            <span className="w-44 shrink-0 text-right text-zinc-400">
+              {d.total_fmt} <span className="text-zinc-600">· {d.participacao.toFixed(1)}%</span>
+            </span>
+          </div>
+        )}
       >
         <FilterField label="Ano">
           <select value={year} onChange={e => setYear(Number(e.target.value))} className={inputClass}>
@@ -146,6 +163,8 @@ export default function DrePanel() {
                   <YAxis stroke="#71717a" axisLine={false} tickLine={false} tickFormatter={fmtBRLshort} width={85} />
                   <Tooltip
                     contentStyle={tooltipStyle}
+                    itemStyle={tooltipItemStyle}
+                    labelStyle={tooltipLabelStyle}
                     formatter={(v: number, name: string) => [fmtBRL(v), name]}
                   />
                   <Legend iconSize={8} wrapperStyle={{ paddingTop: '10px' }} />

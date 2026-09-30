@@ -15,13 +15,10 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
 import { dashboardService, getApiErrorMessage } from '../services/api';
+import { chartTooltipProps, shortTick } from './FinancialView';
 import { CrmReport } from '../types';
 
 const fmt = (v: number) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-const tooltipStyle = {
-  backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px',
-};
 
 const ETAPA_COLORS = ['#7f1d1d', '#b91c1c', '#dc2626', '#ef4444', '#f87171', '#fca5a5'];
 
@@ -147,9 +144,9 @@ export default function CommercialDashboard() {
                 <BarChart data={etapasData} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
                   <XAxis type="number" stroke="#52525b" hide />
-                  <YAxis dataKey="etapa" type="category" stroke="#a1a1aa" width={120} tickLine={false} axisLine={false} fontSize={11} />
+                  <YAxis dataKey="etapa" type="category" stroke="#a1a1aa" width={150} tickLine={false} axisLine={false} tick={{ fill: '#a1a1aa', fontSize: 11 }} tickFormatter={(v: string) => shortTick(v)} />
                   <Tooltip
-                    contentStyle={tooltipStyle}
+                    {...chartTooltipProps}
                     formatter={(v: number, _n: string, entry: any) => [
                       `${v} negociação(ões) · ${entry.payload.share.toFixed(1)}% do funil`,
                       'Total',
@@ -181,9 +178,9 @@ export default function CommercialDashboard() {
                 <BarChart data={fontesData} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
                   <XAxis type="number" stroke="#52525b" hide />
-                  <YAxis dataKey="fonte" type="category" stroke="#a1a1aa" width={120} tickLine={false} axisLine={false} fontSize={11} />
+                  <YAxis dataKey="fonte" type="category" stroke="#a1a1aa" width={150} tickLine={false} axisLine={false} tick={{ fill: '#a1a1aa', fontSize: 11 }} tickFormatter={(v: string) => shortTick(v)} />
                   <Tooltip
-                    contentStyle={tooltipStyle}
+                    {...chartTooltipProps}
                     formatter={(v: number, _n: string, entry: any) => [
                       `${v} lead(s) · ${entry.payload.share.toFixed(1)}% dos leads`,
                       'Total',
