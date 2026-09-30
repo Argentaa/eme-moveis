@@ -1672,6 +1672,12 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Dashboards com mais gráficos e DRE detalhado",
+     "Dashboard Executivo: o demonstrativo mensal virou o resultado dos últimos 12 meses em barras, com receitas, despesas e resultado — passe o mouse em qualquer barra e veja o valor. Financeiro: o gráfico do fluxo de caixa ganhou linha de saldo acumulado e tooltip completo por mês (entradas, saídas, saldo, acumulado e o que está em aberto), mais dois gráficos novos de receitas e despesas por categoria com participação. DRE: agora mostra de onde veio cada real (categorias de receita), para onde foi cada real (categorias de despesa), margem líquida, principal receita e principal despesa, com gráfico por período e barras por categoria. Produção: saíram as horas produtivas e o total de m² — a casa não mensura por eles; entraram gráficos de ocorrências por tipo e custo das ocorrências, e a tabela detalha o valor de cada projeto.",
+     "MELHORIA", "2026-09-30"),
+    ("Ticket médio corrigido no Comercial",
+     "O ticket médio estava zerado porque contava apenas projetos com o status literal CONCLUIDO — e a conclusão real pelo botão usa um marcador próprio do projeto. Agora o ticket usa as vendas realmente concluídas pelo botão; quando ainda não há projeto concluído, usa as vendas fechadas no funil de vendas. O card mostra quantas vendas entraram, o total faturado e a base usada.",
+     "CORRECAO", "2026-09-30"),
     ("Pós-venda completo: dashboard, agenda, check-ins e pendências",
      "Fase 8 entregue. O Pós-venda agora tem 8 abas: Projetos entregues, Dashboard (satisfação, garantias, follow-ups, chamados), Agenda de pós-venda (concluir um projeto agenda os contatos de 7 e 30 dias sozinho; dá para gerar, concluir e configurar os dias), Check-ins (ligação, visita ou WhatsApp, feitos × programados), Pesquisa de satisfação (envio, resposta e botão WhatsApp), Solicitações, Garantias (prazo em meses por projeto, chamado coberto sozinho) e Pendências (chamados por tempo e atrasados).",
      "NOVIDADE", "2026-09-28"),

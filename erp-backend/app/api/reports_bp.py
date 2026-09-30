@@ -479,12 +479,21 @@ def _build_dre():
     buckets = {}
     for r in recs:
         kind, key = bucket_of(r.date.month)
-        b = buckets.setdefault((kind, key), {"income": 0.0, "outcome": 0.0})
+        b = buckets.setdefault((kind, key), {
+            "income": 0.0, "outcome": 0.0,
+            "income_cats": {}, "outcome_cats": {},
+            "n_income": 0, "n_outcome": 0,
+        })
         v = float(r.amount or 0)
+        cat = (r.category or "").strip() or "Sem categoria"
         if r.type == "ENTRADA":
             b["income"] += v
+            b["income_cats"][cat] = b["income_cats"].get(cat, 0.0) + v
+            b["n_income"] += 1
         else:
             b["outcome"] += v
+            b["outcome_cats"][cat] = b["outcome_cats"].get(cat, 0.0) + v
+            b["n_outcome"] += 1
 
     pend = db.session.query(FinancialRecord).filter(
         FinancialRecord.type == "ENTRADA", FinancialRecord.status == "PENDENTE",
@@ -492,26 +501,71 @@ def _build_dre():
     ).all()
     pend_income = sum(float(r.amount or 0) for r in pend)
 
+    def _detail(cats, total):
+        if not cats or total <= 0:
+            return "-"
+        ranked = sorted(cats.items(), key=lambda kv: kv[1], reverse=True)
+        parts = [
+            "%s %s (%.1f%%)" % (name, _fmt_brl(val), val / total * 100)
+            for name, val in ranked[:3]
+        ]
+        if len(ranked) > 3:
+            parts.append("+%d outra(s)" % (len(ranked) - 3))
+        return " · ".join(parts)
+
     kind, _first = sorted(buckets)[0] if buckets else ("m", 1)
     result_rows = []
     acc = 0.0
     total_income = 0.0
     total_outcome = 0.0
+    total_cats_in = {}
+    total_cats_out = {}
     for i in range(1, count_of(kind) + 1):
-        b = buckets.get((kind, i), {"income": 0.0, "outcome": 0.0})
+        b = buckets.get((kind, i), {
+            "income": 0.0, "outcome": 0.0,
+            "income_cats": {}, "outcome_cats": {},
+            "n_income": 0, "n_outcome": 0,
+        })
         result = b["income"] - b["outcome"]
         acc += result
         total_income += b["income"]
         total_outcome += b["outcome"]
+        for name, val in b["income_cats"].items():
+            total_cats_in[name] = total_cats_in.get(name, 0.0) + val
+        for name, val in b["outcome_cats"].items():
+            total_cats_out[name] = total_cats_out.get(name, 0.0) + val
         result_rows.append({
             "period": label_of(kind, i),
             "income": _fmt_brl(b["income"]),
+            "income_detail": _detail(b["income_cats"], b["income"]),
             "outcome": _fmt_brl(b["outcome"]),
+            "outcome_detail": _detail(b["outcome_cats"], b["outcome"]),
             "result": _fmt_brl(result),
             "accumulated": _fmt_brl(acc),
         })
 
+    by_category = []
+    for name, val in sorted(total_cats_in.items(), key=lambda kv: kv[1], reverse=True):
+        by_category.append({
+            "tipo": "receita",
+            "categoria": name,
+            "total": round(val, 2),
+            "total_fmt": _fmt_brl(val),
+            "participacao": round(val / total_income * 100, 1) if total_income > 0 else 0.0,
+        })
+    for name, val in sorted(total_cats_out.items(), key=lambda kv: kv[1], reverse=True):
+        by_category.append({
+            "tipo": "despesa",
+            "categoria": name,
+            "total": round(val, 2),
+            "total_fmt": _fmt_brl(val),
+            "participacao": round(val / total_outcome * 100, 1) if total_outcome > 0 else 0.0,
+        })
+
     final = total_income - total_outcome
+    margem = (final / total_income * 100) if total_income > 0 else 0.0
+    top_in = max(total_cats_in.items(), key=lambda kv: kv[1]) if total_cats_in else ("-", 0.0)
+    top_out = max(total_cats_out.items(), key=lambda kv: kv[1]) if total_cats_out else ("-", 0.0)
     return {
         "title": "DRE - Demonstrativo do Resultado",
         "generated_at": _now_iso(),
@@ -521,16 +575,23 @@ def _build_dre():
             {"label": "Despesas do Ano", "value": _fmt_brl(total_outcome), "tone": "negative"},
             {"label": "Resultado do Ano", "value": _fmt_brl(final),
              "tone": "positive" if final >= 0 else "negative"},
+            {"label": "Margem Líquida", "value": "%.1f%%" % margem,
+             "tone": "positive" if margem >= 0 else "negative"},
+            {"label": "Principal Receita", "value": "%s · %s" % (top_in[0], _fmt_brl(top_in[1])), "tone": "neutral"},
+            {"label": "Principal Despesa", "value": "%s · %s" % (top_out[0], _fmt_brl(top_out[1])), "tone": "neutral"},
             {"label": "Faturamento Pendente", "value": _fmt_brl(pend_income), "tone": "neutral"},
         ],
         "columns": [
             {"key": "period", "label": "Período"},
             {"key": "income", "label": "Receitas"},
+            {"key": "income_detail", "label": "Receitas por categoria"},
             {"key": "outcome", "label": "Despesas"},
+            {"key": "outcome_detail", "label": "Despesas por categoria"},
             {"key": "result", "label": "Resultado"},
             {"key": "accumulated", "label": "Resultado Acumulado"},
         ],
         "rows": result_rows,
+        "by_category": by_category,
     }
 
 
@@ -756,14 +817,37 @@ def _build_crm():
     )
     taxa = round(total_closed / len(clients) * 100, 1) if clients else 0
 
-    concluidos = db.session.query(Project).filter_by(status="CONCLUIDO").all()
+    concluidos = db.session.query(Project).filter(
+        Project.concluded_at.isnot(None)
+    ).all()
     vals = [float(p.value or 0) for p in concluidos]
+    vals = [v for v in vals if v > 0]
+    origem_ticket = "projetos concluídos"
+    if not vals:
+        # Fallback: vendas fechadas no CRM (etapa FECHAMENTO ou botão
+        # Concluir venda). Cobre o caso em que nenhum projeto foi concluído
+        # pelo botão mas há vendas com valor de negociação.
+        fechados = [
+            c for c in clients
+            if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None
+        ]
+        for c in fechados:
+            try:
+                nv = c.negotiation_value
+            except Exception:
+                nv = None
+            v = float(nv or 0) or float(c.estimated_value or 0)
+            if v > 0:
+                vals.append(v)
+        if vals:
+            origem_ticket = "vendas fechadas no CRM"
     ticket = {
         "media": sum(vals) / len(vals) if vals else 0,
         "maximo": max(vals) if vals else 0,
         "minimo": min(vals) if vals else 0,
         "total_projetos": len(vals),
         "total_faturado": sum(vals),
+        "origem": origem_ticket,
     }
 
     # Fluxo de caixa: ultimos 12 meses a partir de hoje
@@ -1086,7 +1170,6 @@ def _build_production():
         time_entries = [t for t in time_entries if t.work_date and t.work_date <= dt]
         issues = [i for i in issues if i.issue_date and i.issue_date <= dt]
 
-    total_m2 = sum(float(e.area_m2 or 0) for e in envs)
     total_environments = len(envs)
     total_projects = len(projects_q)
 
@@ -1106,10 +1189,8 @@ def _build_production():
     tempo_medio_por_projeto = (total_horas / total_projects) if total_projects else 0
 
     summary = [
-        {"label": "Total m2", "value": f"{total_m2:.1f}", "tone": "positive"},
         {"label": "Total Ambientes", "value": str(total_environments), "tone": "neutral"},
         {"label": "Total Projetos", "value": str(total_projects), "tone": "neutral"},
-        {"label": "Horas Produtivas", "value": f"{horas_produtivas:.1f}h", "tone": "positive"},
         {"label": "Horas Improdutivas", "value": f"{horas_improdutivas:.1f}h", "tone": "negative" if horas_improdutivas > 0 else "neutral"},
         {"label": "Total Horas", "value": f"{total_horas:.1f}h", "tone": "neutral"},
         {"label": "Retrabalhos", "value": str(retrabalho_count), "tone": "negative" if retrabalho_count > 0 else "neutral"},
@@ -1139,17 +1220,17 @@ def _build_production():
     for p in projects_q:
         proj_envs = envs_by_project.get(str(p.id), [])
         if proj_envs:
-            total_area = sum(float(e.area_m2 or 0) for e in proj_envs)
+            total_value = sum(float(e.value or 0) for e in proj_envs)
             rows.append({
                 "metric": p.title,
-                "value": f"{total_area:.1f}",
-                "detail": f"{len(proj_envs)} ambientes",
+                "value": _fmt_brl(total_value),
+                "detail": f"{len(proj_envs)} ambiente(s)",
             })
         else:
             # mesmo sem ambientes, inclui linha do projeto para garantir visibilidade
             rows.append({
                 "metric": p.title,
-                "value": "0.0",
+                "value": _fmt_brl(0),
                 "detail": "0 ambientes",
             })
 

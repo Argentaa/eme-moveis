@@ -564,6 +564,7 @@ export interface CrmReport {
   ticket_medio: {
     maximo: number; media: number; minimo: number;
     total_faturado: number; total_projetos: number;
+    origem?: string;
   };
   vendas_por_parceiro: unknown[];
 }

@@ -5,8 +5,8 @@ import {
   Calendar, FileText, ArrowUpRight, ArrowDownRight, RefreshCw, Layers,
   ChevronLeft, ChevronRight
 } from 'lucide-react';
-import { 
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend 
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid
 } from 'recharts';
 import {
   clientService, projectService, financialService, stockService, reportService, bankAccountService,
@@ -300,31 +300,16 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
     year: 'numeric',
   });
 
-  // Demonstrativo mensal do ano selecionado, mês a mês.
-  // Realizado = só o que foi pago/recebido; Projetado = inclui o que está em aberto.
-  const timeChartData = Array.from({ length: 12 }, (_, i) => ({
-    name: new Date(selectedYear, i, 1).toLocaleDateString('pt-BR', { month: 'short' }),
-    entradas: 0,
-    saidas: 0,
+  // Resultado mês a mês dos últimos 12 meses (vem do /api/reports/crm).
+  const yearResultData = (crmReport?.fluxo_caixa || []).map((m) => ({
+    name: m.mes.slice(5),
+    Receitas: m.receitas,
+    Despesas: m.despesas,
+    Resultado: m.resultado,
   }));
 
-  financials
-    .filter(f => {
-      if (cfMode === 'realizado' && f.status !== 'PAGO') return false;
-      const ref = f.due_date || f.date;
-      const d = new Date(`${ref}T00:00:00`);
-      return !Number.isNaN(d.getTime()) && d.getFullYear() === selectedYear;
-    })
-    .forEach(f => {
-      const ref = f.due_date || f.date;
-      const slot = timeChartData[new Date(`${ref}T00:00:00`).getMonth()];
-      if (!slot) return;
-      if (f.type === 'ENTRADA') {
-        slot.entradas += f.amount;
-      } else {
-        slot.saidas += f.amount;
-      }
-    });
+  const brlTick = (v: number) =>
+    Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 
   return (
     <div className="space-y-6">
@@ -660,61 +645,41 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         )}
       </div>
 
-      {/* Bento Layout: Charts row */}
+      {/* Resultado 12 meses + consumo por categoria */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Area Chart: Entries vs Exits over time */}
+
+        {/* Resultado mês a mês (receitas x despesas x resultado) */}
         <div className="glass-panel p-5 rounded-lg lg:col-span-2">
           <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
             <div>
-              <h3 className="text-base font-medium text-white">Demonstrativo de Fluxo de Caixa</h3>
+              <h3 className="text-base font-medium text-white">Resultado dos últimos 12 meses</h3>
               <p className="text-xs text-zinc-400 font-mono">
-                {cfMode === 'projetado' ? 'Projetado' : 'Realizado'} · mensal ({selectedYear}) · BRL (R$)
+                Receitas, despesas e resultado mês a mês · valores pagos em BRL (R$)
               </p>
             </div>
-            <div className="flex items-center rounded border border-zinc-800 overflow-hidden">
-              {(['realizado', 'projetado'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setCfMode(m)}
-                  title={m === 'realizado'
-                    ? 'Somente o que já foi pago/recebido'
-                    : 'Inclui os lançamentos em aberto (previstos)'}
-                  className={`px-3 py-1.5 text-xs font-mono transition cursor-pointer ${
-                    cfMode === m ? 'bg-red-600 text-white font-semibold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  {m === 'realizado' ? 'Realizado' : 'Projetado'}
-                </button>
-              ))}
-            </div>
           </div>
-          
+
           <div className="h-64 mt-4 text-xs font-mono">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={timeChartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorEntradas" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.15}/>
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorSaidas" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.15}/>
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="name" stroke="#52525b" tickLine={false} />
-                <YAxis stroke="#52525b" axisLine={false} tickLine={false} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px' }} 
-                  itemStyle={{ fontSize: '11px' }}
-                />
-                <Legend iconSize={8} wrapperStyle={{ paddingTop: '10px' }} />
-                <Area type="monotone" dataKey="entradas" name={cfMode === 'projetado' ? 'Entradas (Previstas)' : 'Entradas (Realizadas)'} stroke="#10b981" fillOpacity={1} fill="url(#colorEntradas)" strokeWidth={2} />
-                <Area type="monotone" dataKey="saidas" name={cfMode === 'projetado' ? 'Saídas (Previstas)' : 'Saídas (Realizadas)'} stroke="#ef4444" fillOpacity={1} fill="url(#colorSaidas)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
+            {yearResultData.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-zinc-500">Sem dados financeiros</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={yearResultData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                  <XAxis dataKey="name" stroke="#52525b" tickLine={false} />
+                  <YAxis stroke="#52525b" axisLine={false} tickLine={false} tickFormatter={brlTick} width={80} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px' }}
+                    formatter={(v: number, name: string) => [v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), name]}
+                    labelFormatter={(label: string) => `Mês ${label}`}
+                  />
+                  <Legend iconSize={8} wrapperStyle={{ paddingTop: '10px' }} />
+                  <Bar dataKey="Receitas" fill="#10b981" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="Despesas" fill="#ef4444" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="Resultado" fill="#e4e4e7" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
@@ -722,26 +687,31 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         <div className="glass-panel p-5 rounded-lg flex flex-col justify-between">
           <div>
             <h3 className="text-base font-medium text-white">Consumo por Categoria</h3>
-            <p className="text-xs text-zinc-400 font-mono mb-4">Análise em R$ do caixa geral</p>
+            <p className="text-xs text-zinc-400 font-mono mb-4">Top categorias pagas em {currentCompetence}</p>
           </div>
 
-          <div className="h-48 text-xs font-mono">
+          <div className="h-56 text-xs font-mono">
             {categoryChartData.length === 0 ? (
               <div className="h-full flex items-center justify-center text-zinc-500">Sem dados financeiros</div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={categoryChartData.slice(0, 4)} layout="vertical">
+                <BarChart
+                  data={[...categoryChartData].sort((a, b) => b.amount - a.amount).slice(0, 8)}
+                  layout="vertical"
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
                   <XAxis type="number" stroke="#52525b" hide />
                   <YAxis dataKey="name" type="category" stroke="#a1a1aa" width={110} tickLine={false} axisLine={false} />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px' }}
+                    formatter={(v: number) => [v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), 'Total']}
                   />
                   <Bar dataKey="amount" name="Total (R$)" fill="#7f1d1d" radius={[0, 4, 4, 0]} barSize={12} />
                 </BarChart>
               </ResponsiveContainer>
             )}
           </div>
-          
+
           <p className="text-[11px] text-zinc-500 text-center font-mono pt-3 border-t border-zinc-800">
             Focado em gastos fixos e insumos da marcenaria
           </p>
@@ -837,7 +807,7 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
           <h3 className="text-base font-medium text-white flex items-center gap-2">
             <Hammer className="w-5 h-5 text-red-600" /> Produção Industrial
           </h3>
-          <span className="text-xs text-zinc-500 font-mono">{productionReport ? productionReport.title : 'm², ambientes, horas e ocorrências'}</span>
+          <span className="text-xs text-zinc-500 font-mono">{productionReport ? productionReport.title : 'projetos, ambientes e ocorrências'}</span>
         </div>
         {productionReport ? (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -857,11 +827,15 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
                 const p = perdaItem ? parseInt(String(perdaItem.value).replace(/\D/g,'')) || 0 : 0;
                 ocorrenciasVal = String(r + p);
               }
+              // Custo total das ocorrências = soma dos custos de retrabalho, perdas e desperdícios
+              const custoOcorrencias = (productionReport.summary || [])
+                .filter(s => /custo/i.test(s.label))
+                .reduce((acc, s) => acc + parseBRL(String(s.value)), 0);
               const cards = [
-                { label: 'Total m²', value: findVal('m2') || findVal('m²') || findVal('area'), tone: 'text-white' },
+                { label: 'Projetos', value: findVal('total projetos') || findVal('projeto'), tone: 'text-white' },
                 { label: 'Ambientes', value: findVal('ambiente'), tone: 'text-white' },
-                { label: 'Horas produtivas', value: findVal('hora') || findVal('produtiva'), tone: 'text-emerald-400' },
                 { label: 'Ocorrências', value: ocorrenciasVal, tone: 'text-amber-400' },
+                { label: 'Custo ocorrências', value: money(custoOcorrencias), tone: 'text-red-400' },
               ];
               return cards.map((c, idx) => (
                 <div key={idx} className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4">
@@ -874,16 +848,16 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         ) : (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 opacity-60">
             <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 animate-pulse">
-              <p className="text-[10px] text-zinc-500 font-mono">Total m²</p><div className="h-6 bg-zinc-800 rounded mt-2" />
+              <p className="text-[10px] text-zinc-500 font-mono">Projetos</p><div className="h-6 bg-zinc-800 rounded mt-2" />
             </div>
             <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 animate-pulse">
               <p className="text-[10px] text-zinc-500 font-mono">Ambientes</p><div className="h-6 bg-zinc-800 rounded mt-2" />
             </div>
             <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 animate-pulse">
-              <p className="text-[10px] text-zinc-500 font-mono">Horas produtivas</p><div className="h-6 bg-zinc-800 rounded mt-2" />
+              <p className="text-[10px] text-zinc-500 font-mono">Ocorrências</p><div className="h-6 bg-zinc-800 rounded mt-2" />
             </div>
             <div className="bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 animate-pulse">
-              <p className="text-[10px] text-zinc-500 font-mono">Ocorrências</p><div className="h-6 bg-zinc-800 rounded mt-2" />
+              <p className="text-[10px] text-zinc-500 font-mono">Custo ocorrências</p><div className="h-6 bg-zinc-800 rounded mt-2" />
             </div>
           </div>
         )}

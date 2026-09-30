@@ -1505,6 +1505,61 @@ def test_dre_table_report(client):
     assert s2["accumulated"] == "R$ 6.000,00"
 
 
+def test_dre_detalhado_por_categoria(client):
+    h = _login(client)
+    items = [
+        {"description": "Venda A", "type": "ENTRADA", "category": "Vendas", "amount": 8000, "date": "2026-02-10", "status": "PAGO"},
+        {"description": "Venda B", "type": "ENTRADA", "category": "Serviços", "amount": 2000, "date": "2026-02-11", "status": "PAGO"},
+        {"description": "Aluguel", "type": "SAIDA", "category": "Fixos", "amount": 3000, "date": "2026-02-12", "status": "PAGO"},
+        {"description": "MDF", "type": "SAIDA", "category": "Insumos", "amount": 1000, "date": "2026-02-13", "status": "PAGO"},
+    ]
+    for p in items:
+        assert client.post("/api/financial", headers=h, json=p).status_code == 201
+    r = client.get("/api/reports/dre", headers=h, query_string={"year": 2026, "period": "mensal"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    fev = next(row for row in body["rows"] if "Fevereiro" in row["period"])
+    assert "Vendas" in fev["income_detail"] and "Serviços" in fev["income_detail"], fev
+    assert "Fixos" in fev["outcome_detail"] and "Insumos" in fev["outcome_detail"], fev
+    cats = {c["categoria"]: c for c in body["by_category"]}
+    assert cats["Vendas"]["tipo"] == "receita" and cats["Vendas"]["participacao"] == 80.0, cats
+    assert cats["Fixos"]["tipo"] == "despesa" and cats["Fixos"]["participacao"] == 75.0, cats
+    labels = [s["label"] for s in body["summary"]]
+    assert "Margem Líquida" in labels and "Principal Receita" in labels and "Principal Despesa" in labels, labels
+    margem = next(s for s in body["summary"] if s["label"] == "Margem Líquida")
+    assert margem["value"] == "60.0%", margem
+
+
+def test_ticket_medio_usa_projetos_concluidos(client):
+    h = _login(client)
+    c = client.post("/api/clients", headers=h, json={"name": "Cliente Ticket", "cpf_cnpj": "ticket01"})
+    assert c.status_code == 201, c.get_data(as_text=True)
+    cid = c.get_json()["id"]
+    p = client.post("/api/projects", headers=h, json={"title": "Proj Ticket", "client_id": cid, "value": 12000})
+    assert p.status_code == 201, p.get_data(as_text=True)
+    pid = p.get_json()["id"]
+    # Projeto com status CONCLUIDO mas SEM conclusao pelo botao NAO entra no ticket
+    assert client.put(f"/api/projects/{pid}", headers=h, json={"status": "CONCLUIDO"}).status_code == 200
+    t = client.get("/api/reports/crm", headers=h).get_json()["ticket_medio"]
+    assert t["media"] == 0, t
+    # Conclusao pelo botao -> entra no ticket
+    assert client.post(f"/api/projects/{pid}/conclude", headers=h).status_code == 200
+    t = client.get("/api/reports/crm", headers=h).get_json()["ticket_medio"]
+    assert t["media"] == 12000 and t["total_projetos"] == 1 and t["total_faturado"] == 12000, t
+
+
+def test_ticket_medio_fallback_vendas_crm(client):
+    h = _login(client)
+    c = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Fechado", "cpf_cnpj": "ticket02",
+        "funnel_status": "FECHAMENTO", "estimated_value": 5000,
+    })
+    assert c.status_code == 201, c.get_data(as_text=True)
+    t = client.get("/api/reports/crm", headers=h).get_json()["ticket_medio"]
+    assert t["media"] == 5000 and t["total_projetos"] == 1, t
+    assert t["origem"] == "vendas fechadas no CRM", t
+
+
 def test_funnels_crud(client):
     h = _login(client)
     r = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"})
@@ -3032,20 +3087,13 @@ def test_report_production(client):
                     return None
             return None
 
-    # Asserts no json: summary contem pelo menos os labels/valores esperados
-    total_m2_item = find_summary("Total m2") or find_summary("m2")
-    assert total_m2_item is not None, f"summary sem Total m2: {summary}"
-    val_m2 = parse_val_to_float(total_m2_item.get("value"))
-    assert val_m2 is not None and abs(val_m2 - expected_total_m2) < 0.01, f"Total m2 {val_m2} != {expected_total_m2} summary={total_m2_item}"
+    # Total m2 e Horas Produtivas SAIRAM do resumo (o cliente nao mensura por eles)
+    assert find_summary("Total m2") is None and find_summary("m²") is None, f"summary ainda tem m2: {summary}"
+    assert find_summary("Horas Produtivas") is None, f"summary ainda tem Horas Produtivas: {summary}"
 
     total_amb = find_summary("Total Ambientes")
     assert total_amb is not None, f"summary sem Total Ambientes: {summary}"
     assert total_amb.get("value") == str(expected_total_ambientes) or parse_val_to_float(total_amb.get("value")) == expected_total_ambientes
-
-    horas_prod_item = find_summary("Horas Produtivas")
-    assert horas_prod_item is not None, f"summary sem Horas Produtivas: {summary}"
-    val_prod = parse_val_to_float(horas_prod_item.get("value"))
-    assert val_prod is not None and abs(val_prod - expected_horas_prod) < 0.01, f"Horas Produtivas {val_prod} != {expected_horas_prod}"
 
     horas_improd_item = find_summary("Horas Improdutivas")
     assert horas_improd_item is not None, f"summary sem Horas Improdutivas: {summary}"

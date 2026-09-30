@@ -4,13 +4,26 @@
  * Le /api/reports/crm, que tem formato proprio (nao segue {summary, columns,
  * rows}) — por isso o resumo e montado aqui, campo a campo, em vez de passar
  * pelo ReportPanel generico.
+ *
+ * O ticket medio usa projetos concluidos pelo botao "Concluir" (concluded_at);
+ * quando nao ha nenhum, usa as vendas fechadas no CRM (negotiation_value ou
+ * valor estimado) — o campo `origem` diz qual base foi usada.
  */
 import { useEffect, useState } from 'react';
 import { Loader2, Percent, Target, TrendingDown, Users } from 'lucide-react';
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
+} from 'recharts';
 import { dashboardService, getApiErrorMessage } from '../services/api';
 import { CrmReport } from '../types';
 
 const fmt = (v: number) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+const tooltipStyle = {
+  backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px',
+};
+
+const ETAPA_COLORS = ['#7f1d1d', '#b91c1c', '#dc2626', '#ef4444', '#f87171', '#fca5a5'];
 
 export default function CommercialDashboard() {
   const [rel, setRel] = useState<CrmReport | null>(null);
@@ -43,7 +56,27 @@ export default function CommercialDashboard() {
   }
 
   const etapas = rel.negociacoes?.por_etapa || [];
-  const maiorEtapa = Math.max(1, ...etapas.map(e => e.total));
+  const totalEtapas = etapas.reduce((acc, e) => acc + e.total, 0);
+  const etapasData = [...etapas]
+    .sort((a, b) => b.total - a.total)
+    .map(e => ({
+      etapa: e.funnel_status,
+      total: e.total,
+      share: totalEtapas > 0 ? (e.total / totalEtapas) * 100 : 0,
+    }));
+
+  const fontes = rel.fontes_lead || [];
+  const totalFontes = fontes.reduce((acc, f) => acc + f.total, 0);
+  const fontesData = [...fontes]
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 8)
+    .map(f => ({
+      fonte: f.fonte || 'Não informado',
+      total: f.total,
+      share: totalFontes > 0 ? (f.total / totalFontes) * 100 : 0,
+    }));
+
+  const ticket = rel.ticket_medio;
 
   return (
     <div className="space-y-5">
@@ -73,10 +106,16 @@ export default function CommercialDashboard() {
             <Target className="w-3 h-3" /> Ticket médio
           </span>
           <p className="text-2xl font-bold font-sans text-white mt-2">
-            {fmt(rel.ticket_medio?.media ?? 0)}
+            {fmt(ticket?.media ?? 0)}
           </p>
           <p className="text-[11px] text-zinc-500 font-mono mt-1">
-            {fmt(rel.ticket_medio?.minimo ?? 0)} a {fmt(rel.ticket_medio?.maximo ?? 0)}
+            {fmt(ticket?.minimo ?? 0)} a {fmt(ticket?.maximo ?? 0)}
+          </p>
+          <p className="text-[11px] text-zinc-500 font-mono mt-1">
+            {ticket?.total_projetos ?? 0} venda(s) · {fmt(ticket?.total_faturado ?? 0)} faturado
+          </p>
+          <p className="text-[10px] text-zinc-600 font-mono mt-0.5">
+            base: {ticket?.origem || 'projetos concluídos'}
           </p>
         </div>
         <div className="glass-panel p-5 rounded-lg border-l-4 border-l-rose-650">
@@ -92,59 +131,90 @@ export default function CommercialDashboard() {
         </div>
       </div>
 
-      <div className="glass-panel p-5 rounded-lg">
-        <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block mb-3">
-          Negociações por etapa
-        </span>
-        <div className="space-y-2">
-          {etapas.map(e => (
-            <div key={e.funnel_status} className="flex items-center gap-3">
-              <span className="w-32 text-[11px] font-mono text-zinc-400 truncate">{e.funnel_status}</span>
-              <div className="flex-1 h-4 bg-zinc-950 rounded overflow-hidden border border-zinc-900">
-                <div className="h-full bg-red-900/50"
-                  style={{ width: `${Math.round((e.total / maiorEtapa) * 100)}%` }} />
-              </div>
-              <span className="w-10 text-right text-xs font-mono text-white">{e.total}</span>
-            </div>
-          ))}
-          {etapas.length === 0 && (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="glass-panel p-5 rounded-lg">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">
+            Negociações por etapa
+          </span>
+          <p className="text-[11px] text-zinc-500 font-mono mt-0.5 mb-3">
+            Passe o mouse para ver a contagem e a participação de cada etapa
+          </p>
+          {etapasData.length === 0 ? (
             <p className="text-xs text-zinc-500 font-mono">Nenhuma negociação em aberto.</p>
+          ) : (
+            <div className="h-64 text-xs font-mono">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={etapasData} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
+                  <XAxis type="number" stroke="#52525b" hide />
+                  <YAxis dataKey="etapa" type="category" stroke="#a1a1aa" width={120} tickLine={false} axisLine={false} fontSize={11} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v: number, _n: string, entry: any) => [
+                      `${v} negociação(ões) · ${entry.payload.share.toFixed(1)}% do funil`,
+                      'Total',
+                    ]}
+                  />
+                  <Bar dataKey="total" name="Negociações" radius={[0, 4, 4, 0]} barSize={14}>
+                    {etapasData.map((d, i) => (
+                      <Cell key={d.etapa} fill={ETAPA_COLORS[i % ETAPA_COLORS.length]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+
+        <div className="glass-panel p-5 rounded-lg">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">
+            Origem dos leads
+          </span>
+          <p className="text-[11px] text-zinc-500 font-mono mt-0.5 mb-3">
+            De onde vêm os clientes · passe o mouse para ver a participação
+          </p>
+          {fontesData.length === 0 ? (
+            <p className="text-xs text-zinc-500 font-mono">Nenhuma origem registrada.</p>
+          ) : (
+            <div className="h-64 text-xs font-mono">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={fontesData} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
+                  <XAxis type="number" stroke="#52525b" hide />
+                  <YAxis dataKey="fonte" type="category" stroke="#a1a1aa" width={120} tickLine={false} axisLine={false} fontSize={11} />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v: number, _n: string, entry: any) => [
+                      `${v} lead(s) · ${entry.payload.share.toFixed(1)}% dos leads`,
+                      'Total',
+                    ]}
+                  />
+                  <Bar dataKey="total" name="Leads" radius={[0, 4, 4, 0]} barSize={14} fill="#b91c1c">
+                    {fontesData.map((d, i) => (
+                      <Cell key={d.fonte} fill="#b91c1c" fillOpacity={0.55 + (0.45 * (fontesData.length - i)) / fontesData.length} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="glass-panel p-5 rounded-lg">
-          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block mb-3">
-            Origem dos leads
-          </span>
-          <div className="space-y-1.5">
-            {(rel.fontes_lead || []).slice(0, 8).map(f => (
-              <div key={f.fonte} className="flex items-center justify-between text-xs font-mono">
-                <span className="text-zinc-400 truncate">{f.fonte || '—'}</span>
-                <span className="text-white">{f.total}</span>
-              </div>
-            ))}
-            {!(rel.fontes_lead || []).length && (
-              <p className="text-xs text-zinc-500 font-mono">Nenhuma origem registrada.</p>
-            )}
-          </div>
-        </div>
-        <div className="glass-panel p-5 rounded-lg">
-          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block mb-3">
-            Motivos de perda
-          </span>
-          <div className="space-y-1.5">
-            {(rel.negociacoes?.perdidas || []).slice(0, 6).map((p, i) => (
-              <div key={`${p.name}-${i}`} className="text-xs font-mono">
-                <span className="text-zinc-300">{p.name}</span>
-                <span className="block text-[10px] text-zinc-500">{p.lost_reason || 'sem motivo informado'}</span>
-              </div>
-            ))}
-            {!(rel.negociacoes?.perdidas || []).length && (
-              <p className="text-xs text-zinc-500 font-mono">Nenhuma perda registrada.</p>
-            )}
-          </div>
+      <div className="glass-panel p-5 rounded-lg">
+        <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block mb-3">
+          Motivos de perda
+        </span>
+        <div className="space-y-1.5">
+          {(rel.negociacoes?.perdidas || []).slice(0, 6).map((p, i) => (
+            <div key={`${p.name}-${i}`} className="text-xs font-mono">
+              <span className="text-zinc-300">{p.name}</span>
+              <span className="block text-[10px] text-zinc-500">{p.lost_reason || 'sem motivo informado'}</span>
+            </div>
+          ))}
+          {!(rel.negociacoes?.perdidas || []).length && (
+            <p className="text-xs text-zinc-500 font-mono">Nenhuma perda registrada.</p>
+          )}
         </div>
       </div>
     </div>

@@ -6,6 +6,10 @@ import {
   Target, Truck, BarChart3, TrendingUp
 } from 'lucide-react';
 import { financialService, projectService, stockService, recurringService, clientService, supplierService, vendorService, budgetService, reportService, bankAccountService, getApiErrorMessage } from '../services/api';
+import {
+  BarChart, Bar, Line, ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  Legend, CartesianGrid, Cell,
+} from 'recharts';
 import { FinancialRecord, Project, Category, Vendor, BudgetGoal, BudgetAnalysis, Client, ReportResult, BankAccount, BankOverview } from '../types';
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
 import DrePanel from './DrePanel';
@@ -591,6 +595,18 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
   const netBalance = totalInflow - totalOutflow;
 
+  // Agregado por categoria (só pagos) para os gráficos do dashboard
+  const paidByCategory = (type: 'ENTRADA' | 'SAIDA') => {
+    const map = new Map<string, number>();
+    records
+      .filter(r => r.type === type && r.status === 'PAGO')
+      .forEach(r => {
+        const k = (r.category || '').trim() || 'Sem categoria';
+        map.set(k, (map.get(k) || 0) + r.amount);
+      });
+    return [...map.entries()].map(([name, amount]) => ({ name, amount }));
+  };
+
   return (
     <div className="space-y-6">
       
@@ -726,7 +742,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
                 </div>
               ))}
             </div>
-            <CFBarChart data={cfData} />
+            <CashFlowChart data={cfData} />
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs font-mono text-zinc-300">
                 <thead className="text-zinc-500 uppercase tracking-wider border-b border-zinc-900">
@@ -768,6 +784,26 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         ) : (
           <p className="text-xs text-zinc-500 font-mono">Não foi possível carregar o fluxo de caixa.</p>
         )}
+      </div>
+
+      {/* De onde vem e para onde vai o dinheiro */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="glass-panel rounded-lg p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp className="w-4 h-4 text-emerald-500" />
+            <h3 className="text-sm font-semibold text-white font-sans">Receitas por categoria</h3>
+          </div>
+          <p className="text-[11px] text-zinc-500 font-mono mb-3">Lançamentos pagos · passe o mouse para ver valor e participação</p>
+          <CategoryBars items={paidByCategory('ENTRADA')} color="#10b981" />
+        </div>
+        <div className="glass-panel rounded-lg p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp className="w-4 h-4 text-red-500 rotate-180" />
+            <h3 className="text-sm font-semibold text-white font-sans">Despesas por categoria</h3>
+          </div>
+          <p className="text-[11px] text-zinc-500 font-mono mb-3">Lançamentos pagos · passe o mouse para ver valor e participação</p>
+          <CategoryBars items={paidByCategory('SAIDA')} color="#ef4444" />
+        </div>
       </div>
       </>
       )}
@@ -2112,33 +2148,102 @@ function parseMoney(s: string): number {
   return isNaN(n) ? 0 : n;
 }
 
-function CFBarChart({ data }: { data: ReportResult }) {
-  const rows = data.rows as any[];
-  const max = Math.max(1, ...rows.map(r => Math.max(parseMoney(r.income), parseMoney(r.outcome))));
-  const W = 640;
-  const H = 180;
-  const pad = 22;
-  const bw = (W - pad * 2) / rows.length;
+const fmtBRL = (v: number) =>
+  Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+const fmtBRLshort = (v: number) =>
+  Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+
+/** Tooltip do fluxo de caixa: mostra todas as estatísticas da barra sob o mouse. */
+function CashFlowTooltip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const r = payload[0]?.payload;
+  if (!r) return null;
+  const line = (label: string, value: string, cls: string) => (
+    <div className="flex justify-between gap-6 py-0.5">
+      <span className="text-zinc-400">{label}</span>
+      <span className={`font-semibold ${cls}`}>{value}</span>
+    </div>
+  );
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Gráfico do fluxo de caixa mensal">
-      {rows.map((r, i) => {
-        const inc = parseMoney(r.income);
-        const out = parseMoney(r.outcome);
-        const hInc = (inc / max) * (H - pad * 2 - 18);
-        const hOut = (out / max) * (H - pad * 2 - 18);
-        const xc = pad + i * bw + bw / 2;
-        return (
-          <g key={r.month}>
-            <title>{`${r.month}: entradas ${r.income}, saídas ${r.outcome}`}</title>
-            <rect x={xc - 9} y={H - pad - hInc} width={11} height={hInc || 1} rx={2} fill="#34d399" />
-            <rect x={xc + 2} y={H - pad - hOut} width={11} height={hOut || 1} rx={2} fill="#f87171" />
-            <text x={xc} y={H - 6} textAnchor="middle" fontSize={8} fill="#71717a">
-              {String(r.month).split(' - ')[0]}
-            </text>
-          </g>
-        );
-      })}
-      <rect x={pad} y={pad} width={W - pad * 2} height={H - pad * 2 - 12} fill="none" stroke="#27272a" strokeWidth={1} rx={4} />
-    </svg>
+    <div className="bg-zinc-950 border border-zinc-800 rounded-lg px-3.5 py-2.5 text-xs font-mono shadow-xl min-w-[220px]">
+      <p className="text-white font-bold mb-1.5">{r.monthLabel}</p>
+      {line('Entradas', r.incomeFmt, 'text-emerald-400')}
+      {line('Saídas', r.outcomeFmt, 'text-red-400')}
+      {line('Saldo do mês', r.balanceFmt, 'text-white')}
+      {line('Acumulado', r.accFmt, 'text-zinc-300')}
+      {(r.pendIn > 0 || r.pendOut > 0) && (
+        <div className="mt-1.5 pt-1.5 border-t border-zinc-800">
+          {line('A receber (aberto)', r.pendInFmt, 'text-emerald-300')}
+          {line('A pagar (aberto)', r.pendOutFmt, 'text-red-300')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Gráfico profissional do fluxo de caixa: barras entradas/saídas + linha do acumulado. */
+function CashFlowChart({ data }: { data: ReportResult }) {
+  const rows = (data.rows as any[]).map((r) => ({
+    monthLabel: String(r.month).split(' - ')[0],
+    Entradas: parseMoney(r.income),
+    'Saídas': parseMoney(r.outcome),
+    Acumulado: parseMoney(r.accumulated),
+    incomeFmt: String(r.income),
+    outcomeFmt: String(r.outcome),
+    balanceFmt: String(r.balance),
+    accFmt: String(r.accumulated),
+    pendIn: parseMoney(r.pending_income),
+    pendOut: parseMoney(r.pending_outcome),
+    pendInFmt: String(r.pending_income || 'R$ 0,00'),
+    pendOutFmt: String(r.pending_outcome || 'R$ 0,00'),
+  }));
+  return (
+    <div className="h-72 text-xs font-mono">
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={rows} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+          <XAxis dataKey="monthLabel" stroke="#71717a" tickLine={false} interval={0} angle={-25} textAnchor="end" height={48} fontSize={10} />
+          <YAxis stroke="#71717a" axisLine={false} tickLine={false} tickFormatter={fmtBRLshort} width={85} />
+          <Tooltip content={<CashFlowTooltip />} cursor={{ fill: '#27272a', opacity: 0.4 }} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Bar dataKey="Entradas" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={22} />
+          <Bar dataKey="Saídas" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={22} />
+          <Line type="monotone" dataKey="Acumulado" name="Saldo acumulado" stroke="#e4e4e7" strokeWidth={2} dot={{ r: 2.5, fill: '#e4e4e7' }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Barras horizontais por categoria (receitas ou despesas pagas). */
+export function CategoryBars({ items, color }: { items: { name: string; amount: number }[]; color: string }) {
+  const data = [...items].sort((a, b) => b.amount - a.amount).slice(0, 8);
+  if (data.length === 0) {
+    return <p className="text-xs text-zinc-500 font-mono py-6 text-center">Sem lançamentos pagos.</p>;
+  }
+  return (
+    <div className="h-64 text-xs font-mono">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
+          <XAxis type="number" stroke="#52525b" hide />
+          <YAxis dataKey="name" type="category" stroke="#a1a1aa" width={120} tickLine={false} axisLine={false} fontSize={11} />
+          <Tooltip
+            contentStyle={{ backgroundColor: '#18181b', borderColor: '#3f3f46', color: '#fff', borderRadius: '6px' }}
+            formatter={(v: number, _name: string, entry: any) => {
+              const total = data.reduce((acc, d) => acc + d.amount, 0);
+              const share = total > 0 ? ` (${((entry.payload.amount / total) * 100).toFixed(1)}%)` : '';
+              return [`${fmtBRL(v)}${share}`, 'Total'];
+            }}
+          />
+          <Bar dataKey="amount" name="Total" radius={[0, 4, 4, 0]} barSize={14}>
+            {data.map((d, i) => (
+              <Cell key={i} fill={color} fillOpacity={0.55 + (0.45 * (data.length - i)) / data.length} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
