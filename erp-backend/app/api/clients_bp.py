@@ -473,42 +473,10 @@ def update_client(client_id):
         _log_interaction(client_id, "OBSERVACAO", "Fonte do lead: " + _fmt_log(old_source) + " -> " + _fmt_log(client.lead_source))
     if client.campaign != old_campaign:
         _log_interaction(client_id, "OBSERVACAO", "Campanha: " + _fmt_log(old_campaign) + " -> " + _fmt_log(client.campaign))
-    # Automacao: venda fechada cria projeto (idempotente)
-    if client.funnel_status != old_funnel and client.funnel_id:
-        try:
-            funnel = db.session.get(Funnel, client.funnel_id)
-            if funnel and funnel.kind == "CRM":
-                cols = db.session.query(FunnelColumn).filter_by(funnel_id=funnel.id).order_by(FunnelColumn.position.desc()).all()
-                if cols:
-                    last_key = cols[0].column_key
-                    # A ultima coluna do funil CRM padrao e "PERDIDO": posicao
-                    # nao indica venda fechada. Ver is_won_status.
-                    if is_won_status(client.funnel_status, last_key):
-                        # Data de fechamento: base da meta comercial e da comissao.
-                        client.closed_at = utcnow()
-                        # Verifica se ja existe projeto ativo para este cliente (nao CONCLUIDO)
-                        existing = db.session.query(Project).filter(Project.client_id == client.id, Project.status != "CONCLUIDO").first()
-                        if not existing:
-                            # Determinar valor: negotiation_value (soma itens) ou estimated_value
-                            try:
-                                val = client.negotiation_value
-                            except:  # noqa: E722
-                                val = None
-                            if val is None:
-                                val = client.estimated_value
-                            # Steps default do projeto (mesmo de create_project)
-                            default_steps = [{"id": "1", "label": "Orcamento apresentado", "completed": False}, {"id": "2", "label": "Orcamento aprovado", "completed": False}, {"id": "3", "label": "Medicao tecnica", "completed": False}, {"id": "4", "label": "Aguardando materiais", "completed": False}, {"id": "5", "label": "Corte e producao", "completed": False}, {"id": "6", "label": "Montagem", "completed": False}]
-                            # Tentar pegar funnel default de PROJECTS para o projeto
-                            proj_funnel = db.session.query(Funnel).filter_by(kind="PROJECTS", is_default=True).first()
-                            proj = Project(title=client.name, client_id=client.id, description="", status="ORCAMENTO", value=val or 0, steps=default_steps, funnel_id=proj_funnel.id if proj_funnel else None)
-                            db.session.add(proj)
-                            # Nao commit aqui; commit externo vai persistir
-                    elif is_lost_status(client.funnel_status):
-                        # Perdido nao e venda: sai da meta comercial.
-                        client.closed_at = None
-        except Exception as e:
-            # Nao quebrar o update do cliente se a automacao falhar; apenas log
-            import logging; logging.getLogger(__name__).exception("Venda fechada automacao falhou: %s", e)
+    # Automacao de venda fechada REMOVIDA (2026-10-01): arrastar o card para a
+    # etapa de ganho nao atualiza mais meta/comissao/CRM nem cria projeto — a
+    # venda passa a ser gerada na tela "Gerar venda" (POST /api/sales), que
+    # grava sale_concluded_at/closed_at e cria contas a receber + producao.
     try:
         db.session.commit()
     except IntegrityError:

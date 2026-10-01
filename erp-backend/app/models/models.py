@@ -433,6 +433,8 @@ class Project(db.Model):
             "warranty_months": self.warranty_months,
             "warranty_until": iso(self.warranty_until),
             "in_warranty": self.warranty_until is not None and self.warranty_until >= date.today(),
+            "sale_id": self.sale_id,
+            "sale_code": self.sale.code if self.sale else None,
             "environments": [e.to_dict() for e in getattr(self, "environments", [])],
             "total_area_m2": float(sum((num(e.area_m2) or 0) for e in getattr(self, "environments", []))),
             "total_environments": len(getattr(self, "environments", [])),

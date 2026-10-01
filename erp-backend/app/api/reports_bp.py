@@ -22,7 +22,7 @@ from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
     CalendarEvent, Client, FinancialRecord, Machine, Partner, ProductionIssue, Project,
-    ProjectEnvironment, ServiceTicket, StockItem, StockMovement, TimeEntry, Worker,
+    ProjectEnvironment, Sale, SaleItem, ServiceTicket, StockItem, StockMovement, TimeEntry, Worker,
 )
 
 bp = Blueprint("reports", __name__)
@@ -922,6 +922,23 @@ def _build_crm():
         for r in partner_sales if r["clients_count"] > 0
     ][:10]
 
+    # Produtos mais vendidos: itens de vendas CONCLUIDAS (sale_items), nunca
+    # itens de negociacao em aberto. Ordena por quantidade; empate por nome.
+    top_map = {}
+    for item in db.session.query(SaleItem).all():
+        g = top_map.setdefault(item.name or "Sem nome",
+                               {"name": item.name or "Sem nome", "qty": 0.0, "receita": 0.0})
+        g["qty"] += float(item.quantity or 0)
+        g["receita"] += float(item.subtotal or 0)
+    top_list = [{"name": g["name"], "qty": g["qty"], "receita": g["receita"]}
+                for g in top_map.values()]
+    total_qty = sum(t["qty"] for t in top_list)
+    top_list.sort(key=lambda t: (-t["qty"], t["name"]))
+    top_products = [
+        {**t, "share": round(t["qty"] / total_qty * 100, 1) if total_qty else 0}
+        for t in top_list[:8]
+    ]
+
     return {
         "periodo": {"date_from": iso(df), "date_to": iso(dt)},
         "negociacoes": {"total": len(clients), "por_etapa": by_stage,
@@ -934,6 +951,75 @@ def _build_crm():
         "vendas_por_parceiro": vendas_por_parceiro,
         "parceiros": partner_sales,
         "partner_clients_count": partner_clients_count,
+        "top_products": top_products,
+    }
+
+
+# ── Produtos vendidos ──────────────────────────────────────────
+
+def _build_best_products():
+    today = date.today()
+    try:
+        year = int(request.args.get("year") or today.year)
+    except (TypeError, ValueError):
+        year = today.year
+    month_raw = request.args.get("month") or ""
+    try:
+        month = int(month_raw) if month_raw else None
+    except (TypeError, ValueError):
+        month = None
+
+    q = db.session.query(SaleItem).join(Sale, SaleItem.sale_id == Sale.id)
+    if month:
+        q = q.filter(extract("year", Sale.sale_date) == year,
+                     extract("month", Sale.sale_date) == month)
+    else:
+        q = q.filter(extract("year", Sale.sale_date) == year)
+
+    agg = {}
+    for item in q.all():
+        key = item.name or "Sem nome"
+        g = agg.setdefault(key, {"produto": key, "qtd": 0.0, "receita": 0.0})
+        g["qtd"] += float(item.quantity or 0)
+        g["receita"] += float(item.subtotal or 0)
+
+    rows = []
+    for name, g in sorted(agg.items(), key=lambda kv: (-kv[1]["qtd"], kv[0])):
+        qtd = g["qtd"]
+        receita = g["receita"]
+        rows.append({
+            "produto": name,
+            "qtd": qtd,
+            "receita": receita,
+            "preco_medio": (receita / qtd) if qtd else 0.0,
+        })
+
+    total_qtd = sum(r["qtd"] for r in rows)
+    total_receita = sum(r["receita"] for r in rows)
+    return {
+        "title": "Relatório de Produtos Vendidos",
+        "generated_at": _now_iso(),
+        "filters_applied": {"year": year, "month": month_raw or "todos"},
+        "summary": [
+            {"label": "Produtos distintos", "value": str(len(rows)), "tone": "neutral"},
+            {"label": "Unidades vendidas", "value": str(int(total_qtd)), "tone": "neutral"},
+            {"label": "Receita total", "value": _fmt_brl(total_receita), "tone": "positive"},
+        ],
+        "columns": [
+            {"key": "produto", "label": "Produto"},
+            {"key": "qtd", "label": "Qtd vendida"},
+            {"key": "receita", "label": "Receita"},
+            {"key": "preco_medio", "label": "Preço médio"},
+        ],
+        "rows": [
+            {
+                "produto": r["produto"],
+                "qtd": str(int(r["qtd"]) if r["qtd"] == int(r["qtd"]) else r["qtd"]),
+                "receita": _fmt_brl(r["receita"]),
+                "preco_medio": _fmt_brl(r["preco_medio"]),
+            }
+            for r in rows
+        ],
     }
 
 
@@ -1324,6 +1410,7 @@ _BUILDERS = {
     "tickets": (_build_tickets, "relatorio-tickets"),
     "production": (_build_production, "relatorio-producao"),
     "partners": (_build_partners, "relatorio-parceiros"),
+    "best-products": (_build_best_products, "relatorio-produtos-vendidos"),
 }
 
 
@@ -1467,3 +1554,15 @@ def r_partners():
 @token_required()
 def r_partners_export():
     return _serve("partners")
+
+
+@bp.get("/api/reports/best-products")
+@token_required()
+def r_best_products():
+    return _serve("best-products")
+
+
+@bp.get("/api/reports/best-products/export")
+@token_required()
+def r_best_products_export():
+    return _serve("best-products")

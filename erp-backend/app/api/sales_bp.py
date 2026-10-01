@@ -1,0 +1,294 @@
+"""Venda do Comercial: gerar venda com automacoes.
+
+POST /api/sales  — cria a venda (concluida de uma vez) e dispara:
+  - clients.sale_concluded_at / closed_at (base da meta, comissao e CRM);
+  - contas a receber no Financeiro (entrada + 1 lancamento por parcela,
+    PENDENTE, com conta bancaria de destino e vencimento explicito);
+  - cards na Producao: um Project por ambiente vendido (sale_id vinculado).
+
+GET  /api/sales      — lista (client_name/seller_name/partner_name/bank).
+GET  /api/sales/<id> — detalhe com ambientes, itens e parcelas.
+
+Contrato financeiro: entrada + N x valor_parcela == valor_total (tolerancia
+de centavos). Items (produtos vendidos) sao detalhamento informativo — a soma
+nao precisa fechar com o total; a resposta traz items_total_diff.
+"""
+from datetime import date, timedelta
+
+from flask import Blueprint, g, jsonify, request
+
+from app.helpers import body_json, num, parse_date
+from app.auth import token_required
+from app.extensions import db
+from app.models.models import (
+    BankAccount,
+    Client,
+    FinancialRecord,
+    Funnel,
+    FunnelColumn,
+    Partner,
+    Product,
+    Project,
+    Sale,
+    SaleEnvironment,
+    SaleInstallment,
+    SaleItem,
+    User,
+    utcnow,
+)
+from app.api.clients_bp import _log_interaction
+
+bp = Blueprint("sales", __name__)
+
+WRITE_ROLES = ["ADMIN", "GERENTE"]
+
+# Mesmos steps que o front usava ao concluir venda (producao).
+STEPS_DEFAULT_PRODUCAO = [
+    {"id": "1", "label": "Medição técnica in loco", "completed": False},
+    {"id": "2", "label": "Apresentação e plano de corte 3D", "completed": False},
+    {"id": "3", "label": "Corte e colagem de fita de borda", "completed": False},
+    {"id": "4", "label": "Usinagem de furos e ferragens", "completed": False},
+    {"id": "5", "label": "Montagem prévia fábrica", "completed": False},
+    {"id": "6", "label": "Instalação final no cliente", "completed": False},
+]
+
+CATEGORIA_VENDA = "Venda de Móveis"
+PLANO_CONTA_VENDA = "1.1"  # Venda de produtos (plano de contas importado)
+
+
+def _resolve_code():
+    n = db.session.query(Sale).count()
+    return "V-%04d" % (n + 1)
+
+
+def _first_production_status():
+    funnel = db.session.query(Funnel).filter_by(kind="PROJECTS", is_default=True).first()
+    if not funnel:
+        return "ORCAMENTO", None
+    col = (
+        db.session.query(FunnelColumn)
+        .filter_by(funnel_id=funnel.id)
+        .order_by(FunnelColumn.position)
+        .first()
+    )
+    return (col.column_key if col else "ORCAMENTO"), funnel.id
+
+
+def _sale_detail(sale):
+    d = sale.to_dict()
+    d["items_total_diff"] = round(
+        float(sale.total_value or 0) - sum(i.subtotal for i in sale.items), 2
+    )
+    d["projects"] = [p.title for p in sale.projects]
+    return d
+
+
+@bp.get("/api/sales")
+@token_required()
+def list_sales():
+    rows = db.session.query(Sale).order_by(Sale.concluded_at.desc()).all()
+    return jsonify([{"id": s.id, "code": s.code, "client_id": s.client_id,
+                     "client_name": s.client.name if s.client else None,
+                     "sale_date": s.sale_date.isoformat(),
+                     "total_value": num(s.total_value),
+                     "seller_name": s.seller.username if s.seller else None,
+                     "partner_name": s.partner.name if s.partner else None,
+                     "concluded_at": s.concluded_at.isoformat() if s.concluded_at else None,
+                     "delivery_date": s.delivery_date.isoformat() if s.delivery_date else None}
+                    for s in rows])
+
+
+@bp.get("/api/sales/<sale_id>")
+@token_required()
+def get_sale(sale_id):
+    sale = db.session.get(Sale, sale_id)
+    if not sale:
+        return jsonify({"detail": "Venda nao encontrada"}), 404
+    return jsonify(_sale_detail(sale))
+
+
+@bp.post("/api/sales")
+@token_required(roles=WRITE_ROLES)
+def create_sale():
+    data = body_json()
+
+    client = db.session.get(Client, data.get("client_id") or "")
+    if not client:
+        return jsonify({"detail": "Cliente nao encontrado"}), 404
+
+    seller = None
+    if data.get("seller_id"):
+        seller = db.session.get(User, data["seller_id"])
+        if not seller:
+            return jsonify({"detail": "Vendedor nao encontrado"}), 404
+    partner = None
+    if data.get("partner_id"):
+        partner = db.session.get(Partner, data["partner_id"])
+        if not partner:
+            return jsonify({"detail": "Parceiro nao encontrado"}), 404
+    bank = None
+    if data.get("bank_account_id"):
+        bank = db.session.get(BankAccount, data["bank_account_id"])
+        if not bank:
+            return jsonify({"detail": "Conta bancaria nao encontrada"}), 404
+
+    sale_date = parse_date(data.get("sale_date"))
+    if sale_date is None:
+        return jsonify({"detail": "sale_date e obrigatoria (formato AAAA-MM-DD)"}), 400
+    try:
+        total_value = float(data.get("total_value") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"detail": "total_value invalido"}), 400
+    if total_value <= 0:
+        return jsonify({"detail": "total_value deve ser maior que zero"}), 400
+    try:
+        down_payment = float(data.get("down_payment") or 0)
+    except (TypeError, ValueError):
+        down_payment = 0.0
+    if down_payment < 0:
+        return jsonify({"detail": "down_payment nao pode ser negativo"}), 400
+    try:
+        installments = int(data.get("installments") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"detail": "installments invalido"}), 400
+    if installments < 0 or installments > 60:
+        return jsonify({"detail": "installments deve estar entre 0 e 60"}), 400
+    try:
+        installment_value = float(data.get("installment_value") or 0)
+    except (TypeError, ValueError):
+        installment_value = 0.0
+    if installment_value < 0:
+        return jsonify({"detail": "installment_value nao pode ser negativo"}), 400
+
+    # Contrato financeiro: entrada + parcelas == total
+    if round(down_payment + installments * installment_value, 2) != round(total_value, 2):
+        return jsonify({"detail": "Entrada + parcelas deve totalizar o valor da venda (R$ %.2f)" % total_value}), 400
+    if installments == 0 and round(down_payment, 2) != round(total_value, 2):
+        return jsonify({"detail": "Venda a vista: entrada deve ser o valor total (R$ %.2f)" % total_value}), 400
+
+    raw_due = data.get("installments_due") or []
+    if installments > 0:
+        if not isinstance(raw_due, list) or len(raw_due) != installments:
+            return jsonify({"detail": "Informe um vencimento para cada parcela (%d)" % installments}), 400
+        due_dates = []
+        for raw in raw_due:
+            d = parse_date(raw)
+            if d is None:
+                return jsonify({"detail": "Vencimento de parcela invalido"}), 400
+            due_dates.append(d)
+    else:
+        due_dates = []
+
+    # Items (produtos vendidos — detalhamento informativo)
+    items = []
+    for it in data.get("items") or []:
+        name = (it.get("name") or "").strip()
+        product_id = it.get("product_id")
+        if product_id:
+            prod = db.session.get(Product, product_id)
+            if not prod:
+                return jsonify({"detail": "Produto nao encontrado no catalogo"}), 400
+            if not name:
+                name = prod.name
+        if not name:
+            return jsonify({"detail": "Item de venda sem nome"}), 400
+        try:
+            qty = float(it.get("quantity") or 1)
+        except (TypeError, ValueError):
+            return jsonify({"detail": "Quantidade de item invalida"}), 400
+        if qty <= 0:
+            return jsonify({"detail": "Quantidade de item deve ser maior que zero"}), 400
+        try:
+            up = float(it.get("unit_price") or 0)
+        except (TypeError, ValueError):
+            up = 0.0
+        if up < 0:
+            return jsonify({"detail": "Preco unitario nao pode ser negativo"}), 400
+        items.append({"product_id": product_id, "name": name, "quantity": qty, "unit_price": up})
+
+    env_names = []
+    for raw in data.get("environments") or []:
+        name = (raw or "").strip()
+        if name and name not in env_names:
+            env_names.append(name)
+
+    delivery_date = parse_date(data.get("delivery_date"))
+
+    # ── Transacao unica ──
+    if client.sale_concluded_at is None:
+        client.sale_concluded_at = utcnow()
+    if client.closed_at is None:
+        client.closed_at = client.sale_concluded_at
+
+    code = _resolve_code()
+    sale = Sale(
+        code=code,
+        client_id=client.id,
+        seller_id=seller.id if seller else None,
+        partner_id=partner.id if partner else None,
+        lead_source=(data.get("lead_source") or "").strip(),
+        sale_date=sale_date,
+        total_value=total_value,
+        down_payment=down_payment,
+        installments=installments,
+        installment_value=installment_value,
+        bank_account_id=bank.id if bank else None,
+        address=(data.get("address") or "").strip(),
+        delivery_date=delivery_date,
+        created_by=getattr(g, "current_user", None).username if getattr(g, "current_user", None) else "",
+    )
+    db.session.add(sale)
+    db.session.flush()
+
+    for name in env_names:
+        db.session.add(SaleEnvironment(sale_id=sale.id, name=name))
+    for it in items:
+        db.session.add(SaleItem(sale_id=sale.id, product_id=it["product_id"],
+                                name=it["name"], quantity=it["quantity"],
+                                unit_price=it["unit_price"]))
+
+    # Contas a receber: entrada + parcelas
+    if down_payment > 0:
+        rec = FinancialRecord(
+            description=f"Entrada – Venda {code} – {client.name}",
+            type="ENTRADA", category=CATEGORIA_VENDA, amount=down_payment,
+            date=sale_date, status="PENDENTE", due_date=sale_date,
+            client_id=client.id, bank_account_id=bank.id if bank else None,
+            account_plan=PLANO_CONTA_VENDA,
+        )
+        db.session.add(rec)
+    for i, due in enumerate(due_dates, start=1):
+        rec = FinancialRecord(
+            description=f"Venda {code} – parcela {i}/{len(due_dates)} – {client.name}",
+            type="ENTRADA", category=CATEGORIA_VENDA, amount=installment_value,
+            date=due, status="PENDENTE", due_date=due,
+            client_id=client.id, bank_account_id=bank.id if bank else None,
+            account_plan=PLANO_CONTA_VENDA,
+        )
+        db.session.add(rec)
+        db.session.flush()
+        db.session.add(SaleInstallment(sale_id=sale.id, due_date=due,
+                                       value=installment_value, status="PENDENTE",
+                                       financial_record_id=rec.id))
+
+    # Cards de producao: um por ambiente (ou 1 generico)
+    first_key, proj_funnel_id = _first_production_status()
+    card_titles = [f"{name} – {client.name}" for name in env_names]
+    if not card_titles:
+        card_titles = [f"Projeto – {client.name}"]
+    for title in card_titles:
+        db.session.add(Project(
+            title=title, client_id=client.id, description="",
+            status=first_key, value=0, deadline=delivery_date,
+            steps=STEPS_DEFAULT_PRODUCAO, funnel_id=proj_funnel_id,
+            sale_id=sale.id,
+        ))
+
+    _log_interaction(
+        client.id, "SISTEMA",
+        f"Venda {code} gerada — R$ {total_value:,.2f}, {len(due_dates)} parcela(s), "
+        f"{len(env_names)} ambiente(s) — contas a receber e Produção criados.",
+    )
+
+    db.session.commit()
+    return jsonify(_sale_detail(sale)), 201

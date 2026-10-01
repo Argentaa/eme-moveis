@@ -1015,20 +1015,23 @@ def test_sales_goal_crud_and_summary(client):
     assert body["achieved"] == "R$ 0,00" and body["percent"] == "0,0%"
     assert body["deals_closed"] == 0 and body["undated"] == 0
 
-    # ── fecha uma venda: move o cliente para a etapa de GANHO do funil.
-    # Nao usar a ultima coluna por posicao: no funil CRM padrao ela e PERDIDO.
-    funnels = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"}).get_json()
-    fid = funnels[0]["id"]
-    won_key = next(c["column_key"] for c in funnels[0]["columns"] if c["column_key"] == "FECHAMENTO")
+    # ── fecha uma venda: via POST /api/sales (tela Gerar venda). Arrastar o
+    # card para a etapa de ganho NAO atualiza mais meta/comissao/CRM.
     cr = client.post("/api/clients", headers=h,
-                     json={"name": "Cliente Fechado", "funnel_id": fid, "estimated_value": 4000})
+                     json={"name": "Cliente Fechado", "estimated_value": 4000})
     assert cr.status_code == 201, cr.get_data(as_text=True)
     cid = cr.get_json()["id"]
     assert cr.get_json()["closed_at"] is None  # ainda nao fechado
 
-    up = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": won_key})
-    assert up.status_code == 200, up.get_data(as_text=True)
-    assert up.get_json()["closed_at"], "closed_at deveria ser gravado ao entrar na etapa de ganho"
+    up = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": "FECHAMENTO"})
+    assert up.status_code == 200 and up.get_json()["closed_at"] is None
+    sale = client.post("/api/sales", headers=h, json={
+        "client_id": cid, "total_value": 4000, "down_payment": 4000,
+        "installments": 0, "installment_value": 0, "installments_due": [],
+        "sale_date": date.today().isoformat(), "environments": [],
+    })
+    assert sale.status_code == 201, sale.get_data(as_text=True)
+    assert client.get(f"/api/clients/{cid}", headers=h).get_json()["closed_at"]
 
     # marco continua zerado: a venda fechou AGORA, nao em marco -> prova o filtro de periodo
     s2 = client.get("/api/goals/summary", headers=h, query_string={"year": cur_year, "month": 3})
@@ -1097,7 +1100,16 @@ def test_perdido_nao_conta_como_venda(client):
 
     up = client.put(f"/api/clients/{ganho}", headers=h, json={"funnel_status": "FECHAMENTO"})
     assert up.status_code == 200, up.get_data(as_text=True)
-    assert up.get_json()["closed_at"], "ganho deve ter data de fechamento"
+    # arrastar para a etapa de ganho nao atualiza mais nada (so a tela Gerar venda)
+    assert up.get_json()["closed_at"] is None
+
+    # fecha a venda de verdade pela tela Gerar venda
+    sale = client.post("/api/sales", headers=h, json={
+        "client_id": ganho, "total_value": 2000, "down_payment": 2000,
+        "installments": 0, "installment_value": 0, "installments_due": [],
+        "sale_date": date.today().isoformat(), "environments": [],
+    })
+    assert sale.status_code == 201, sale.get_data(as_text=True)
 
     # a meta enxerga o ganho (2000), nunca o perdido (5000)
     client.post("/api/goals", headers=h,
@@ -1109,8 +1121,8 @@ def test_perdido_nao_conta_como_venda(client):
 
     # e nao criou projeto para o cliente perdido
     titulos = [p["title"] for p in client.get("/api/projects", headers=h).get_json()]
-    assert "Cliente Ganho" in titulos, "venda ganha deveria criar projeto"
-    assert "Cliente Perdido" not in titulos, "cliente perdido nao pode criar projeto"
+    assert any("Cliente Ganho" in t for t in titulos), "venda ganha deveria criar projeto"
+    assert not any("Cliente Perdido" in t for t in titulos), "cliente perdido nao pode criar projeto"
 
 
 def test_assembly_event_fields(client):
@@ -3582,86 +3594,34 @@ def test_saldo_baixo_alerta(client):
     assert after == before
 
 
-def test_venda_fechada_cria_projeto(client):
+def test_venda_fechada_cria_cards_por_ambiente(client):
+    """Apartamento inteiro: gerar venda cria 1 card de producao por ambiente
+    (Sala, Cozinha, Banheiro, Quarto) — e arrastar para a etapa de ganho
+    sozinho nao cria nada."""
     h = _login(client)
-    # cria Client via API autenticado
-    r = client.post(
-        "/api/clients",
-        headers=h,
-        json={"name": "Cliente Teste Venda", "estimated_value": 5000, "lead_source": "Instagram", "funnel_status": "PROSPECCAO"},
-    )
-    assert r.status_code == 201, r.get_data(as_text=True)
-    body = r.get_json()
-    cid = body["id"]
-    cname = body["name"]
-    # verifica qual e a ultima coluna do funil CRM default
-    r = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"})
-    assert r.status_code == 200, r.get_data(as_text=True)
-    funnels = r.get_json()
-    crm_default = next((f for f in funnels if f.get("is_default")), funnels[0] if funnels else None)
-    assert crm_default is not None, "funil CRM default nao encontrado"
-    fid = crm_default["id"]
-    cols = sorted(crm_default.get("columns", []), key=lambda c: c.get("position", 0))
-    # Se nao existir VENDA_FECHADA, criar via POST /api/funnels/<id>/columns
-    keys = [c.get("column_key") for c in cols]
-    last_key = cols[-1]["column_key"] if cols else None
-    if "VENDA_FECHADA" not in keys:
-        # tenta criar VENDA_FECHADA como ultima coluna
-        rc = client.post(f"/api/funnels/{fid}/columns", headers=h, json={"label": "Venda Fechada"})
-        # se ja existir ou falha, ignora; re-busca funil
-        if rc.status_code in (200, 201):
-            r = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"})
-            funnels = r.get_json()
-            crm_default = next((f for f in funnels if f.get("id") == fid), next((f for f in funnels if f.get("is_default")), funnels[0]))
-            cols = sorted(crm_default.get("columns", []), key=lambda c: c.get("position", 0))
-            last_key = cols[-1]["column_key"] if cols else "VENDA_FECHADA"
-        else:
-            # fallback: usa VENDA_FECHADA diretamente (ou ultima conhecida)
-            last_key = "VENDA_FECHADA"
-    else:
-        # garante que ultima seja VENDA_FECHADA reordenando se preciso
-        # se VENDA_FECHADA nao for a ultima, move para ultima posicao via PUT position
-        if last_key != "VENDA_FECHADA":
-            max_pos = max(c.get("position", 0) for c in cols)
-            client.put(f"/api/funnels/{fid}/columns/VENDA_FECHADA", headers=h, json={"position": max_pos + 1})
-            r = client.get("/api/funnels", headers=h, query_string={"kind": "CRM"})
-            funnels = r.get_json()
-            crm_default = next((f for f in funnels if f.get("id") == fid), funnels[0])
-            cols = sorted(crm_default.get("columns", []), key=lambda c: c.get("position", 0))
-            last_key = cols[-1]["column_key"] if cols else "VENDA_FECHADA"
-    # faz PUT para venda fechada (ultima coluna)
-    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": last_key})
-    assert r.status_code == 200, r.get_data(as_text=True)
-    # verifica que GET /api/projects lista contem projeto com client_id igual e title igual ao nome
-    r = client.get("/api/projects", headers=h)
-    assert r.status_code == 200
-    projs = [p for p in r.get_json() if p.get("client_id") == cid]
-    assert len(projs) == 1, f"esperado 1 projeto para cliente {cid}, obtido {projs}"
-    proj = projs[0]
-    assert proj["title"] == cname or cname in proj["title"] or proj["title"] in cname
-    assert proj["status"] == "ORCAMENTO"
-    # value igual ao estimated_value (5000) ou negotiation_value
-    val = proj.get("value")
-    assert val == 5000 or val == 5000.0 or val == 5000.00, f"value {val} != 5000"
-    # idempotencia: segundo PUT mesmo funnel_status nao duplica
-    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": last_key})
-    assert r.status_code == 200, r.get_data(as_text=True)
-    r = client.get("/api/projects", headers=h)
-    projs2 = [p for p in r.get_json() if p.get("client_id") == cid]
-    assert len(projs2) == 1, f"idempotencia falhou: {len(projs2)} projetos apos segundo PUT"
-    # mudar para outro status nao cria e depois voltar nao duplica quando ja houver projeto ativo
-    other_key = next((c.get("column_key") for c in cols if c.get("column_key") != last_key), "PROSPECCAO")
-    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": other_key})
-    assert r.status_code == 200, r.get_data(as_text=True)
-    r = client.get("/api/projects", headers=h)
-    projs3 = [p for p in r.get_json() if p.get("client_id") == cid]
-    assert len(projs3) == 1, f"mudanca para {other_key} criou projeto indevido: {len(projs3)}"
-    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": last_key})
-    assert r.status_code == 200, r.get_data(as_text=True)
-    r = client.get("/api/projects", headers=h)
-    projs4 = [p for p in r.get_json() if p.get("client_id") == cid]
-    assert len(projs4) == 1, f"voltar para {last_key} duplicou: {len(projs4)}"
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Apt", "cpf_cnpj": "apt1",
+                            "funnel_status": "FECHAMENTO"}).get_json()["id"]
+    up = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": "FECHAMENTO"})
+    assert up.status_code == 200 and up.get_json()["closed_at"] is None
+    projs0 = client.get("/api/projects", headers=h).get_json()
+    assert not [p for p in projs0 if p.get("client_id") == cid]
 
+    sale = client.post("/api/sales", headers=h, json={
+        "client_id": cid, "total_value": 20000, "down_payment": 20000,
+        "installments": 0, "installment_value": 0, "installments_due": [],
+        "sale_date": date.today().isoformat(),
+        "environments": ["Cozinha", "Sala", "Banheiro", "Quarto"],
+    })
+    assert sale.status_code == 201, sale.get_data(as_text=True)
+    sid = sale.get_json()["id"]
+    cards = [x for x in client.get("/api/projects", headers=h).get_json()
+             if x.get("sale_id") == sid]
+    assert len(cards) == 4
+    assert sorted(x["title"] for x in cards) == [
+        "Banheiro – Cliente Apt", "Cozinha – Cliente Apt",
+        "Quarto – Cliente Apt", "Sala – Cliente Apt",
+    ]
 
 def test_alertas_financeiros(client):
     h = _login(client)
@@ -4079,14 +4039,21 @@ def test_commissions_calculation(client):
     assert regra["seller_name"] == "admin"
     assert regra["active"] is True
 
-    # venda fechada: cliente com vendedor e valor, movido para etapa de GANHO
+    # venda fechada: cliente com vendedor e valor, fechado pela tela Gerar venda
     cid = client.post("/api/clients", headers=h, json={
         "name": "Cliente Comissao QA", "estimated_value": 10000, "seller_id": admin_id,
     }).get_json()["id"]
     r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": "FECHAMENTO"})
     assert r.status_code == 200, r.get_data(as_text=True)
     assert r.get_json()["seller_id"] == admin_id, r.get_json()["seller_id"]
-    assert r.get_json()["closed_at"], "entrar em etapa de ganho tem que gravar closed_at"
+    assert r.get_json()["closed_at"] is None  # o funil sozinho nao fecha mais
+    sale = client.post("/api/sales", headers=h, json={
+        "client_id": cid, "seller_id": admin_id, "total_value": 10000,
+        "down_payment": 10000, "installments": 0, "installment_value": 0,
+        "installments_due": [], "sale_date": date.today().isoformat(), "environments": [],
+    })
+    assert sale.status_code == 201, sale.get_data(as_text=True)
+    assert client.get(f"/api/clients/{cid}", headers=h).get_json()["closed_at"]
 
     hoje = date.today()
     rel = client.get(f"/api/commissions?year={hoje.year}&month={hoje.month}", headers=h)
@@ -5007,3 +4974,223 @@ def test_sale_modelo_campos(client):
         assert hasattr(SaleEnvironment, "name")
         assert hasattr(SaleItem, "product_id") and hasattr(SaleItem, "unit_price")
         assert hasattr(Project, "sale_id")
+
+
+# ── Venda (Gerar venda + automações) ──────────────────────────
+
+def _mk_sale_client(client, h, name="Cliente Venda"):
+    return client.post("/api/clients", headers=h, json={"name": name, "cpf_cnpj": name}).get_json()["id"]
+
+
+def _mk_sale_bank(client, h, name="Banco Venda"):
+    return client.post("/api/bank-accounts", headers=h, json={
+        "name": name, "bank": "Teste", "agency": "1", "account_number": "1",
+        "account_type": "CORRENTE", "opening_balance": 0,
+    }).get_json()["id"]
+
+
+def _mk_sale_seller(client):
+    import uuid
+    from app.extensions import db
+    from app.auth import hash_password
+    from app.models.models import User
+    with client.application.app_context():
+        u = User(username="vendedor." + uuid.uuid4().hex[:8], name="Vendedor Um",
+                 email=uuid.uuid4().hex[:8] + "@test.local", role="GERENTE",
+                 password=hash_password("x12345"))
+        db.session.add(u)
+        db.session.commit()
+        return u.id
+
+
+def _mk_sale_partner(client, h, name="Escritorio Venda"):
+    return client.post("/api/partners", headers=h, json={"name": name}).get_json()["id"]
+
+
+def _sale_payload(client, h, client_id, **over):
+    payload = {
+        "client_id": client_id,
+        "seller_id": _mk_sale_seller(client),
+        "partner_id": _mk_sale_partner(client, h),
+        "lead_source": "Indicacao",
+        "sale_date": "2026-10-05",
+        "total_value": 10000,
+        "down_payment": 1000,
+        "installments": 3,
+        "installment_value": 3000,
+        "installments_due": ["2026-11-05", "2026-12-05", "2027-01-05"],
+        "bank_account_id": _mk_sale_bank(client, h),
+        "address": "Rua X, 123",
+        "delivery_date": "2026-12-20",
+        "environments": ["Sala", "Cozinha"],
+    }
+    payload.update(over)
+    return payload
+
+
+def test_sale_genera_venda_automatizada(client):
+    """Gerar venda: marca o cliente como concluido, cria contas a receber (entrada
+    + parcelas) com vencimentos/conta, e um card de producao por ambiente."""
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    payload = _sale_payload(client, h, cid)
+    r = client.post("/api/sales", headers=h, json=payload)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["code"] == "V-0001"
+    assert [e["name"] for e in body["environments"]] == ["Sala", "Cozinha"]
+    cli = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert cli["sale_concluded_at"] and cli["closed_at"]
+    fins = client.get("/api/financial", headers=h).get_json()
+    novos = [f for f in fins if f["client_id"] == cid and f["account_plan"] == "1.1"]
+    assert len(novos) == 4
+    entrada = next(f for f in novos if "Entrada" in f["description"])
+    assert entrada["amount"] == 1000 and entrada["status"] == "PENDENTE"
+    parcelas = sorted([f for f in novos if "parcela" in f["description"]], key=lambda f: f["due_date"])
+    assert [f["amount"] for f in parcelas] == [3000, 3000, 3000]
+    assert [f["due_date"] for f in parcelas] == ["2026-11-05", "2026-12-05", "2027-01-05"]
+    assert all(f["bank_account_id"] == payload["bank_account_id"] for f in novos)
+    projs = client.get("/api/projects", headers=h).get_json()
+    cards = [p for p in projs if p.get("sale_id") == body["id"]]
+    assert len(cards) == 2
+    assert sorted(p["title"] for p in cards) == ["Cozinha – Cliente Venda", "Sala – Cliente Venda"]
+    assert all(p["deadline"] == "2026-12-20" for p in cards)
+    assert all(si["financial_record_id"] for si in body["installments_list"])
+
+
+def test_sale_valida_soma_parcelas(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    p = _sale_payload(client, h, cid, down_payment=500, installment_value=3000)
+    r = client.post("/api/sales", headers=h, json=p)
+    assert r.status_code == 400
+    assert "totalizar" in r.get_json()["detail"].lower()
+
+
+def test_sale_exige_vencimentos_por_parcela(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    p = _sale_payload(client, h, cid, installments_due=["2026-11-05"])
+    r = client.post("/api/sales", headers=h, json=p)
+    assert r.status_code == 400
+    assert "vencimento" in r.get_json()["detail"].lower()
+
+
+def test_sale_sem_ambientes_cria_card_generico(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    p = _sale_payload(client, h, cid, environments=[])
+    r = client.post("/api/sales", headers=h, json=p)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    sid = r.get_json()["id"]
+    projs = client.get("/api/projects", headers=h).get_json()
+    cards = [x for x in projs if x.get("sale_id") == sid]
+    assert len(cards) == 1 and cards[0]["title"] == "Projeto – Cliente Venda"
+
+
+def test_sale_404_seller_partner_bank_invalidos(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    p = _sale_payload(client, h, cid, seller_id="nao-existe")
+    assert client.post("/api/sales", headers=h, json=p).status_code == 404
+    p = _sale_payload(client, h, cid, partner_id="nao-existe")
+    assert client.post("/api/sales", headers=h, json=p).status_code == 404
+    p = _sale_payload(client, h, cid, bank_account_id="nao-existe")
+    assert client.post("/api/sales", headers=h, json=p).status_code == 404
+
+
+def test_sale_com_produtos_grava_itens(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    prod = client.post("/api/products", headers=h,
+                       json={"name": "Cozinha Planejada", "default_price": 6000}).get_json()
+    p = _sale_payload(client, h, cid, total_value=12000, down_payment=12000,
+                      installments=0, installment_value=0, installments_due=[],
+                      items=[{"product_id": prod["id"], "quantity": 1, "unit_price": 6000},
+                             {"name": "Painel TV", "quantity": 2, "unit_price": 2500}])
+    r = client.post("/api/sales", headers=h, json=p)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert len(body["items"]) == 2
+    cozinha = next(i for i in body["items"] if i["product_id"] == prod["id"])
+    assert cozinha["name"] == "Cozinha Planejada" and cozinha["subtotal"] == 6000
+    painel = next(i for i in body["items"] if i["name"] == "Painel TV")
+    assert painel["quantity"] == 2 and painel["subtotal"] == 5000
+    assert body["items_total_diff"] == 1000
+
+
+def test_sale_product_id_invalido_400(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    p = _sale_payload(client, h, cid, items=[{"product_id": "x", "name": "X",
+                                              "quantity": 1, "unit_price": 1}])
+    assert client.post("/api/sales", headers=h, json=p).status_code == 400
+
+
+def test_sale_lista_e_detalhe(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    sid = client.post("/api/sales", headers=h,
+                      json=_sale_payload(client, h, cid)).get_json()["id"]
+    lst = client.get("/api/sales", headers=h).get_json()
+    assert len(lst) >= 1 and lst[0]["client_name"] == "Cliente Venda"
+    d = client.get(f"/api/sales/{sid}", headers=h).get_json()
+    assert d["code"] == "V-0001" and len(d["environments"]) == 2
+
+
+def test_funil_ganho_nao_atualiza_relatorio(client):
+    """Arrastar o card para a etapa de ganho NAO atualiza meta/relatorio nem
+    cria projeto — so a tela Gerar venda (POST /api/sales) faz isso."""
+    from app.models.models import FinancialRecord, Project
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    with client.application.app_context():
+        before_p = Project.query.count()
+        before_f = FinancialRecord.query.count()
+    r = client.put(f"/api/clients/{cid}", headers=h, json={"funnel_status": "FECHAMENTO"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    cli = r.get_json()
+    assert cli.get("sale_concluded_at") is None and cli.get("closed_at") is None
+    with client.application.app_context():
+        assert Project.query.count() == before_p
+        assert FinancialRecord.query.count() == before_f
+
+
+def test_crm_report_top_products(client):
+    h = _login(client)
+    cid1 = _mk_sale_client(client, h, "Cliente A")
+    cid2 = _mk_sale_client(client, h, "Cliente B")
+    p1 = _sale_payload(client, h, cid1, total_value=20000, down_payment=20000,
+                       installments=0, installment_value=0, installments_due=[],
+                       items=[{"name": "Cozinha", "quantity": 2, "unit_price": 6000},
+                              {"name": "Painel TV", "quantity": 1, "unit_price": 3000}])
+    assert client.post("/api/sales", headers=h, json=p1).status_code == 201
+    p2 = _sale_payload(client, h, cid2, total_value=15000, down_payment=15000,
+                       installments=0, installment_value=0, installments_due=[],
+                       items=[{"name": "Cozinha", "quantity": 1, "unit_price": 9000},
+                              {"name": "Quarto", "quantity": 3, "unit_price": 2000}])
+    assert client.post("/api/sales", headers=h, json=p2).status_code == 201
+    rel = client.get("/api/reports/crm", headers=h).get_json()
+    top = rel.get("top_products") or []
+    by_name = {t["name"]: t for t in top}
+    assert by_name["Cozinha"]["qty"] == 3 and by_name["Cozinha"]["receita"] == 21000
+    assert by_name["Painel TV"]["qty"] == 1 and by_name["Painel TV"]["receita"] == 3000
+    assert top[0]["name"] == "Cozinha"  # empate em qty resolve por nome
+
+
+def test_relatorio_produtos_vendidos(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h)
+    p = _sale_payload(client, h, cid, sale_date="2026-09-15", total_value=12000,
+                      down_payment=12000, installments=0, installment_value=0,
+                      installments_due=[],
+                      items=[{"name": "Painel TV", "quantity": 2, "unit_price": 3000}])
+    assert client.post("/api/sales", headers=h, json=p).status_code == 201
+    r = client.get("/api/reports/best-products?year=2026&month=9", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert any(row["produto"] == "Painel TV" and row["qtd"] == "2" and row["receita"] == "R$ 6.000,00"
+               for row in body["rows"]), body["rows"]
+    r2 = client.get("/api/reports/best-products?year=1999", headers=h)
+    assert r2.status_code == 200
+    assert all(row["qtd"] == 0 for row in r2.get_json()["rows"]) or not r2.get_json()["rows"]
