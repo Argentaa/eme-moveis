@@ -2,18 +2,20 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Plus, Search, Edit2, Trash2, Mail, Phone, MapPin,
   ArrowLeft, Send, RefreshCw,
-  Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, FolderPlus, Eye, Funnel as FunnelIcon, X
+  Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, BadgeDollarSign, Eye, Funnel as FunnelIcon, X
 } from 'lucide-react';
 import { FunnelStatus } from '../types';
 import { clientService, projectService, funnelService, calendarService, leadOptionService, partnerService, supplierService, getApiErrorMessage } from '../services/api';
-import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner, Supplier } from '../types';
+import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner, Supplier, Sale } from '../types';
 import ClientDetailModal from './ClientDetailModal';
+import GenerateSaleModal from './GenerateSaleModal';
 
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
 import ProposalsPanel from './ProposalsPanel';
 import CommissionsPanel from './CommissionsPanel';
 import PartnersPanel from './PartnersPanel';
 import PlanningPanel from './PlanningPanel';
+import ProductsPanel from './ProductsPanel';
 import CommercialDashboard from './CommercialDashboard';
 
 /** Abas do módulo Comercial, conforme a spec do cliente (17/09). */
@@ -24,6 +26,7 @@ const COMMERCIAL_TABS: ModuleTab[] = [
   { id: 'commissions', label: 'Comissões', ready: true },
   { id: 'partners', label: 'Parceiros/Arquitetos', ready: true },
   { id: 'planning', label: 'Planejamento comercial', ready: true },
+  { id: 'products', label: 'Produtos/Móveis', ready: true },
 ];
 
 interface ClientsViewProps {
@@ -49,10 +52,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [editingFunnelCol, setEditingFunnelCol] = useState<string | null>(null);
   const [editingFunnelLabel, setEditingFunnelLabel] = useState('');
   const [editingFunnelDesc, setEditingFunnelDesc] = useState('');
-  const [convertModalClient, setConvertModalClient] = useState<any | null>(null);
-  const [convertTitle, setConvertTitle] = useState('');
-  const [convertValue, setConvertValue] = useState('');
-  const [convertError, setConvertError] = useState('');
+  const [saleClient, setSaleClient] = useState<Client | null>(null);
+  const [saleDefaultValue, setSaleDefaultValue] = useState(0);
   const [lostModalClient, setLostModalClient] = useState<Client | null>(null);
   const [lostReason, setLostReason] = useState('');
   const [lostError, setLostError] = useState('');
@@ -418,38 +419,21 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     }
   };
 
-  const handleConvertToProject = async () => {
-    if (!convertModalClient || !convertTitle.trim()) {
-      setConvertError('O título do projeto é obrigatório.');
-      return;
+  const handleSaleSaved = (sale: Sale) => {
+    // tira o card do funil: a venda foi concluida e a Producao/Financeiro criados
+    const cid = saleClient?.id;
+    if (cid) {
+      setClients(prev => prev.map(c => (c.id === cid ? { ...c, sale_concluded_at: sale.concluded_at || new Date().toISOString() } : c)));
     }
-    setConvertError('');
-    try {
-      // concludeSale faz as duas coisas numa chamada so: marca a venda como
-      // concluida (o card sai do funil) e cria o projeto na Producao. Antes
-      // isto criava o projeto mas deixava a venda em aberto no funil.
-      await clientService.concludeSale(convertModalClient.id, {
-        title: convertTitle.trim(),
-        value: Number(convertValue) || 0,
-        steps: [
-          { id: '1', label: 'Medição técnica in loco', completed: false },
-          { id: '2', label: 'Apresentação e plano de corte 3D', completed: false },
-          { id: '3', label: 'Corte e colagem de fita de borda', completed: false },
-          { id: '4', label: 'Usinagem de furos e ferragens', completed: false },
-          { id: '5', label: 'Montagem prévia fábrica', completed: false },
-          { id: '6', label: 'Instalação final no cliente', completed: false },
-        ],
-      });
-      // tira o card do funil: a venda foi concluida e o projeto esta na Producao
-      const cid = convertModalClient.id;
-      setClients(prev => prev.map(c => (c.id === cid ? { ...c, sale_concluded_at: new Date().toISOString() } : c)));
-      setConvertModalClient(null);
-      setConvertTitle('');
-      setConvertValue('');
-      alert(`Venda concluída! O projeto "${convertTitle.trim()}" já está na Produção.`);
-    } catch (err) {
-      setConvertError(getApiErrorMessage(err, 'Erro ao concluir a venda.'));
-    }
+    const nCards = sale.projects?.length || sale.environments?.length || 1;
+    const nParc = sale.installments_list?.length || 0;
+    const totalRec = (sale.down_payment > 0 ? 'entrada' : '') + (sale.down_payment > 0 && nParc > 0 ? ' + ' : '') + (nParc > 0 ? `${nParc} parcela(s)` : '');
+    setSaleClient(null);
+    alert(
+      `Venda ${sale.code} gerada!\n` +
+      `Contas a receber criadas no Financeiro (${totalRec || 'nenhuma a receber ainda'}).\n` +
+      `${nCards} card(s) na Produção (um por ambiente).`
+    );
   };
 
   const FUNNEL_DEFAULTS_COLOR: Record<string, string> = {
@@ -765,6 +749,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       {activeTab === 'planning' && (<PlanningPanel />)}
 
+      {activeTab === 'products' && (<ProductsPanel userRole={userRole} />)}
+
       {activeTab === 'funnel' && (<>
 
       {/* Filter panel */}
@@ -945,16 +931,14 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setConvertModalClient(client);
-                                  setConvertTitle(`Projeto ${client.name}`);
                                   const dv = clientDisplayValue(client, projects).value;
-                                  setConvertValue(dv > 0 ? String(dv) : '');
-                                  setConvertError('');
+                                  setSaleDefaultValue(dv > 0 ? dv : 0);
+                                  setSaleClient(client);
                                 }}
                                 className="p-1 text-zinc-500 hover:text-emerald-400 cursor-pointer"
-                                title="Concluir venda — cria o projeto na Produção"
+                                title="Gerar venda — cadastra a venda, cria contas a receber e a Produção"
                               >
-                                <FolderPlus className="w-3.5 h-3.5" />
+                                <BadgeDollarSign className="w-3.5 h-3.5" />
                               </button>
                             )}
                             {['ADMIN', 'GERENTE'].includes(userRole) && (
@@ -1110,62 +1094,14 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       </>)}
 
-      {/* Modal Converter em Projeto */}
-      {convertModalClient && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
-            <div className="bg-zinc-950 p-5 border-b border-zinc-850 flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <FolderPlus className="w-5 h-5 text-emerald-500" />
-                <h3 className="text-base font-serif font-semibold text-white">Concluir venda</h3>
-              </div>
-              <button onClick={() => setConvertModalClient(null)} className="text-zinc-500 hover:text-white cursor-pointer font-mono text-xs">Sair</button>
-            </div>
-            <div className="p-6 space-y-4">
-              <p className="text-sm text-zinc-400">
-                Fechando a venda de <strong className="text-white">{convertModalClient.name}</strong>.
-                O card sai do funil de vendas e o projeto já entra na Produção.
-              </p>
-              <div className="space-y-2">
-                <label className="text-xs text-zinc-300 font-mono uppercase block">Título do Projeto *</label>
-                <input
-                  type="text"
-                  value={convertTitle}
-                  onChange={e => setConvertTitle(e.target.value)}
-                  placeholder="Ex: Cozinha Planejada MDF Branco"
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs text-zinc-300 font-mono uppercase block">Valor do Projeto (R$)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={convertValue}
-                  onChange={e => setConvertValue(e.target.value)}
-                  placeholder="Ex: 15000.00"
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
-                />
-              </div>
-              {convertError && <p className="text-xs text-red-400 font-mono">{convertError}</p>}
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  onClick={() => setConvertModalClient(null)}
-                  className="px-4 py-2 text-xs bg-zinc-900 text-zinc-400 rounded border border-zinc-800 cursor-pointer font-mono"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={handleConvertToProject}
-                  className="px-5 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold cursor-pointer"
-                >
-                  Concluir venda
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Modal Gerar venda */}
+      {saleClient && (
+        <GenerateSaleModal
+          client={saleClient}
+          defaultValue={saleDefaultValue}
+          onClose={() => setSaleClient(null)}
+          onSaved={handleSaleSaved}
+        />
       )}
 
       {/* Modal Negócio Perdido */}

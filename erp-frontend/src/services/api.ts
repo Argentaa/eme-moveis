@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { User, Client, Project, FinancialRecord, StockItem, StockMovement, StockLoss, StockLossKind, StockLossSummary, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
   PurchaseQuotation,
-  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage, AccountPlanCategory, AccountPlanItem } from '../types';
+  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage, AccountPlanCategory, AccountPlanItem, Sale, SaleItem, SaleInstallment } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -289,8 +289,19 @@ export const productService = {
     return response.data;
   },
 
+  /** Lista completa, incluindo inativos (aba Produtos/Móveis). */
+  async listWithInactive(): Promise<Product[]> {
+    const response = await api.get('/api/products', { params: { all: '1' } });
+    return response.data;
+  },
+
   async create(data: { name: string; default_price?: number | null; unit?: string }): Promise<Product> {
     const response = await api.post('/api/products', data);
+    return response.data;
+  },
+
+  async update(id: string, data: any): Promise<Product> {
+    const response = await api.put(`/api/products/${id}`, data);
     return response.data;
   },
 
@@ -955,6 +966,22 @@ export const funnelService = {
 
   async removeFunnelColumn(funnelId: string, columnKey: string): Promise<any> {
     const response = await api.delete(`/api/funnels/${funnelId}/columns/${columnKey}`);
+    return response.data;
+  },
+};
+
+// Venda (Gerar venda no Comercial)
+export const saleService = {
+  async create(data: any): Promise<Sale> {
+    const response = await api.post('/api/sales', data);
+    return response.data;
+  },
+  async list(): Promise<Sale[]> {
+    const response = await api.get('/api/sales');
+    return response.data;
+  },
+  async get(id: string): Promise<Sale> {
+    const response = await api.get(`/api/sales/${id}`);
     return response.data;
   },
 };

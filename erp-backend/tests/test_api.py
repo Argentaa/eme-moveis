@@ -5194,3 +5194,27 @@ def test_relatorio_produtos_vendidos(client):
     r2 = client.get("/api/reports/best-products?year=1999", headers=h)
     assert r2.status_code == 200
     assert all(row["qtd"] == 0 for row in r2.get_json()["rows"]) or not r2.get_json()["rows"]
+
+
+def test_products_update_e_reativar(client):
+    """PUT do catalogo: edicao, inativacao (some da lista normal) e reativacao."""
+    h = _login(client)
+    pid = client.post("/api/products", headers=h,
+                      json={"name": "Produto Edita", "default_price": 100}).get_json()["id"]
+    r = client.put(f"/api/products/{pid}", headers=h,
+                   json={"name": "Produto Editado", "default_price": 150, "active": False})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    row = r.get_json()
+    assert row["name"] == "Produto Editado" and row["active"] is False
+    names = [p["name"] for p in client.get("/api/products", headers=h).get_json()]
+    assert "Produto Editado" not in names
+    names_all = [p["name"] for p in client.get("/api/products?all=1", headers=h).get_json()]
+    assert "Produto Editado" in names_all
+    r2 = client.put(f"/api/products/{pid}", headers=h, json={"active": True})
+    assert r2.status_code == 200 and r2.get_json()["active"] is True
+    names2 = [p["name"] for p in client.get("/api/products", headers=h).get_json()]
+    assert "Produto Editado" in names2
+    # nome duplicado bloqueia
+    cid2 = client.post("/api/products", headers=h, json={"name": "Outro Produto"}).get_json()["id"]
+    r3 = client.put(f"/api/products/{cid2}", headers=h, json={"name": "Produto Editado"})
+    assert r3.status_code == 400

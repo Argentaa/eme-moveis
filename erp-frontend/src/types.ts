@@ -523,7 +523,7 @@ export interface StockLossSummary {
 
 // ── Relatórios ──────────────────────────────────────────────────
 
-export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'cash-flow-weekly' | 'tickets' | 'production' | 'partners';
+export type ReportArea = 'financial' | 'clients' | 'projects' | 'stock' | 'dre' | 'crm' | 'lead-sources' | 'cash-flow' | 'cash-flow-weekly' | 'tickets' | 'production' | 'partners' | 'best-products';
 
 export interface ReportColumn {
   key: string;
@@ -567,6 +567,7 @@ export interface CrmReport {
     origem?: string;
   };
   vendas_por_parceiro: unknown[];
+  top_products?: TopProduct[];
 }
 
 // ── Painel inicial: meta comercial e pendencias ──────────────────
@@ -867,4 +868,61 @@ export interface AccountPlanItem {
   category_id: string;
   category_code?: number | null;
   category_description?: string | null;
+}
+
+export interface SaleEnvironment {
+  id?: string;
+  name: string;
+}
+
+export interface SaleItem {
+  id?: string;
+  sale_id?: string;
+  product_id?: string | null;
+  name: string;
+  quantity: number;
+  unit_price: number;
+  subtotal?: number;
+}
+
+export interface SaleInstallment {
+  id?: string;
+  due_date: string;
+  value: number;
+  status?: string;
+  financial_record_id?: string | null;
+}
+
+export interface Sale {
+  id: string;
+  code: string;
+  client_id: string;
+  client_name?: string | null;
+  seller_id?: string | null;
+  seller_name?: string | null;
+  partner_id?: string | null;
+  partner_name?: string | null;
+  lead_source?: string;
+  sale_date: string;
+  total_value: number;
+  down_payment: number;
+  installments: number;
+  installment_value: number;
+  bank_account_id?: string | null;
+  bank_account_name?: string | null;
+  address?: string;
+  delivery_date?: string | null;
+  concluded_at?: string | null;
+  environments?: SaleEnvironment[];
+  items?: SaleItem[];
+  installments_list?: SaleInstallment[];
+  items_total_diff?: number;
+  projects?: string[];
+}
+
+export interface TopProduct {
+  name: string;
+  qty: number;
+  receita: number;
+  share: number;
 }

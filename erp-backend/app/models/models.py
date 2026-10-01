@@ -1993,6 +1993,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Gerar venda no Comercial com automações",
+     "O botão Concluir venda virou Gerar venda: ao fechar uma negociação, uma tela completa cadastra a venda — cliente, vendedor, arquiteto/parceiro, origem, data, valor total, condições de pagamento (entrada, parcelas com vencimento próprio e conta bancária de destino), produtos vendidos, ambientes, endereço da obra e data prevista de entrega. Ao concluir, o sistema cria na hora as contas a receber no Financeiro (entrada + parcelas) e um card de produção para cada ambiente vendido (apartamento com cozinha, sala, banheiro e quarto vira 4 cards, para acompanhar a produção de cada móvel separado). Os relatórios passam a atualizar só nessa conclusão: arrastar o card para a etapa de ganho no funil não muda mais meta, comissão e CRM. Também entrou a aba Produtos/Móveis no Comercial (cadastro do catálogo que a venda usa), o gráfico de Produtos mais vendidos no Dashboard comercial e o relatório Produtos vendidos em Relatórios.",
+     "NOVIDADE", "2026-10-01"),
     ("Plano de contas importado para o Financeiro",
      "As categorias do DRE e o plano de contas oficial agora fazem parte do sistema: 14 categorias (Receita com Vendas, Impostos Sobre Vendas, Custos Variáveis, Gastos com Pessoal etc.) e 54 contas no formato X.Y (ex.: 4.2 – Matéria-prima). No lançamento financeiro, o campo Plano de Contas virou uma lista organizada por categoria. A nova aba Plano de contas no Financeiro mostra tudo com a faixa de cada categoria no DRE (inclusive as que não entram no demonstrativo), e ADMIN/GERENTE podem ajustar ou restaurar o padrão — contas já usadas em lançamentos não podem ser excluídas.",
      "NOVIDADE", "2026-10-01"),

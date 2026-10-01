@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import { Loader2, Percent, Target, TrendingDown, Users } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
+  PieChart, Pie, Legend,
 } from 'recharts';
 import { dashboardService, getApiErrorMessage } from '../services/api';
 import { chartTooltipProps, shortTick } from './FinancialView';
@@ -21,6 +22,8 @@ import { CrmReport } from '../types';
 const fmt = (v: number) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 const ETAPA_COLORS = ['#7f1d1d', '#b91c1c', '#dc2626', '#ef4444', '#f87171', '#fca5a5'];
+
+const TRENDING_COLORS = ['#059669', '#10b981', '#34d399', '#6ee7b7', '#f59e0b', '#fbbf24', '#ef4444', '#f87171', '#3b82f6', '#60a5fa'];
 
 export default function CommercialDashboard() {
   const [rel, setRel] = useState<CrmReport | null>(null);
@@ -131,6 +134,46 @@ export default function CommercialDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="glass-panel p-5 rounded-lg">
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">
+            Produtos mais vendidos
+          </span>
+          <p className="text-[11px] text-zinc-500 font-mono mt-0.5 mb-3">
+            Vendas concluídas · passe o mouse para ver quantidade e receita
+          </p>
+          {(rel.top_products || []).length === 0 ? (
+            <p className="text-xs text-zinc-500 font-mono">Nenhuma venda concluída ainda.</p>
+          ) : (
+            <div className="h-64 text-xs font-mono">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={rel.top_products as any[]}
+                    dataKey="qty"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={80}
+                    label={({ name, share }: any) => `${name} (${share}%)`}
+                  >
+                    {(rel.top_products || []).map((_, i) => (
+                      <Cell key={i} fill={TRENDING_COLORS[i % TRENDING_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    {...chartTooltipProps}
+                    formatter={(v: number, _n: string, entry: any) => [
+                      `${v} unidade(s) · ${fmt(entry.payload.receita || 0)}`,
+                      'Produto',
+                    ]}
+                  />
+                  <Legend formatter={(value: string) => <span style={{ color: '#d4d4d8', fontSize: 11 }}>{value}</span>} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+
+        <div className="glass-panel p-5 rounded-lg">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">
             Negociações por etapa
           </span>
           <p className="text-[11px] text-zinc-500 font-mono mt-0.5 mb-3">
@@ -162,7 +205,9 @@ export default function CommercialDashboard() {
             </div>
           )}
         </div>
+      </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="glass-panel p-5 rounded-lg">
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">
             Origem dos leads
@@ -196,22 +241,22 @@ export default function CommercialDashboard() {
             </div>
           )}
         </div>
-      </div>
 
-      <div className="glass-panel p-5 rounded-lg">
-        <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block mb-3">
-          Motivos de perda
-        </span>
-        <div className="space-y-1.5">
-          {(rel.negociacoes?.perdidas || []).slice(0, 6).map((p, i) => (
-            <div key={`${p.name}-${i}`} className="text-xs font-mono">
-              <span className="text-zinc-300">{p.name}</span>
-              <span className="block text-[10px] text-zinc-500">{p.lost_reason || 'sem motivo informado'}</span>
-            </div>
-          ))}
-          {!(rel.negociacoes?.perdidas || []).length && (
-            <p className="text-xs text-zinc-500 font-mono">Nenhuma perda registrada.</p>
-          )}
+        <div className="glass-panel p-5 rounded-lg">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block mb-3">
+            Motivos de perda
+          </span>
+          <div className="space-y-1.5">
+            {(rel.negociacoes?.perdidas || []).slice(0, 6).map((p, i) => (
+              <div key={`${p.name}-${i}`} className="text-xs font-mono">
+                <span className="text-zinc-300">{p.name}</span>
+                <span className="block text-[10px] text-zinc-500">{p.lost_reason || 'sem motivo informado'}</span>
+              </div>
+            ))}
+            {!(rel.negociacoes?.perdidas || []).length && (
+              <p className="text-xs text-zinc-500 font-mono">Nenhuma perda registrada.</p>
+            )}
+          </div>
         </div>
       </div>
     </div>

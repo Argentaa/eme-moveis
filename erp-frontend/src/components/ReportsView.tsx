@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   FileBarChart, Landmark, Users, Building2, Package, Filter, RefreshCw,
-  FileText, FileSpreadsheet, Search, Loader2, Target, Wrench, Hammer
+  FileText, FileSpreadsheet, Search, Loader2, Target, Wrench, Hammer, ShoppingBag
 } from 'lucide-react';
 import { reportService, clientService, projectService, stockService, getApiErrorMessage } from '../services/api';
 import { ReportArea, ReportResult, Client, Project, Category } from '../types';
@@ -36,6 +36,7 @@ const AREAS: { id: ReportArea; label: string; icon: React.ComponentType<any>; de
   { id: 'dre', label: 'DRE', icon: Landmark, description: 'Demonstrativo de Resultado do Exercício' },
   { id: 'crm', label: 'CRM', icon: Users, description: 'Negociações, conversão, ticket médio e fluxo de caixa' },
   { id: 'lead-sources', label: 'Origem dos Leads', icon: Target, description: 'Leads por fonte ou campanha com conversão e valores' },
+  { id: 'best-products', label: 'Produtos vendidos', icon: ShoppingBag, description: 'Produtos/móveis vendidos por período (vendas concluídas)' },
   { id: 'tickets', label: 'Pós-venda', icon: Wrench, description: 'Chamados, causas, garantia e custos' },
   { id: 'production', label: 'Produção Industrial', icon: Hammer, description: 'm², ambientes, horas e ocorrências' },
 ];
@@ -50,6 +51,9 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
   const [dateTo, setDateTo] = useState('');
   const [groupBy, setGroupBy] = useState('source');
   const [leadLoading, setLeadLoading] = useState(false);
+  const [bestYear, setBestYear] = useState(new Date().getFullYear());
+  const [bestMonth, setBestMonth] = useState('');
+  const [bestLoading, setBestLoading] = useState(false);
   const [filters, setFilters] = useState<Record<string, string | boolean>>({});
   const [report, setReport] = useState<ReportResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -158,6 +162,42 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
   useEffect(() => {
     if (activeArea === 'lead-sources') loadLeadSources();
   }, [activeArea, dateFrom, dateTo, groupBy]);
+
+  const loadBestProducts = async () => {
+    setBestLoading(true);
+    setError('');
+    try {
+      const result = await reportService.getReport('best-products', {
+        year: String(bestYear),
+        month: bestMonth || undefined,
+      });
+      setReport(result);
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Erro ao carregar produtos vendidos.'));
+      setReport(null);
+    } finally {
+      setBestLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeArea === 'best-products') loadBestProducts();
+  }, [activeArea, bestYear, bestMonth]);
+
+  const handleBestExport = async (format: 'pdf' | 'xlsx') => {
+    setExporting(format);
+    setError('');
+    try {
+      await reportService.exportReport('best-products', format, {
+        year: String(bestYear),
+        month: bestMonth || undefined,
+      });
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Erro ao exportar produtos vendidos.'));
+    } finally {
+      setExporting(null);
+    }
+  };
 
   const handleLeadExport = async (format: 'pdf' | 'xlsx') => {
     setExporting(format);
@@ -485,8 +525,113 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
         </div>
       )}
 
-      {/* Filters Panel — oculto quando DRE, CRM ou Origem dos Leads está ativo */}
-      {activeArea !== 'dre' && activeArea !== 'crm' && activeArea !== 'lead-sources' && <div className="glass-panel p-5 rounded-lg space-y-4">
+      {/* Produtos vendidos Panel */}
+      {activeArea === 'best-products' && (
+        <div className="space-y-5">
+          <div className="glass-panel p-5 rounded-lg space-y-4">
+            <div className="flex items-center gap-2 text-xs text-zinc-400 font-mono uppercase tracking-wider">
+              <Filter className="w-3.5 h-3.5" /> Filtros — {AREAS.find(a => a.id === activeArea)?.label}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <FilterField label="Ano">
+                <input type="number" min={2000} max={2100} value={bestYear}
+                  onChange={e => setBestYear(Number(e.target.value) || new Date().getFullYear())}
+                  className={inputClass} />
+              </FilterField>
+              <FilterField label="Mês">
+                <select value={bestMonth} onChange={e => setBestMonth(e.target.value)} className={inputClass}>
+                  <option value="">Todos os meses</option>
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
+                    <option key={m} value={String(m)}>{String(m).padStart(2, '0')}</option>
+                  ))}
+                </select>
+              </FilterField>
+            </div>
+          </div>
+
+          {bestLoading ? (
+            <div className="flex flex-col items-center justify-center py-16">
+              <RefreshCw className="w-10 h-10 text-red-600 animate-spin mb-4" />
+              <p className="text-zinc-400 font-mono text-xs">Consultando vendas concluídas...</p>
+            </div>
+          ) : report ? (
+            <div className="space-y-5">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                <div>
+                  <h2 className="text-lg font-serif text-white">{report.title}</h2>
+                  <p className="text-[11px] text-zinc-500 font-mono">Gerado em {report.generated_at} — {report.rows.length} registro(s)</p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleBestExport('pdf')}
+                    disabled={exporting !== null}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-900 hover:bg-red-950/40 border border-zinc-800 hover:border-red-900/40 text-zinc-300 hover:text-red-400 rounded text-xs font-mono uppercase transition cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+                  >
+                    {exporting === 'pdf' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
+                    PDF
+                  </button>
+                  <button
+                    onClick={() => handleBestExport('xlsx')}
+                    disabled={exporting !== null}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-zinc-900 hover:bg-emerald-950/40 border border-zinc-800 hover:border-emerald-900/40 text-zinc-300 hover:text-emerald-400 rounded text-xs font-mono uppercase transition cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+                  >
+                    {exporting === 'xlsx' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+                    Excel
+                  </button>
+                </div>
+              </div>
+
+              {report.summary.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {report.summary.map((item, idx) => (
+                    <div key={idx} className={`glass-panel p-4 rounded-lg border-l-4 ${TONE_CLASSES[item.tone || 'neutral']}`}>
+                      <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">{item.label}</span>
+                      <p className={`text-lg font-bold font-sans mt-1 ${TONE_CLASSES[item.tone || 'neutral'].split(' ')[0]}`}>
+                        {item.value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="glass-panel rounded-lg overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm text-zinc-300">
+                    <thead className="text-xs uppercase font-mono text-zinc-500 bg-zinc-950/70 border-b border-zinc-905">
+                      <tr>
+                        {report.columns.map(col => (
+                          <th key={col.key} className="py-3.5 px-5 font-normal whitespace-nowrap">{col.label}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-900">
+                      {report.rows.map((row, idx) => (
+                        <tr key={idx} className="hover:bg-zinc-900/40">
+                          {report.columns.map(col => (
+                            <td key={col.key} className="py-3 px-5 font-sans text-xs whitespace-nowrap">
+                              {row[col.key] ?? '-'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                      {report.rows.length === 0 && (
+                        <tr>
+                          <td colSpan={report.columns.length} className="py-12 text-center text-zinc-500 font-mono">
+                            Nenhum produto vendido no período selecionado.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* Filters Panel — oculto quando DRE, CRM, Origem dos Leads ou Produtos vendidos está ativo */}
+      {activeArea !== 'dre' && activeArea !== 'crm' && activeArea !== 'lead-sources' && activeArea !== 'best-products' && <div className="glass-panel p-5 rounded-lg space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs text-zinc-400 font-mono uppercase tracking-wider">
             <Filter className="w-3.5 h-3.5" /> Filtros — {AREAS.find(a => a.id === activeArea)?.label}
@@ -715,8 +860,8 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
         </div>
       )}
 
-      {/* Report Preview — genérico para áreas standard (Origem dos Leads tem bloco próprio) */}
-      {activeArea !== 'lead-sources' && !loading && report && (
+      {/* Report Preview — genérico para áreas standard (Origem dos Leads e Produtos vendidos têm bloco próprio) */}
+      {activeArea !== 'lead-sources' && activeArea !== 'best-products' && !loading && report && (
         <div className="space-y-5">
 
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
@@ -794,7 +939,7 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
         </div>
       )}
 
-      {activeArea !== 'lead-sources' && !loading && !report && !error && (
+      {activeArea !== 'lead-sources' && activeArea !== 'best-products' && !loading && !report && !error && (
         <div className="glass-panel rounded-lg py-16 flex flex-col items-center justify-center text-center px-6">
           <FileBarChart className="w-10 h-10 text-zinc-700 mb-3" />
           <p className="text-zinc-400 text-sm font-sans">Selecione a área, ajuste os filtros e gere o relatório para visualizar aqui.</p>
