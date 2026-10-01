@@ -1878,14 +1878,21 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
               </div>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Categoria *</label>
-                <input
-                  type="text"
+                <select
                   required
                   value={goalForm.category}
                   onChange={(e) => setGoalForm({ ...goalForm, category: e.target.value })}
-                  placeholder="Ex: VENDAS, MATERIAL, MÃO DE OBRA"
                   className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 font-mono"
-                />
+                >
+                  <option value="">Selecione...</option>
+                  {Array.from(new Set([
+                    ...categories.map((c) => c.name),
+                    ...goals.map((g) => g.category),
+                    ...((budgetData?.rows || []).map((r: any) => r.category)),
+                  ].filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR')).map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
               </div>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Valor da Meta (R$) *</label>
