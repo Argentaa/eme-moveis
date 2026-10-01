@@ -847,3 +847,24 @@ export interface WhatsappMessage {
   created_by: string;
   created_at: string;
 }
+
+export interface AccountPlanCategory {
+  id: string;
+  code: number;
+  description: string;
+  indicator: 'CREDITO' | 'DEBITO';
+  dre_range: string;
+  plan_count?: number;
+  plans?: AccountPlanItem[];
+}
+
+export interface AccountPlanItem {
+  id: string;
+  code: number;
+  structured_code: string;
+  description: string;
+  label: string;
+  category_id: string;
+  category_code?: number | null;
+  category_description?: string | null;
+}

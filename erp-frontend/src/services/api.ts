@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { User, Client, Project, FinancialRecord, StockItem, StockMovement, StockLoss, StockLossKind, StockLossSummary, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
   PurchaseQuotation,
-  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage } from '../types';
+  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage, AccountPlanCategory, AccountPlanItem } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -519,6 +519,19 @@ export const bankAccountService = {
   remove: (id: string): Promise<any> => api.delete('/api/bank-accounts/' + id).then(r => r.data),
   balance: (id: string): Promise<BankBalance> => api.get('/api/bank-accounts/' + id + '/balance').then(r => r.data),
   overview: (): Promise<BankOverview> => api.get('/api/bank-accounts/overview').then(r => r.data),
+};
+
+export const accountPlanService = {
+  categories: (): Promise<AccountPlanCategory[]> => api.get('/api/account-plan/categories').then(r => r.data),
+  createCategory: (data: any): Promise<AccountPlanCategory> => api.post('/api/account-plan/categories', data).then(r => r.data),
+  updateCategory: (id: string, data: any): Promise<AccountPlanCategory> => api.put('/api/account-plan/categories/' + id, data).then(r => r.data),
+  removeCategory: (id: string): Promise<any> => api.delete('/api/account-plan/categories/' + id).then(r => r.data),
+  /** Contas agrupadas por categoria (ordem oficial do legado). */
+  grouped: (): Promise<AccountPlanCategory[]> => api.get('/api/account-plan').then(r => r.data),
+  createPlan: (data: any): Promise<AccountPlanItem> => api.post('/api/account-plan', data).then(r => r.data),
+  updatePlan: (id: string, data: any): Promise<AccountPlanItem> => api.put('/api/account-plan/' + id, data).then(r => r.data),
+  removePlan: (id: string): Promise<any> => api.delete('/api/account-plan/' + id).then(r => r.data),
+  reloadSeed: (): Promise<any> => api.post('/api/account-plan/reload-seed').then(r => r.data),
 };
 
 export const financialService = {

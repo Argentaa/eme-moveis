@@ -5,14 +5,15 @@ import {
   Receipt, FileText, FileType, X, Loader2, ChevronDown, ChevronRight, UserX,
   Target, Truck, BarChart3, TrendingUp
 } from 'lucide-react';
-import { financialService, projectService, stockService, recurringService, clientService, supplierService, vendorService, budgetService, reportService, bankAccountService, getApiErrorMessage } from '../services/api';
+import { financialService, projectService, stockService, recurringService, clientService, supplierService, vendorService, budgetService, reportService, bankAccountService, accountPlanService, getApiErrorMessage } from '../services/api';
 import {
   BarChart, Bar, Line, ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer,
   Legend, CartesianGrid, Cell,
 } from 'recharts';
-import { FinancialRecord, Project, Category, Vendor, BudgetGoal, BudgetAnalysis, Client, ReportResult, BankAccount, BankOverview } from '../types';
+import { FinancialRecord, Project, Category, Vendor, BudgetGoal, BudgetAnalysis, Client, ReportResult, BankAccount, BankOverview, AccountPlanCategory } from '../types';
 import ModuleTabs, { ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
 import DrePanel from './DrePanel';
+import AccountPlanPanel from './AccountPlanPanel';
 import FinancialAgingPanel from './FinancialAgingPanel';
 
 /** Abas do módulo Financeiro, conforme a spec do cliente (17/09). */
@@ -26,6 +27,7 @@ const FINANCIAL_TABS: ModuleTab[] = [
   { id: 'banks', label: 'Contas bancárias', ready: true },
   { id: 'dre', label: 'DRE', ready: true },
   { id: 'budget', label: 'Planejamento orçamentário', ready: true },
+  { id: 'plan', label: 'Plano de contas', ready: true },
 ];
 
 interface FinancialViewProps {
@@ -118,6 +120,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
   // Contas bancárias
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [accountPlanGroups, setAccountPlanGroups] = useState<AccountPlanCategory[]>([]);
   const [bankOverview, setBankOverview] = useState<BankOverview | null>(null);
   const [bankLoading, setBankLoading] = useState(false);
   const [bankModalOpen, setBankModalOpen] = useState(false);
@@ -298,18 +301,20 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [fins, projs, cats, supps, clis] = await Promise.all([
+      const [fins, projs, cats, supps, clis, planGroups] = await Promise.all([
         financialService.getAll(),
         projectService.getAll(),
         stockService.getCategories('FINANCIAL'),
         vendorService.list().catch(() => []),
         clientService.getAll().catch(() => []),
+        accountPlanService.grouped().catch(() => [] as AccountPlanCategory[]),
       ]);
       setRecords(fins);
       setProjects(projs);
       setCategories(cats);
       setSuppliers(supps);
       setClients(clis);
+      setAccountPlanGroups(planGroups);
     } catch (err) {
       console.error('Erro ao ler dados do financeiro:', err);
     } finally {
@@ -1200,6 +1205,8 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
 
       {activeTab === 'dre' && <DrePanel />}
 
+      {activeTab === 'plan' && <AccountPlanPanel userRole={userRole} />}
+
       {activeTab === 'banks' && (
         <div className="space-y-5">
           {/* Overview */}
@@ -1663,13 +1670,24 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div className="space-y-2">
                   <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Plano de Contas</label>
-                  <input
-                    type="text"
-                    value={formData.account_plan}
-                    onChange={(e) => setFormData({ ...formData, account_plan: e.target.value })}
-                    placeholder="Ex: 3.1.01 – Materiais"
-                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656 font-mono"
-                  />
+                  <select
+                    value={accountPlanGroups.some(g => g.plans?.some(p => p.structured_code === formData.account_plan)) || formData.account_plan === '' ? formData.account_plan : '__FREE__'}
+                    onChange={(e) => setFormData({ ...formData, account_plan: e.target.value === '__FREE__' ? formData.account_plan : e.target.value })}
+                    className="w-full bg-zinc-900 border border-zinc-805 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-656"
+                  >
+                    <option value="">— Sem plano de contas —</option>
+                    {accountPlanGroups.map(g => (
+                      <optgroup key={g.id} label={`${g.code} – ${g.description}`}>
+                        {(g.plans || []).map(p => (
+                          <option key={p.id} value={p.structured_code}>{p.structured_code} - {p.description}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                    {formData.account_plan && !accountPlanGroups.some(g => g.plans?.some(p => p.structured_code === formData.account_plan)) && (
+                      <option value="__FREE__">Texto livre: {formData.account_plan}</option>
+                    )}
+                  </select>
+                  <p className="text-[11px] text-zinc-500">Contas importadas do plano de contas oficial (aba Plano de contas no Financeiro).</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Nº de Parcelas</label>

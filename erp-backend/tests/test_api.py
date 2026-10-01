@@ -4920,3 +4920,79 @@ def test_whatsapp_midia_recebida_indisponivel_502(client, monkeypatch):
     d = client.get(f"/api/whatsapp/messages/{msgs[0]['id']}/media", headers=h)
     assert d.status_code == 502
     assert "indisponivel" in d.get_json()["detail"] or "not found" in d.get_json()["detail"].lower()
+
+
+def test_account_plan_seed_completo(client):
+    """Seed do plano de contas (importacao do legado): 14 categorias, 54 contas agrupadas."""
+    from app.models.models import AccountCategory, AccountPlan
+
+    with client.application.app_context():
+        assert AccountCategory.query.count() == 14
+        assert AccountPlan.query.count() == 54
+    h = _login(client)
+    cats = client.get("/api/account-plan/categories", headers=h).get_json()
+    assert len(cats) == 14
+    assert cats[0]["code"] == 1 and cats[0]["description"] == "Receita com Vendas"
+    assert cats[0]["indicator"] == "CREDITO" and cats[0]["dre_range"] == "Receitas"
+    assert cats[12]["code"] == 13 and cats[12]["dre_range"] == "Nao listar no DRE"
+    plano = client.get("/api/account-plan", headers=h).get_json()
+    assert len(plano) == 14
+    assert sum(len(g["plans"]) for g in plano) == 54
+    g4 = next(g for g in plano if g["code"] == 4)
+    assert any(p["structured_code"] == "4.2" and p["description"] == "Materia-prima"
+               for p in g4["plans"])
+    assert plano[0]["plans"][0]["label"] == "1.1 - Venda de produtos"
+
+
+def test_account_plan_categorias_crud_guards(client):
+    h = _login(client)
+    r = client.post("/api/account-plan/categories", headers=h, json={
+        "code": 99, "description": "Categoria Teste", "indicator": "DEBITO",
+        "dre_range": "Custos fixos",
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    cid = r.get_json()["id"]
+    assert client.post("/api/account-plan/categories", headers=h,
+                       json={"code": 99, "description": "Outra"}).status_code == 400
+    assert client.post("/api/account-plan/categories", headers=h,
+                       json={"code": 98, "description": "X",
+                             "indicator": "MEIO"}).status_code == 400
+    assert client.put(f"/api/account-plan/categories/{cid}", headers=h,
+                      json={"description": "Categoria Renomeada"}).status_code == 200
+    assert client.delete(f"/api/account-plan/categories/{cid}", headers=h).status_code == 200
+    # categoria oficial com contas nao pode ser excluida
+    cats = client.get("/api/account-plan/categories", headers=h).get_json()
+    c1 = next(c for c in cats if c["code"] == 1)
+    r = client.delete(f"/api/account-plan/categories/{c1['id']}", headers=h)
+    assert r.status_code == 400 and "conta" in r.get_json()["detail"].lower()
+
+
+def test_account_plan_contas_validacoes_e_guard_lancamento(client):
+    h = _login(client)
+    cats = client.get("/api/account-plan/categories", headers=h).get_json()
+    c4 = next(c for c in cats if c["code"] == 4)
+    r = client.post("/api/account-plan", headers=h, json={
+        "code": 60, "structured_code": "4.X", "description": "Teste",
+        "category_id": c4["id"],
+    })
+    assert r.status_code == 400
+    r = client.post("/api/account-plan", headers=h, json={
+        "code": 99, "structured_code": "4.2", "description": "Duplicada",
+        "category_id": c4["id"],
+    })
+    assert r.status_code == 400
+    r = client.post("/api/account-plan", headers=h, json={
+        "code": 60, "structured_code": "4.10", "description": "Conta teste",
+        "category_id": c4["id"],
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    pid = r.get_json()["id"]
+    fin = client.post("/api/financial", headers=h, json={
+        "description": "NF teste", "type": "SAIDA", "category": "MATERIAL",
+        "amount": 100, "date": "2026-09-01", "account_plan": "4.10",
+    })
+    assert fin.status_code == 201, fin.get_data(as_text=True)
+    # conta usada em lancamento -> bloqueia exclusao
+    assert client.delete(f"/api/account-plan/{pid}", headers=h).status_code == 400
+    client.delete(f"/api/financial/{fin.get_json()['id']}", headers=h)
+    assert client.delete(f"/api/account-plan/{pid}", headers=h).status_code == 200

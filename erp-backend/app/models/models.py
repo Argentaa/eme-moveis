@@ -558,6 +558,171 @@ class Category(db.Model):
         }
 
 
+class AccountCategory(db.Model):
+    """Categoria do plano de contas (grupo do DRE) — importada do sistema legado.
+
+    `code` e o numero oficial (1-14); `indicator` CREDITO|DEBITO; `dre_range`
+    a faixa no DRE ("Nao listar no DRE" = conta gerencial/transferencia).
+    """
+
+    __tablename__ = "account_categories"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    code = db.Column(Integer, nullable=False, unique=True)
+    description = db.Column(String(120), nullable=False)
+    indicator = db.Column(String(10), nullable=False, default="DEBITO")
+    dre_range = db.Column(String(60), nullable=True, default="")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "code": self.code,
+            "description": self.description,
+            "indicator": self.indicator,
+            "dre_range": self.dre_range or "",
+            "plan_count": len(self.plans) if "plans" in self.__dict__ else None,
+        }
+
+
+class AccountPlan(db.Model):
+    """Conta do plano de contas — `structured_code` e o X.Y oficial ("4.2").
+
+    `code` e o numero sequencial do legado (1-54). O vinculo com a categoria
+    segue o prefixo do codigo estruturado (4.2 -> categoria 4).
+    """
+
+    __tablename__ = "account_plans"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    code = db.Column(Integer, nullable=False, unique=True)
+    structured_code = db.Column(String(20), nullable=False, unique=True)
+    description = db.Column(String(160), nullable=False)
+    category_id = db.Column(
+        String(36), ForeignKey("account_categories.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+
+    category = db.relationship("AccountCategory", backref="plans")
+
+    def to_dict(self):
+        cat = self.category
+        return {
+            "id": self.id,
+            "code": self.code,
+            "structured_code": self.structured_code,
+            "description": self.description,
+            "label": "%s - %s" % (self.structured_code, self.description),
+            "category_id": self.category_id,
+            "category_code": cat.code if cat else None,
+            "category_description": cat.description if cat else None,
+        }
+
+
+# (codigo, descricao, indicador, faixa DRE) — espelho do sistema legado.
+DEFAULT_ACCOUNT_CATEGORIES = [
+    (1, "Receita com Vendas", "CREDITO", "Receitas"),
+    (2, "Impostos Sobre Vendas", "DEBITO", "Deducoes sobre vendas"),
+    (3, "Outras Deducoes", "DEBITO", "Deducoes sobre vendas"),
+    (4, "Custos Variaveis", "DEBITO", "Custos variaveis"),
+    (5, "Gastos com Pessoal", "DEBITO", "Custos fixos"),
+    (6, "Gastos com Ocupacao", "DEBITO", "Custos fixos"),
+    (7, "Gastos com Servicos de Terceiros", "DEBITO", "Custos fixos"),
+    (8, "Gastos com Marketing", "DEBITO", "Custos fixos"),
+    (9, "Receitas nao Operacionais", "CREDITO", "Resultado nao operacional"),
+    (10, "Gastos nao Operacionais", "DEBITO", "Resultado nao operacional"),
+    (11, "Imposto de Renda e CSLL", "DEBITO", "Impostos diretos"),
+    (12, "Investimentos", "DEBITO", "Nao listar no DRE"),
+    (13, "Transferencias e Ajustes de Saldo", "DEBITO", "Nao listar no DRE"),
+    (14, "Transferencias e Ajustes de Saldo", "CREDITO", "Nao listar no DRE"),
+]
+
+# (codigo, codigo estruturado, descricao) — categoria deducida do prefixo X de "X.Y".
+DEFAULT_ACCOUNT_PLANS = [
+    (1, "1.1", "Venda de produtos"),
+    (2, "1.2", "Prestacao de servicos"),
+    (3, "2.1", "DAS - Simples Nacional"),
+    (4, "2.2", "PIS"),
+    (5, "2.3", "COFINS"),
+    (6, "2.4", "ISS"),
+    (7, "2.5", "IPI"),
+    (8, "2.6", "ICMS"),
+    (9, "3.1", "Devolucoes de clientes"),
+    (10, "3.2", "Taxa de maquina de cartao"),
+    (11, "3.3", "Taxa de aplicativos"),
+    (12, "3.4", "Comissoes para vendedores"),
+    (13, "4.1", "Mercadoria para revenda"),
+    (14, "4.2", "Materia-prima"),
+    (15, "4.3", "Insumos"),
+    (16, "4.4", "Mao de obra variavel"),
+    (17, "5.1", "Pro-Labore"),
+    (18, "5.2", "Encargos sociais e trabalhistas"),
+    (19, "5.3", "Salario"),
+    (20, "5.4", "Transporte"),
+    (21, "5.5", "Alimentacao"),
+    (22, "5.6", "Saude"),
+    (23, "6.1", "Agua"),
+    (24, "6.2", "Aluguel, condominio, IPTU"),
+    (25, "6.3", "Telefone + internet"),
+    (26, "6.4", "Limpeza e conservacao"),
+    (27, "6.5", "Energia eletrica"),
+    (28, "7.1", "Contabilidade"),
+    (29, "7.2", "Servicos juridicos"),
+    (30, "7.3", "Consultoria"),
+    (31, "8.1", "Anuncios"),
+    (32, "8.2", "Propaganda"),
+    (33, "8.3", "Campanhas"),
+    (34, "9.1", "Juros de aplicacao"),
+    (35, "9.2", "Outras receitas nao operacionais"),
+    (36, "10.1", "Juros por atraso"),
+    (37, "10.2", "Tarifas bancarias"),
+    (38, "10.3", "Outros gastos nao operacionais"),
+    (39, "11.1", "IRPJ"),
+    (40, "11.2", "CSLL"),
+    (41, "12.1", "Investimentos gerais"),
+    (42, "13.1", "Transferencia entre contas proprias - efetuadas"),
+    (43, "13.2", "Ajuste de saldo"),
+    (44, "14.1", "Transferencia entre contas proprias - recebidas"),
+    (45, "14.2", "Ajuste de saldo"),
+    (46, "4.5", "Manutencao de maquinas e equipamentos"),
+    (47, "4.6", "Frete"),
+    (48, "12.2", "Sistemas de Gestao"),
+    (49, "4.7", "Combustivel"),
+    (50, "4.8", "Materiais de escritorio"),
+    (51, "4.9", "Manutencao de veiculos"),
+    (52, "6.6", "Manutencao do pavilhao"),
+    (53, "3.5", "Sistemas de gestao"),
+    (54, "5.7", "Uniformes"),
+]
+
+
+def ensure_default_account_plan():
+    """Semeia categorias + contas do legado. Idempotente: so insere o que falta
+    (chave: `code` / `structured_code`). Nunca altera nem apaga edicao do usuario."""
+    for code, description, indicator, dre_range in DEFAULT_ACCOUNT_CATEGORIES:
+        if not db.session.query(AccountCategory).filter_by(code=code).first():
+            db.session.add(AccountCategory(
+                code=code, description=description,
+                indicator=indicator, dre_range=dre_range,
+            ))
+    db.session.flush()
+    by_code = {c.code: c for c in db.session.query(AccountCategory).all()}
+    for code, structured, description in DEFAULT_ACCOUNT_PLANS:
+        if db.session.query(AccountPlan).filter_by(structured_code=structured).first():
+            continue
+        if db.session.query(AccountPlan).filter_by(code=code).first():
+            continue
+        try:
+            parent_code = int(str(structured).split(".")[0])
+        except (ValueError, IndexError):
+            continue
+        parent = by_code.get(parent_code)
+        if not parent:
+            continue
+        db.session.add(AccountPlan(
+            code=code, structured_code=structured,
+            description=description, category_id=parent.id,
+        ))
+    db.session.commit()
+
+
 class StockItem(db.Model):
     __tablename__ = "stock_items"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -1672,6 +1837,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Plano de contas importado para o Financeiro",
+     "As categorias do DRE e o plano de contas oficial agora fazem parte do sistema: 14 categorias (Receita com Vendas, Impostos Sobre Vendas, Custos Variáveis, Gastos com Pessoal etc.) e 54 contas no formato X.Y (ex.: 4.2 – Matéria-prima). No lançamento financeiro, o campo Plano de Contas virou uma lista organizada por categoria. A nova aba Plano de contas no Financeiro mostra tudo com a faixa de cada categoria no DRE (inclusive as que não entram no demonstrativo), e ADMIN/GERENTE podem ajustar ou restaurar o padrão — contas já usadas em lançamentos não podem ser excluídas.",
+     "NOVIDADE", "2026-10-01"),
     ("Gráficos legíveis no escuro e DRE com despesas por mês",
      "Correção: nos gráficos de categorias, nomes longos eram cortados no eixo e o valor no tooltip saía em preto no modo escuro, impossível de ler — agora o nome encurta com reticências (o completo aparece ao passar o mouse) e todo o texto do tooltip é claro. No DRE, a coluna de despesas por categoria saiu da tabela: agora dá para clicar no período e abrir o detalhamento das despesas daquele mês aninhado na linha.",
      "CORRECAO", "2026-09-30"),
