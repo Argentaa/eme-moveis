@@ -4996,3 +4996,14 @@ def test_account_plan_contas_validacoes_e_guard_lancamento(client):
     assert client.delete(f"/api/account-plan/{pid}", headers=h).status_code == 400
     client.delete(f"/api/financial/{fin.get_json()['id']}", headers=h)
     assert client.delete(f"/api/account-plan/{pid}", headers=h).status_code == 200
+
+
+def test_sale_modelo_campos(client):
+    from app.models.models import Sale, SaleInstallment, SaleEnvironment, SaleItem
+    from app.models.models import Project
+    with client.application.app_context():
+        assert hasattr(Sale, "code") and hasattr(Sale, "total_value")
+        assert hasattr(SaleInstallment, "due_date") and hasattr(SaleInstallment, "financial_record_id")
+        assert hasattr(SaleEnvironment, "name")
+        assert hasattr(SaleItem, "product_id") and hasattr(SaleItem, "unit_price")
+        assert hasattr(Project, "sale_id")

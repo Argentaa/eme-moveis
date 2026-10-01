@@ -378,6 +378,11 @@ class Project(db.Model):
     # deixar o cliente editar os meses sem mexer na data final.
     warranty_months = db.Column(Integer, nullable=True, default=0)
     warranty_until = db.Column(Date, nullable=True)
+    # Venda que originou os cards de producao (um Project por ambiente vendido).
+    # A FK fica apenas no modelo — no banco a coluna e adicionada sem constraint
+    # na migracao 0035 (padrao 0011), o ORM cuida da integridade.
+    sale_id = db.Column(String(36), ForeignKey("sales.id", ondelete="SET NULL"), nullable=True, index=True)
+    sale = db.relationship("Sale", backref=db.backref("projects", order_by="Project.created_at"))
 
     client = db.relationship("Client", backref=db.backref("projects", cascade="all, delete-orphan", passive_deletes=True))
 
@@ -721,6 +726,155 @@ def ensure_default_account_plan():
             description=description, category_id=parent.id,
         ))
     db.session.commit()
+
+
+class Sale(db.Model):
+    """Venda gerada no Comercial (botao "Gerar venda").
+
+    Nasce concluida: grava `clients.sale_concluded_at`/`closed_at`, cria as
+    contas a receber (entrada + parcelas) e os cards de producao (um por
+    ambiente vendido). `code` e o numero visivel V-0001, V-0002...
+    """
+
+    __tablename__ = "sales"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    code = db.Column(String(20), nullable=False, unique=True)
+    client_id = db.Column(
+        String(36), ForeignKey("clients.id", ondelete="SET NULL"), nullable=False, index=True
+    )
+    seller_id = db.Column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    partner_id = db.Column(
+        String(36), ForeignKey("partners.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    lead_source = db.Column(String(120), nullable=True, default="")
+    sale_date = db.Column(Date, nullable=False)
+    total_value = db.Column(Numeric(14, 2), nullable=False, default=0)
+    down_payment = db.Column(Numeric(14, 2), nullable=False, default=0)
+    installments = db.Column(Integer, nullable=False, default=0)
+    installment_value = db.Column(Numeric(14, 2), nullable=False, default=0)
+    bank_account_id = db.Column(
+        String(36), ForeignKey("bank_accounts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    address = db.Column(Text, nullable=True, default="")
+    delivery_date = db.Column(Date, nullable=True)
+    concluded_at = db.Column(DateTime, nullable=False, default=utcnow, index=True)
+    created_by = db.Column(String(80), nullable=True, default="")
+
+    client = db.relationship("Client")
+    seller = db.relationship("User", foreign_keys=[seller_id])
+    partner = db.relationship("Partner")
+    bank = db.relationship("BankAccount")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "code": self.code,
+            "client_id": self.client_id,
+            "client_name": self.client.name if self.client else None,
+            "seller_id": self.seller_id,
+            "seller_name": self.seller.username if self.seller else None,
+            "partner_id": self.partner_id,
+            "partner_name": self.partner.name if self.partner else None,
+            "lead_source": self.lead_source or "",
+            "sale_date": iso(self.sale_date),
+            "total_value": num(self.total_value),
+            "down_payment": num(self.down_payment),
+            "installments": self.installments,
+            "installment_value": num(self.installment_value),
+            "bank_account_id": self.bank_account_id,
+            "bank_account_name": self.bank.name if self.bank else None,
+            "address": self.address or "",
+            "delivery_date": iso(self.delivery_date),
+            "concluded_at": iso(self.concluded_at),
+            "created_by": self.created_by or "",
+            "environments": [{"id": e.id, "name": e.name} for e in self.environments],
+            "items": [i.to_dict() for i in self.items],
+            "installments_list": [
+                {
+                    "id": si.id,
+                    "due_date": iso(si.due_date),
+                    "value": num(si.value),
+                    "status": si.status,
+                    "financial_record_id": si.financial_record_id,
+                }
+                for si in self.installments_list
+            ],
+        }
+
+
+class SaleInstallment(db.Model):
+    """Parcela da venda, com vencimento explicito e vinculo ao contas a receber."""
+
+    __tablename__ = "sale_installments"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    sale_id = db.Column(
+        String(36), ForeignKey("sales.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    due_date = db.Column(Date, nullable=False)
+    value = db.Column(Numeric(14, 2), nullable=False, default=0)
+    status = db.Column(String(10), nullable=False, default="PENDENTE")  # PENDENTE | PAGO
+    financial_record_id = db.Column(
+        String(36), ForeignKey("financial_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    sale = db.relationship(
+        "Sale",
+        backref=db.backref("installments_list", cascade="all, delete-orphan", passive_deletes=False),
+    )
+
+
+class SaleEnvironment(db.Model):
+    """Ambiente vendido (Sala, Cozinha...) — vira um card de producao."""
+
+    __tablename__ = "sale_environments"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    sale_id = db.Column(
+        String(36), ForeignKey("sales.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name = db.Column(String(120), nullable=False)
+
+    sale = db.relationship(
+        "Sale",
+        backref=db.backref("environments", cascade="all, delete-orphan", passive_deletes=False),
+    )
+
+
+class SaleItem(db.Model):
+    """Produto vendido na venda — snapshot de nome/preco para nao quebrar historico."""
+
+    __tablename__ = "sale_items"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    sale_id = db.Column(
+        String(36), ForeignKey("sales.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product_id = db.Column(
+        String(36), ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    name = db.Column(String(200), nullable=False)
+    quantity = db.Column(Numeric(14, 3), nullable=False, default=1)
+    unit_price = db.Column(Numeric(14, 2), nullable=False, default=0)
+
+    sale = db.relationship(
+        "Sale",
+        backref=db.backref("items", cascade="all, delete-orphan", passive_deletes=False),
+    )
+
+    @property
+    def subtotal(self):
+        return (num(self.quantity) or 0) * (num(self.unit_price) or 0)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "sale_id": self.sale_id,
+            "product_id": self.product_id,
+            "name": self.name,
+            "quantity": num(self.quantity),
+            "unit_price": num(self.unit_price),
+            "subtotal": self.subtotal,
+        }
 
 
 class StockItem(db.Model):
