@@ -11,6 +11,7 @@ Contratos replicados do FastAPI original:
 - lead-sources -> ReportResponse (origem dos leads: fonte/campanha, conversao e valores)
 """
 import io
+import unicodedata
 from datetime import date, datetime, timezone
 from calendar import monthrange
 
@@ -21,7 +22,7 @@ from app.helpers import iso, num, parse_date
 from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
-    CalendarEvent, Client, FinancialRecord, Machine, Partner, ProductionIssue, Project,
+    CalendarEvent, ChecklistItem, Client, FinancialRecord, Machine, Partner, ProductionIssue, Project,
     ProjectEnvironment, Proposal, Sale, SaleItem, ServiceTicket, StockItem, StockMovement, TimeEntry, Worker,
 )
 
@@ -34,6 +35,81 @@ STATUS_LABELS_PROJECT = {
     "MONTAGEM": "Montagem",
     "CONCLUIDO": "Concluído",
 }
+
+# ── Períodos estilo DRE (mensal/trimestral/semestral/anual) ──────────
+# Mesma granularidade da aba DRE, reutilizada pelos dashboards comercial
+# e de produção: o front manda ?year=&period= e recebe a evolução fatiada.
+
+PERIODOS_VALIDOS = ("mensal", "trimestral", "semestral", "anual")
+
+MESES_CURTOS = ["jan", "fev", "mar", "abr", "mai", "jun",
+                "jul", "ago", "set", "out", "nov", "dez"]
+
+
+def _parse_year_month():
+    """Lê ?year=&month= com defaults (ano/mês correntes). Erro vira 400."""
+    today = date.today()
+    try:
+        year = int(request.args.get("year") or today.year)
+    except (TypeError, ValueError):
+        return None, None, (jsonify({"detail": "year invalido"}), 400)
+    month_raw = request.args.get("month") or ""
+    try:
+        month = int(month_raw) if month_raw else today.month
+    except (TypeError, ValueError):
+        return None, None, (jsonify({"detail": "month invalido"}), 400)
+    if not 1 <= month <= 12:
+        return None, None, (jsonify({"detail": "month invalido"}), 400)
+    return year, month, None
+
+
+def _parse_period():
+    period = (request.args.get("period") or "mensal").lower()
+    if period not in PERIODOS_VALIDOS:
+        return None, (jsonify({"detail": "period invalido"}), 400)
+    return period, None
+
+
+def _bucket_key(year, month, period):
+    """(chave estável, rótulo curto) do bucket de um mês no período."""
+    if period == "trimestral":
+        t = (month - 1) // 3 + 1
+        return ("%d-T%d" % (year, t), "T%d" % t)
+    if period == "semestral":
+        s = 1 if month <= 6 else 2
+        return ("%d-S%d" % (year, s), "S%d" % s)
+    if period == "anual":
+        return (str(year), str(year))
+    return ("%04d-%02d" % (year, month), MESES_CURTOS[month - 1])
+
+
+def _bucket_slots(year, period):
+    """Todos os buckets do ano no período, em ordem (inclui zeros)."""
+    if period == "trimestral":
+        return [("%d-T%d" % (year, t), "T%d" % t) for t in range(1, 5)]
+    if period == "semestral":
+        return [("%d-S%d" % (year, s), "S%d" % s) for s in range(1, 3)]
+    if period == "anual":
+        return [(str(year), str(year))]
+    return [("%04d-%02d" % (year, m), MESES_CURTOS[m - 1]) for m in range(1, 13)]
+
+
+def _norm_cat(value):
+    """Minúsculo sem acento, p/ comparar categoria digitada à mão."""
+    try:
+        txt = unicodedata.normalize("NFKD", str(value or ""))
+    except Exception:
+        txt = str(value or "")
+    return "".join(c for c in txt if not unicodedata.combining(c)).lower().strip()
+
+
+def _eh_custo_variavel(record):
+    """Conta de custo variável: plano com prefixo 4 (ex.: "4.2") OU
+    categoria com esse nome (lançamento antigo sem plano de contas)."""
+    ap = (record.account_plan or "").strip()
+    if ap.split(".")[0] == "4" or ap.split(" ")[0] == "4":
+        return True
+    return _norm_cat(record.category or "") in ("custos variaveis", "custo variavel")
 
 
 def _fmt_brl(value) -> str:
@@ -162,6 +238,26 @@ def _build_financial():
     pend_saida = sum(float(r.amount or 0) for r in rows if r.type == "SAIDA" and r.status == "PENDENTE")
     saldo = total_entrada - total_saida
 
+    # ── Fase 2 Financeiro: faturamento, recebimentos, margem e inadimplência.
+    # Respeitam os mesmos filtros do relatório (data, tipo, categoria...).
+    # Faturamento = tudo que foi vendido/faturado (ENTRADA paga + em aberto);
+    # Recebimentos = o que efetivamente entrou (ENTRADA PAGA); Margem =
+    # recebimentos menos custos variáveis PAGOS; Inadimplência = ENTRADA em
+    # aberto com vencimento passado (due_date, ou a data do lançamento).
+    hoje_fin = date.today()
+    entradas = [r for r in rows if r.type == "ENTRADA"]
+    faturamento = sum(float(r.amount or 0) for r in entradas)
+    recebimentos = sum(float(r.amount or 0) for r in entradas if r.status == "PAGO")
+    custos_variaveis = sum(
+        float(r.amount or 0) for r in rows
+        if r.type == "SAIDA" and r.status == "PAGO" and _eh_custo_variavel(r)
+    )
+    margem = recebimentos - custos_variaveis
+    vencidos = [r for r in entradas
+                if r.status == "PENDENTE" and (r.due_date or r.date) is not None
+                and (r.due_date or r.date) < hoje_fin]
+    inadimplencia = sum(float(r.amount or 0) for r in vencidos)
+
     formatted = []
     for r in rows:
         proj = db.session.get(Project, r.project_id) if r.project_id else None
@@ -187,6 +283,13 @@ def _build_financial():
             {"label": "Pendente a Receber", "value": _fmt_brl(pend_entrada), "tone": "neutral"},
             {"label": "Pendente a Pagar", "value": _fmt_brl(pend_saida), "tone": "neutral"},
             {"label": "Quantidade de Lançamentos", "value": str(len(rows)), "tone": "neutral"},
+            {"label": "Faturamento", "value": _fmt_brl(faturamento), "tone": "positive"},
+            {"label": "Recebimentos", "value": _fmt_brl(recebimentos), "tone": "positive"},
+            {"label": "Margem de Contribuição", "value": _fmt_brl(margem),
+             "tone": "positive" if margem >= 0 else "negative"},
+            {"label": "Inadimplência",
+             "value": "%s (%d título(s))" % (_fmt_brl(inadimplencia), len(vencidos)),
+             "tone": "negative" if inadimplencia > 0 else "neutral"},
         ],
         "columns": [
             {"key": "date", "label": "Data"},
@@ -804,6 +907,13 @@ def _build_cash_flow_weekly():
 def _build_crm():
     df = parse_date(request.args.get("date_from"))
     dt = parse_date(request.args.get("date_to"))
+    # Período estilo DRE p/ vendas mês/ano e evolução (?year=&month=&period=).
+    year, month, err = _parse_year_month()
+    if err:
+        return err
+    period, err = _parse_period()
+    if err:
+        return err
 
     clients = db.session.query(Client).all()
     if df:
@@ -942,33 +1052,32 @@ def _build_crm():
     # ── Fase 1 Comercial: vendas mês/ano + orçamentos + pizza por origem ──
     # Fonte de verdade: Sale (venda gerada pelo botão "Gerar venda").
     # sale_date NUNCA é nula (coluna NOT NULL); origem = Sale.lead_source
-    # com fallback para o lead_source do cliente.
+    # com fallback para o lead_source do cliente. Evolução fatiada no
+    # período estilo DRE (?period=mensal|trimestral|semestral|anual).
     vendas = db.session.query(Sale).all()
     clients_by_id = {c.id: c for c in clients}
-    ano_corrente, mes_corrente = today.year, today.month
-    vendas_do_mes = [s for s in vendas
-                     if s.sale_date and s.sale_date.year == ano_corrente
-                     and s.sale_date.month == mes_corrente]
+    vendas_do_ano = [s for s in vendas
+                     if s.sale_date and s.sale_date.year == year]
+    vendas_do_mes = [s for s in vendas_do_ano if s.sale_date.month == month]
     vendas_mes = {
-        "year": ano_corrente,
-        "month": mes_corrente,
+        "year": year,
+        "month": month,
         "qtd": len(vendas_do_mes),
         "total": round(sum(float(s.total_value or 0) for s in vendas_do_mes), 2),
     }
-    evolucao = []
-    for mm in range(1, 13):
-        do_mes = [s for s in vendas
-                  if s.sale_date and s.sale_date.year == ano_corrente
-                  and s.sale_date.month == mm]
-        evolucao.append({
-            "mes": f"{ano_corrente:04d}-{mm:02d}",
-            "qtd": len(do_mes),
-            "total": round(sum(float(s.total_value or 0) for s in do_mes), 2),
-        })
-    vendas_do_ano = [s for s in vendas
-                     if s.sale_date and s.sale_date.year == ano_corrente]
+    evo_map: dict = {}
+    for s in vendas_do_ano:
+        key, _rot = _bucket_key(year, s.sale_date.month, period)
+        g = evo_map.setdefault(key, {"qtd": 0, "total": 0.0})
+        g["qtd"] += 1
+        g["total"] += float(s.total_value or 0)
+    evolucao = [
+        {"mes": key, "rotulo": rot, "qtd": evo_map.get(key, {}).get("qtd", 0),
+         "total": round(evo_map.get(key, {}).get("total", 0.0), 2)}
+        for key, rot in _bucket_slots(year, period)
+    ]
     vendas_ano = {
-        "year": ano_corrente,
+        "year": year,
         "qtd": len(vendas_do_ano),
         "total": round(sum(float(s.total_value or 0) for s in vendas_do_ano), 2),
         "evolucao": evolucao,
@@ -991,9 +1100,10 @@ def _build_crm():
         "valor": round(sum(_prop_valor(p) for p in enviadas), 2),
         "aceitas": sum(1 for p in enviadas if (p.status or "").upper() == "ACEITA"),
     }
-    # Pizza vendas por origem: VALOR vendido (não qtd de leads) por origem.
+    # Pizza vendas por origem: VALOR vendido (não qtd de leads) por origem,
+    # no mesmo ano do painel.
     origem_map: dict = {}
-    for s in vendas:
+    for s in vendas_do_ano:
         cli = clients_by_id.get(getattr(s, "client_id", None))
         origem = (getattr(s, "lead_source", None)
                   or (cli.lead_source if cli else None)
@@ -1009,7 +1119,8 @@ def _build_crm():
     ]
 
     return {
-        "periodo": {"date_from": iso(df), "date_to": iso(dt)},
+        "periodo": {"date_from": iso(df), "date_to": iso(dt),
+                    "year": year, "month": month, "period": period},
         "negociacoes": {"total": len(clients), "por_etapa": by_stage,
                         "perdidas": lost, "total_perdidas": len(lost)},
         "conversao": {"total_clientes": len(clients),
@@ -1317,6 +1428,14 @@ def _build_production():
     dt = parse_date(request.args.get("date_to"))
     project_id = request.args.get("project_id") or None
     worker_id = request.args.get("worker_id") or None
+    # Período estilo DRE p/ evolução do produzido (?year=&month=&period=).
+    year, month, err = _parse_year_month()
+    if err:
+        return err
+    period, err = _parse_period()
+    if err:
+        return err
+    hoje = date.today()
 
     envs = db.session.query(ProjectEnvironment).all()
     time_entries = db.session.query(TimeEntry).all()
@@ -1360,16 +1479,88 @@ def _build_production():
 
     tempo_medio_por_projeto = (total_horas / total_projects) if total_projects else 0
 
+    # ── Fase 3 Produção: indicadores do dono (horas saem do resumo) ──
+    # "Concluído" = concluded_at (botão Concluir projeto), nunca a coluna.
+    em_producao = [p for p in projects_q if p.concluded_at is None]
+    atrasados_list = [p for p in em_producao if p.deadline and p.deadline < hoje]
+    valor_atrasados = sum(float(p.value or 0) for p in atrasados_list)
+    entregas = sorted(
+        [p for p in em_producao if p.deadline and p.deadline >= hoje],
+        key=lambda p: p.deadline,
+    )
+    horas_retrabalho = sum(float(i.hours_spent or 0) for i in issues
+                            if (i.kind or "").upper() == "RETRABALHO")
+    qtd_desperdicio = sum(float(i.quantity or 0) for i in issues
+                          if (i.kind or "").upper() == "DESPERDICIO"
+                          and i.quantity is not None)
+    perdas_financeiras = custo_total_ocorrencias
+    # Pendências = itens de checklist em aberto (o que impede o avanço).
+    checklist_q = db.session.query(ChecklistItem).filter(ChecklistItem.completed.is_(False))
+    if project_id:
+        checklist_q = checklist_q.filter(ChecklistItem.project_id == project_id)
+    checklist_abertos = checklist_q.count()
+    # Produzido no mês/ano = valor dos projetos concluídos pelo botão, pela
+    # data da conclusão (concluded_at, com actual_end_date de fallback).
+    def _data_conclusao(p):
+        c = p.concluded_at
+        if c is not None:
+            return c.date() if isinstance(c, datetime) else c
+        return p.actual_end_date
+    concluidos_ano = [p for p in projects_q
+                      if p.concluded_at is not None
+                      and _data_conclusao(p) is not None
+                      and _data_conclusao(p).year == year]
+    evo_prod_map: dict = {}
+    for p in concluidos_ano:
+        key, _rot = _bucket_key(year, _data_conclusao(p).month, period)
+        g = evo_prod_map.setdefault(key, {"qtd": 0, "total": 0.0})
+        g["qtd"] += 1
+        g["total"] += float(p.value or 0)
+    evolucao_prod = [
+        {"mes": key, "rotulo": rot, "qtd": evo_prod_map.get(key, {}).get("qtd", 0),
+         "total": round(evo_prod_map.get(key, {}).get("total", 0.0), 2)}
+        for key, rot in _bucket_slots(year, period)
+    ]
+    do_mes = [p for p in concluidos_ano if _data_conclusao(p).month == month]
+    produzido_mes = {"year": year, "month": month, "qtd": len(do_mes),
+                     "total": round(sum(float(p.value or 0) for p in do_mes), 2)}
+    produzido_ano = {"year": year, "qtd": len(concluidos_ano),
+                     "total": round(sum(float(p.value or 0) for p in concluidos_ano), 2),
+                     "evolucao": evolucao_prod}
+    entregas_lista = []
+    for p in entregas[:5]:
+        cli = db.session.get(Client, p.client_id) if p.client_id else None
+        entregas_lista.append({
+            "title": p.title,
+            "client": cli.name if cli else "-",
+            "deadline": iso(p.deadline),
+            "value": float(p.value or 0),
+        })
+
     summary = [
         {"label": "Total Ambientes", "value": str(total_environments), "tone": "neutral"},
         {"label": "Total Projetos", "value": str(total_projects), "tone": "neutral"},
-        {"label": "Horas Improdutivas", "value": f"{horas_improdutivas:.1f}h", "tone": "negative" if horas_improdutivas > 0 else "neutral"},
-        {"label": "Total Horas", "value": f"{total_horas:.1f}h", "tone": "neutral"},
+        {"label": "Projetos em Produção", "value": str(len(em_producao)), "tone": "neutral"},
+        {"label": "Projetos Atrasados",
+         "value": "%d · %s" % (len(atrasados_list), _fmt_brl(valor_atrasados)),
+         "tone": "negative" if atrasados_list else "neutral"},
+        {"label": "Entregas Previstas", "value": str(len(entregas)), "tone": "neutral"},
+        {"label": "Produzido no Mês", "value": _fmt_brl(produzido_mes["total"]), "tone": "positive"},
+        {"label": "Produzido no Ano", "value": _fmt_brl(produzido_ano["total"]), "tone": "positive"},
         {"label": "Retrabalhos", "value": str(retrabalho_count), "tone": "negative" if retrabalho_count > 0 else "neutral"},
+        {"label": "Horas Perdidas (retrabalho)", "value": "%.1fh" % horas_retrabalho,
+         "tone": "negative" if horas_retrabalho > 0 else "neutral"},
         {"label": "Desperdicios", "value": str(desperdicio_count), "tone": "negative" if desperdicio_count > 0 else "neutral"},
+        {"label": "Material Desperdiçado", "value": ("%g" % qtd_desperdicio),
+         "tone": "negative" if desperdicio_count > 0 else "neutral"},
         {"label": "Perdas", "value": str(perda_count), "tone": "negative" if perda_count > 0 else "neutral"},
         {"label": "Custo Retrabalho", "value": _fmt_brl(custo_retrabalho), "tone": "negative" if custo_retrabalho > 0 else "neutral"},
+        {"label": "Custo Desperdício", "value": _fmt_brl(custo_desperdicio), "tone": "negative" if custo_desperdicio > 0 else "neutral"},
         {"label": "Custo Perdas", "value": _fmt_brl(custo_perdas), "tone": "negative" if custo_perdas > 0 else "neutral"},
+        {"label": "Perdas Financeiras", "value": _fmt_brl(perdas_financeiras),
+         "tone": "negative" if perdas_financeiras > 0 else "neutral"},
+        {"label": "Pendências de Produção", "value": str(checklist_abertos),
+         "tone": "negative" if checklist_abertos > 0 else "neutral"},
         {"label": "Tempo Medio por Projeto", "value": f"{tempo_medio_por_projeto:.1f}h", "tone": "neutral"},
     ]
 
@@ -1409,10 +1600,16 @@ def _build_production():
     return {
         "title": "Relatorio Industrial de Producao",
         "generated_at": _now_iso(),
-        "filters_applied": {"date_from": iso(df), "date_to": iso(dt), "project_id": project_id, "worker_id": worker_id},
+        "filters_applied": {"date_from": iso(df), "date_to": iso(dt), "project_id": project_id, "worker_id": worker_id,
+                            "year": year, "month": month, "period": period},
         "summary": summary,
         "columns": columns,
         "rows": rows,
+        "produzido_mes": produzido_mes,
+        "produzido_ano": produzido_ano,
+        "entregas_previstas": entregas_lista,
+        "pendencias": {"checklist_abertos": checklist_abertos,
+                       "ocorrencias": len(issues)},
     }
 
 
@@ -1554,7 +1751,11 @@ def r_dre():
 @bp.get("/api/reports/crm")
 @token_required()
 def r_crm():
-    return jsonify(_build_crm())
+    data = _build_crm()
+    # Repassa erro de parâmetro (tupla) como o _serve faz pros builders.
+    if isinstance(data, tuple):
+        return data
+    return jsonify(data)
 
 
 @bp.get("/api/reports/lead-sources")

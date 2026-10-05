@@ -3113,15 +3113,9 @@ def test_report_production(client):
     assert total_amb is not None, f"summary sem Total Ambientes: {summary}"
     assert total_amb.get("value") == str(expected_total_ambientes) or parse_val_to_float(total_amb.get("value")) == expected_total_ambientes
 
-    horas_improd_item = find_summary("Horas Improdutivas")
-    assert horas_improd_item is not None, f"summary sem Horas Improdutivas: {summary}"
-    val_improd = parse_val_to_float(horas_improd_item.get("value"))
-    assert val_improd is not None and abs(val_improd - expected_horas_improd) < 0.01, f"Horas Improdutivas {val_improd} != {expected_horas_improd}"
-
-    total_horas_item = find_summary("Total Horas")
-    assert total_horas_item is not None, f"summary sem Total Horas: {summary}"
-    val_total_horas = parse_val_to_float(total_horas_item.get("value"))
-    assert val_total_horas is not None and abs(val_total_horas - expected_total_horas) < 0.01, f"Total Horas {val_total_horas} != {expected_total_horas}"
+    # Horas SAIRAM do resumo (pedido do dono) — nem improdutivas nem total.
+    assert find_summary("Horas Improdutivas") is None, f"summary ainda tem Horas Improdutivas: {summary}"
+    assert find_summary("Total Horas") is None, f"summary ainda tem Total Horas: {summary}"
 
     ret_item = find_summary("Retrabalho")
     assert ret_item is not None, f"summary sem Retrabalho: {summary}"
@@ -5272,3 +5266,130 @@ def test_crm_fase1_vendas_orcamentos_origem(client):
     por_origem = {o["origem"]: o for o in rel["vendas_por_origem"]}
     assert por_origem["Instagram"]["valor"] == 10000
     assert por_origem["Indicacao"]["valor"] == 5000
+
+
+def test_financial_fase2_indicadores(client):
+    """Fase 2 Financeiro: faturamento, recebimentos, margem e inadimplencia."""
+    h = _login(client)
+
+    def _lanc(tipo, valor, status, plano="", categoria="GERAL", venc=None):
+        payload = {"description": "Fase2 %s %s" % (tipo, valor), "type": tipo,
+                   "category": categoria, "amount": valor, "date": "2026-10-01",
+                   "status": status, "due_date": venc or "2026-10-01"}
+        if plano:
+            payload["account_plan"] = plano
+        r = client.post("/api/financial", headers=h, json=payload)
+        assert r.status_code == 201, r.get_data(as_text=True)
+
+    _lanc("ENTRADA", 10000, "PAGO", plano="1.1")
+    _lanc("ENTRADA", 3000, "PENDENTE", venc="2025-06-01")
+    _lanc("ENTRADA", 2000, "PENDENTE", venc="2027-01-15")
+    _lanc("SAIDA", 4000, "PAGO", plano="4.1", categoria="MATERIA-PRIMA")
+    _lanc("SAIDA", 500, "PAGO", categoria="Custos Variáveis")
+    _lanc("SAIDA", 1000, "PAGO", plano="5.1", categoria="PESSOAL")
+    _lanc("SAIDA", 700, "PENDENTE", plano="4.2")
+
+    body = client.get("/api/reports/financial", headers=h).get_json()
+    res = {s["label"]: s["value"] for s in body["summary"]}
+    assert res["Faturamento"] == "R$ 15.000,00", res
+    assert res["Recebimentos"] == "R$ 10.000,00", res
+    assert res["Margem de Contribuição"] == "R$ 5.500,00", res
+    assert "R$ 3.000,00" in res["Inadimplência"] and "1 título" in res["Inadimplência"], res
+    # Sem regressao nos antigos.
+    assert res["Saldo do Período"] == "R$ 8.800,00", res
+
+
+def test_production_fase2_indicadores(client):
+    """Fase 3 Producao: em producao, atrasados, entregas, produzido, perdas, pendencias."""
+    import datetime as _dt
+    from app.extensions import db
+    from app.models.models import ChecklistItem
+    h = _login(client)
+    hoje = _dt.date.today()
+    r = client.post("/api/clients", headers=h, json={"name": "Cliente Fase3", "cpf_cnpj": "fase3cli"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    cid = r.get_json()["id"]
+
+    def _proj(title, deadline, value, status="PRODUCAO"):
+        r = client.post("/api/projects", headers=h,
+                        json={"title": title, "client_id": cid, "status": status,
+                              "deadline": deadline, "value": value})
+        assert r.status_code == 201, r.get_data(as_text=True)
+        return r.get_json()["id"]
+
+    pid_atras = _proj("Atrasado Fase3", "2025-01-10", 8000)
+    pid_fut = _proj("Futuro Fase3", "2027-06-15", 5000)
+    pid_ok = _proj("Concluido Fase3", hoje.isoformat(), 12000)
+    assert client.post(f"/api/projects/{pid_ok}/conclude", headers=h).status_code == 200
+
+    r = client.post(f"/api/projects/{pid_atras}/issues", headers=h,
+                    json={"kind": "RETRABALHO", "cost": 100, "hours_spent": 3,
+                          "reason": "Refazer", "issue_date": hoje.isoformat()})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.post(f"/api/projects/{pid_atras}/issues", headers=h,
+                    json={"kind": "DESPERDICIO", "material": "MDF", "quantity": 2.5,
+                          "cost": 50, "reason": "Corte errado", "issue_date": hoje.isoformat()})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    r = client.post(f"/api/projects/{pid_atras}/issues", headers=h,
+                    json={"kind": "PERDA", "cost": 200, "reason": "Quebra",
+                          "issue_date": hoje.isoformat()})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    with client.application.app_context():
+        db.session.add(ChecklistItem(project_id=pid_atras, step_id="s1",
+                                     label="Cortar MDF", completed=False))
+        db.session.commit()
+
+    body = client.get("/api/reports/production", headers=h).get_json()
+    res = {s["label"]: s["value"] for s in body["summary"]}
+    assert "Horas Improdutivas" not in res and "Total Horas" not in res, res
+    assert res["Projetos em Produção"] == "2", res
+    assert res["Projetos Atrasados"] == "1 · R$ 8.000,00", res
+    assert res["Entregas Previstas"] == "1", res
+    assert res["Produzido no Mês"] == "R$ 12.000,00", res
+    assert res["Produzido no Ano"] == "R$ 12.000,00", res
+    assert res["Retrabalhos"] == "1", res
+    assert res["Horas Perdidas (retrabalho)"] == "3.0h", res
+    assert res["Desperdicios"] == "1", res
+    assert res["Material Desperdiçado"] == "2.5", res
+    assert res["Perdas Financeiras"] == "R$ 350,00", res
+    assert res["Pendências de Produção"] == "1", res
+    assert body["produzido_mes"]["total"] == 12000
+    assert body["produzido_ano"]["total"] == 12000
+    assert len(body["produzido_ano"]["evolucao"]) == 12
+    assert any(e["title"] == "Futuro Fase3" for e in body["entregas_previstas"])
+    # Periodo estilo DRE + parametro invalido.
+    tri = client.get("/api/reports/production?period=trimestral", headers=h).get_json()
+    assert len(tri["produzido_ano"]["evolucao"]) == 4
+    sem = client.get("/api/reports/production?period=semestral", headers=h).get_json()
+    assert len(sem["produzido_ano"]["evolucao"]) == 2
+    assert client.get("/api/reports/production?period=quinzenal", headers=h).status_code == 400
+
+
+def test_crm_periodos_buckets(client):
+    """Periodo estilo DRE no CRM: mensal/trimestral/semestral/anual + 400."""
+    import datetime as _dt
+    h = _login(client)
+    ano = _dt.date.today().year
+    cid = _mk_sale_client(client, h, "Cliente Periodo")
+    p = _sale_payload(client, h, cid, sale_date="%d-02-10" % ano, total_value=7000,
+                      down_payment=7000, installments=0,
+                      installment_value=0, installments_due=[])
+    assert client.post("/api/sales", headers=h, json=p).status_code == 201
+
+    base = "/api/reports/crm?year=%d" % ano
+    mens = client.get(base, headers=h).get_json()
+    assert len(mens["vendas_ano"]["evolucao"]) == 12
+    assert mens["vendas_ano"]["total"] == 7000
+    fev = client.get(base + "&month=2", headers=h).get_json()
+    assert fev["vendas_mes"]["total"] == 7000
+    tri = client.get(base + "&period=trimestral", headers=h).get_json()
+    evo = tri["vendas_ano"]["evolucao"]
+    assert len(evo) == 4
+    assert {e["mes"]: e["total"] for e in evo}["%d-T1" % ano] == 7000
+    assert all("rotulo" in e for e in evo)
+    sem = client.get(base + "&period=semestral", headers=h).get_json()
+    assert len(sem["vendas_ano"]["evolucao"]) == 2
+    anu = client.get(base + "&period=anual", headers=h).get_json()
+    evo_a = anu["vendas_ano"]["evolucao"]
+    assert len(evo_a) == 1 and evo_a[0]["total"] == 7000
+    assert client.get("/api/reports/crm?period=quinzenal", headers=h).status_code == 400

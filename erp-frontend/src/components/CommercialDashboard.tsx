@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import { dashboardService, getApiErrorMessage } from '../services/api';
 import { chartTooltipProps, shortTick } from './FinancialView';
+import PeriodFilter, { MESES_LONGOS } from './PeriodFilter';
 import { CrmReport } from '../types';
 
 const fmt = (v: number) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -29,14 +30,22 @@ export default function CommercialDashboard() {
   const [rel, setRel] = useState<CrmReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const hoje = new Date();
+  const [year, setYear] = useState(hoje.getFullYear());
+  const [month, setMonth] = useState(hoje.getMonth() + 1);
+  const [period, setPeriod] = useState('mensal');
 
   useEffect(() => {
+    let ativo = true;
+    setLoading(true);
+    setError('');
     dashboardService
-      .crmReport()
-      .then(setRel)
-      .catch(err => setError(getApiErrorMessage(err, 'Erro ao carregar o dashboard comercial.')))
-      .finally(() => setLoading(false));
-  }, []);
+      .crmReport({ year: String(year), month: String(month), period })
+      .then((r) => { if (ativo) setRel(r); })
+      .catch(err => { if (ativo) setError(getApiErrorMessage(err, 'Erro ao carregar o dashboard comercial.')); })
+      .finally(() => { if (ativo) setLoading(false); });
+    return () => { ativo = false; };
+  }, [year, month, period]);
 
   if (loading) {
     return (
@@ -88,12 +97,20 @@ export default function CommercialDashboard() {
     const mm = parseInt((e.mes || '').slice(5, 7), 10);
     return {
       ...e,
-      rotulo: Number.isFinite(mm) && mm >= 1 && mm <= 12 ? MESES_PT[mm - 1] : e.mes,
+      rotulo: e.rotulo || (Number.isFinite(mm) && mm >= 1 && mm <= 12 ? MESES_PT[mm - 1] : e.mes),
     };
   });
+  const nomeMes = MESES_LONGOS[(vendasMes?.month ?? month) - 1] || '';
 
   return (
     <div className="space-y-5">
+      <div className="glass-panel px-4 py-3 rounded-lg flex flex-wrap items-center justify-between gap-3">
+        <span className="text-[11px] text-zinc-500 font-mono">Período do painel</span>
+        <PeriodFilter
+          year={year} period={period} month={month}
+          onYear={setYear} onPeriod={setPeriod} onMonth={setMonth}
+        />
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="glass-panel p-5 rounded-lg border-l-4 border-l-emerald-600">
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
@@ -103,7 +120,7 @@ export default function CommercialDashboard() {
             {fmt(vendasMes?.total ?? 0)}
           </p>
           <p className="text-[11px] text-zinc-500 font-mono mt-1">
-            {vendasMes?.qtd ?? 0} venda(s) no mês
+            {vendasMes?.qtd ?? 0} venda(s) em {nomeMes} de {vendasMes?.year ?? year}
           </p>
         </div>
         <div className="glass-panel p-5 rounded-lg border-l-4 border-l-emerald-600">

@@ -1246,11 +1246,18 @@ export const dashboardService = {
   /**
    * Relatorio comercial. Endpoint com formato proprio (nao segue
    * {summary, columns, rows}) — por isso tem metodo e tipo dedicados.
+   * Aceita ?year=&month=&period= (mensal|trimestral|semestral|anual).
    */
-  async crmReport(filters: { date_from?: string; date_to?: string } = {}): Promise<CrmReport> {
+  async crmReport(filters: {
+    date_from?: string; date_to?: string;
+    year?: string; month?: string; period?: string;
+  } = {}): Promise<CrmReport> {
     const params: Record<string, string> = {};
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
+    if (filters.year) params.year = filters.year;
+    if (filters.month) params.month = filters.month;
+    if (filters.period) params.period = filters.period;
     const response = await api.get('/api/reports/crm', { params });
     return response.data;
   },

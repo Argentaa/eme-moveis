@@ -543,6 +543,13 @@ export interface ReportResult {
   summary: ReportSummaryItem[];
   columns: ReportColumn[];
   rows: Record<string, string>[];
+  produzido_mes?: { year: number; month: number; qtd: number; total: number };
+  produzido_ano?: {
+    year: number; qtd: number; total: number;
+    evolucao: { mes: string; rotulo: string; qtd: number; total: number }[];
+  };
+  entregas_previstas?: { title: string; client: string; deadline: string | null; value: number }[];
+  pendencias?: { checklist_abertos: number; ocorrencias: number };
 }
 
 // ── Relatorio comercial (/api/reports/crm) ───────────────────────
@@ -571,7 +578,7 @@ export interface CrmReport {
   vendas_mes?: { year: number; month: number; qtd: number; total: number };
   vendas_ano?: {
     year: number; qtd: number; total: number;
-    evolucao: { mes: string; qtd: number; total: number }[];
+    evolucao: { mes: string; rotulo: string; qtd: number; total: number }[];
   };
   orcamentos?: { qtd: number; valor: number; aceitas: number };
   vendas_por_origem?: { origem: string; qtd: number; valor: number; share: number }[];

@@ -6,6 +6,7 @@ import {
 import { reportService, clientService, projectService, stockService, getApiErrorMessage } from '../services/api';
 import { ReportArea, ReportResult, Client, Project, Category } from '../types';
 import DrePanel, { TONE_CLASSES, inputClass, FilterField } from './DrePanel';
+import { quickRange, subOptions, PERIODS } from './PeriodFilter';
 
 interface ReportsViewProps {
   userRole: string;
@@ -38,8 +39,71 @@ const AREAS: { id: ReportArea; label: string; icon: React.ComponentType<any>; de
   { id: 'lead-sources', label: 'Origem dos Leads', icon: Target, description: 'Leads por fonte ou campanha com conversão e valores' },
   { id: 'best-products', label: 'Produtos vendidos', icon: ShoppingBag, description: 'Produtos/móveis vendidos por período (vendas concluídas)' },
   { id: 'tickets', label: 'Pós-venda', icon: Wrench, description: 'Chamados, causas, garantia e custos' },
-  { id: 'production', label: 'Produção Industrial', icon: Hammer, description: 'm², ambientes, horas e ocorrências' },
+  { id: 'production', label: 'Produção Industrial', icon: Hammer, description: 'indicadores, entregas, produzido e ocorrências' },
 ];
+
+/**
+ * Atalho de período estilo DRE: preenche o intervalo de datas de uma vez
+ * (ano + mensal/trimestral/semestral/anual + sub-período).
+ */
+function QuickPeriod({ onApply }: { onApply: (from: string, to: string) => void }) {
+  const hoje = new Date();
+  const anoAtual = hoje.getFullYear();
+  const [qYear, setQYear] = useState(anoAtual);
+  const [qPeriod, setQPeriod] = useState('anual');
+  const [qSub, setQSub] = useState(hoje.getMonth() + 1);
+  const subs = subOptions(qPeriod);
+
+  const trocarPeriodo = (p: string) => {
+    setQPeriod(p);
+    if (p === 'trimestral') setQSub(Math.floor(hoje.getMonth() / 3) + 1);
+    else if (p === 'semestral') setQSub(hoje.getMonth() < 6 ? 1 : 2);
+    else if (p === 'mensal') setQSub(hoje.getMonth() + 1);
+    else setQSub(1);
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-zinc-900">
+      <span className="text-[11px] text-zinc-500 font-mono uppercase tracking-wider">Período rápido:</span>
+      <select value={qYear} onChange={(e) => setQYear(Number(e.target.value))} className={inputClass} style={{ width: 'auto' }}>
+        {[anoAtual - 2, anoAtual - 1, anoAtual, anoAtual + 1].map(y => (
+          <option key={y} value={y}>{y}</option>
+        ))}
+      </select>
+      <div className="flex items-center rounded border border-zinc-800 overflow-hidden">
+        {PERIODS.map((p) => (
+          <button
+            key={p.value}
+            type="button"
+            onClick={() => trocarPeriodo(p.value)}
+            className={`px-2.5 py-2 text-[11px] font-mono transition cursor-pointer ${
+              qPeriod === p.value ? 'bg-red-600 text-white font-semibold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {subs.length > 0 && (
+        <select value={qSub} onChange={(e) => setQSub(Number(e.target.value))} className={inputClass} style={{ width: 'auto' }}>
+          {subs.map(s => (
+            <option key={s.value} value={s.value}>{s.label}</option>
+          ))}
+        </select>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          const [from, to] = quickRange(qYear, qPeriod, qSub);
+          onApply(from, to);
+        }}
+        className="px-3 py-2 text-[11px] font-mono uppercase bg-zinc-900 hover:bg-red-950/40 border border-zinc-800 hover:border-red-900/40 text-zinc-300 hover:text-red-400 rounded transition cursor-pointer"
+      >
+        Aplicar
+      </button>
+    </div>
+  );
+}
 
 export default function ReportsView({ userRole }: ReportsViewProps) {
   const [activeArea, setActiveArea] = useState<ReportArea>('financial');
@@ -88,10 +152,11 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
     setError('');
   };
 
-  const loadCRM = async () => {
+  const loadCRM = async (from?: string, to?: string) => {
     setCrmLoading(true);
     try {
-      const data = await reportService.getCRMReport(crmDateFrom || undefined, crmDateTo || undefined);
+      const data = await reportService.getCRMReport(
+        (from ?? crmDateFrom) || undefined, (to ?? crmDateTo) || undefined);
       setCrmData(data);
     } catch (err) {
       console.error('Erro ao carregar CRM:', err);
@@ -270,12 +335,13 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
               <input type="date" value={crmDateTo} onChange={e => setCrmDateTo(e.target.value)}
                 className="bg-zinc-900 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none font-mono" />
             </div>
-            <button onClick={loadCRM}
+            <button onClick={() => loadCRM()}
               className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium px-4 py-2 rounded cursor-pointer font-sans">
               Gerar
             </button>
+            <QuickPeriod onApply={(f, t) => { setCrmDateFrom(f); setCrmDateTo(t); setTimeout(() => loadCRM(f, t), 100); }} />
             {(crmDateFrom || crmDateTo) && (
-              <button onClick={() => { setCrmDateFrom(''); setCrmDateTo(''); setTimeout(loadCRM, 100); }}
+              <button onClick={() => { setCrmDateFrom(''); setCrmDateTo(''); setTimeout(() => loadCRM('', ''), 100); }}
                 className="text-xs text-zinc-500 hover:text-white font-mono cursor-pointer">
                 Limpar filtro
               </button>
@@ -439,6 +505,7 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
                 </select>
               </FilterField>
             </div>
+            <QuickPeriod onApply={(f, t) => { setDateFrom(f); setDateTo(t); }} />
           </div>
 
           {leadLoading ? (
@@ -645,6 +712,7 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
         </div>
 
         {activeArea === 'financial' && (
+          <>
           <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <FilterField label="Data Inicial">
               <input type="date" value={(filters.date_from as string) || ''} onChange={e => updateFilter('date_from', e.target.value)} className={inputClass} />
@@ -679,9 +747,12 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
               </select>
             </FilterField>
           </div>
+          <QuickPeriod onApply={(f, t) => { updateFilter('date_from', f); updateFilter('date_to', t); }} />
+          </>
         )}
 
         {activeArea === 'clients' && (
+          <>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <FilterField label="Cadastrado de">
               <input type="date" value={(filters.created_from as string) || ''} onChange={e => updateFilter('created_from', e.target.value)} className={inputClass} />
@@ -702,9 +773,12 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
               </div>
             </FilterField>
           </div>
+          <QuickPeriod onApply={(f, t) => { updateFilter('created_from', f); updateFilter('created_to', t); }} />
+          </>
         )}
 
         {activeArea === 'projects' && (
+          <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <FilterField label="Status">
               <select value={(filters.status_filter as string) || ''} onChange={e => updateFilter('status_filter', e.target.value)} className={inputClass}>
@@ -725,6 +799,8 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
               <input type="date" value={(filters.deadline_to as string) || ''} onChange={e => updateFilter('deadline_to', e.target.value)} className={inputClass} />
             </FilterField>
           </div>
+          <QuickPeriod onApply={(f, t) => { updateFilter('deadline_from', f); updateFilter('deadline_to', t); }} />
+          </>
         )}
 
         {activeArea === 'stock' && (
@@ -793,6 +869,7 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
         )}
 
         {activeArea === 'tickets' && (
+          <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
             <FilterField label="Status">
               <select value={(filters.status as string) || ''} onChange={e => updateFilter('status', e.target.value)} className={inputClass}>
@@ -820,9 +897,12 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
               </select>
             </FilterField>
           </div>
+          <QuickPeriod onApply={(f, t) => { updateFilter('date_from', f); updateFilter('date_to', t); }} />
+          </>
         )}
 
         {activeArea === 'production' && (
+          <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <FilterField label="De">
               <input type="date" value={(filters.date_from as string) || ''} onChange={e => updateFilter('date_from', e.target.value)} className={inputClass} />
@@ -831,6 +911,8 @@ export default function ReportsView({ userRole }: ReportsViewProps) {
               <input type="date" value={(filters.date_to as string) || ''} onChange={e => updateFilter('date_to', e.target.value)} className={inputClass} />
             </FilterField>
           </div>
+          <QuickPeriod onApply={(f, t) => { updateFilter('date_from', f); updateFilter('date_to', t); }} />
+          </>
         )}
 
         <div className="flex justify-end pt-2 border-t border-zinc-800">

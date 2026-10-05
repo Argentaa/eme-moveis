@@ -99,6 +99,10 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   // Demonstração do fluxo de caixa: realizado (pago) x projetado (inclui em aberto)
   const [cfMode, setCfMode] = useState<'realizado' | 'projetado'>('realizado');
 
+  // Indicadores do ano (Faturamento, Recebimentos, Margem, Inadimplência):
+  // vêm do summary do relatório financeiro filtrado no ano do fluxo.
+  const [finYear, setFinYear] = useState<ReportResult | null>(null);
+
   // Orçamento
   const [budgetData, setBudgetData] = useState<BudgetAnalysis | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
@@ -361,6 +365,9 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       .then((data) => { if (active) setCfData(data); })
       .catch(() => { if (active) setCfData(null); })
       .finally(() => { if (active) setCfLoading(false); });
+    reportService.getReport('financial', { date_from: `${cfYear}-01-01`, date_to: `${cfYear}-12-31` })
+      .then((data) => { if (active) setFinYear(data); })
+      .catch(() => { if (active) setFinYear(null); });
     return () => { active = false; };
   }, [cfYear, cfMode]);
 
@@ -694,6 +701,39 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
         </div>
 
       </div>
+
+      {/* Indicadores do ano: faturamento, recebimentos, margem e inadimplência */}
+      {(() => {
+        const val = (label: string) =>
+          (finYear?.summary || []).find(s => s.label === label)?.value || '-';
+        const num = (v: string) => {
+          const n = Number(String(v || '').replace(/[^\d,-]/g, '').replace(/\./g, '').replace(',', '.'));
+          return Number.isFinite(n) ? n : 0;
+        };
+        const faturamento = val('Faturamento');
+        const recebimentos = val('Recebimentos');
+        const margem = val('Margem de Contribuição');
+        const inadimplencia = val('Inadimplência');
+        const recNum = num(recebimentos);
+        const margemNum = num(margem);
+        const margemPct = recNum > 0 ? (margemNum / recNum) * 100 : 0;
+        const inadimplente = !String(inadimplencia).startsWith('R$ 0,00');
+        const statCard = (titulo: string, valor: string, detalhe: string, borda: string, corValor: string) => (
+          <div className={`glass-panel p-5 rounded-lg border-l-4 ${borda}`}>
+            <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">{titulo}</span>
+            <p className={`text-xl font-bold font-sans mt-1 ${corValor}`}>{valor}</p>
+            <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">{detalhe}</span>
+          </div>
+        );
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {statCard('Faturamento', faturamento, `vendido/faturado em ${cfYear}`, 'border-l-emerald-600', 'text-emerald-400')}
+            {statCard('Recebimentos', recebimentos, 'efetivamente recebido', 'border-l-emerald-600', 'text-emerald-400')}
+            {statCard('Margem de contribuição', margem, `${margemPct.toFixed(1).replace('.', ',')}% dos recebimentos`, 'border-l-zinc-300', 'text-white')}
+            {statCard('Inadimplência', inadimplencia, 'vencido, em aberto', inadimplente ? 'border-l-red-600' : 'border-l-zinc-700', inadimplente ? 'text-red-500' : 'text-white')}
+          </div>
+        );
+      })()}
 
       {/* Fluxo de Caixa Mensal */}
       <div className="glass-panel rounded-lg p-5 space-y-4">
