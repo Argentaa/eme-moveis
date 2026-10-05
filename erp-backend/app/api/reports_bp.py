@@ -281,11 +281,11 @@ def _build_projects():
     rows = q.order_by(Project.deadline).all()
 
     total = sum(float(p.value or 0) for p in rows)
-    concluidos = sum(1 for p in rows if p.status == "CONCLUIDO")
-    em_and = sum(1 for p in rows if p.status != "CONCLUIDO")
+    concluidos = sum(1 for p in rows if p.concluded_at is not None)
+    em_and = sum(1 for p in rows if p.concluded_at is None)
     hoje = date.today()
     atrasados = sum(1 for p in rows
-                    if p.status != "CONCLUIDO" and p.deadline and p.deadline < hoje)
+                    if p.concluded_at is None and p.deadline and p.deadline < hoje)
     formatted = [{
         "title": p.title,
         "client_name": (db.session.get(Client, p.client_id).name

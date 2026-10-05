@@ -68,7 +68,7 @@ def _resolve_funnel_for_create(data):
 @bp.get("/api/projects/overdue")
 @token_required()
 def overdue_projects():
-    """Projetos com deadline vencido (qualquer status), com days_overdue.
+    """Projetos com deadline vencido e ainda não concluídos, com days_overdue.
 
     Contrato original: SELECT ..., DATEDIFF(CURDATE(), deadline) AS
     days_overdue WHERE deadline < CURDATE(). Frontend OverdueProjectsCard
@@ -77,7 +77,11 @@ def overdue_projects():
     today = date.today()
     rows = (
         db.session.query(Project)
-        .filter(Project.deadline.isnot(None), Project.deadline < today)
+        .filter(
+            Project.deadline.isnot(None),
+            Project.deadline < today,
+            Project.concluded_at.is_(None),
+        )
         .order_by(Project.deadline)
         .all()
     )
