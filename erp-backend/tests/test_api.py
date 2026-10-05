@@ -5218,3 +5218,57 @@ def test_products_update_e_reativar(client):
     cid2 = client.post("/api/products", headers=h, json={"name": "Outro Produto"}).get_json()["id"]
     r3 = client.put(f"/api/products/{cid2}", headers=h, json={"name": "Produto Editado"})
     assert r3.status_code == 400
+
+
+def test_crm_fase1_vendas_orcamentos_origem(client):
+    """Fase 1 Comercial: vendas mes/ano + evolucao, orcamentos e pizza por origem."""
+    from datetime import date as _date
+    h = _login(client)
+    hoje = _date.today()
+    mes_atual = f"{hoje.year}-{hoje.month:02d}-15"
+    outro = hoje.month - 1 or 12
+    mes_outro = f"{hoje.year}-{outro:02d}-10"
+
+    cid1 = _mk_sale_client(client, h, "Cliente Fase1 A")
+    cid2 = _mk_sale_client(client, h, "Cliente Fase1 B")
+    p1 = _sale_payload(client, h, cid1, lead_source="Instagram",
+                       sale_date=mes_atual, total_value=10000,
+                       down_payment=10000, installments=0,
+                       installment_value=0, installments_due=[])
+    assert client.post("/api/sales", headers=h, json=p1).status_code == 201
+    p2 = _sale_payload(client, h, cid2, lead_source="Indicacao",
+                       sale_date=mes_outro, total_value=5000,
+                       down_payment=5000, installments=0,
+                       installment_value=0, installments_due=[])
+    assert client.post("/api/sales", headers=h, json=p2).status_code == 201
+
+    def _prop(status, itens):
+        r = client.post("/api/proposals", headers=h,
+                        json={"client_id": cid1, "items": itens})
+        assert r.status_code == 201, r.get_data(as_text=True)
+        pid = r.get_json()["id"]
+        if status != "RASCUNHO":
+            r2 = client.put(f"/api/proposals/{pid}", headers=h,
+                            json={"status": status})
+            assert r2.status_code == 200, r2.get_data(as_text=True)
+        return pid
+
+    _prop("ENVIADA", [{"description": "Armario", "quantity": 2, "unit_price": 1000}])
+    _prop("RASCUNHO", [{"description": "Rascunho", "quantity": 1, "unit_price": 500}])
+    _prop("ACEITA", [{"description": "Cozinha", "quantity": 1, "unit_price": 3000}])
+
+    rel = client.get("/api/reports/crm", headers=h).get_json()
+    assert rel["vendas_mes"]["total"] == 10000
+    assert rel["vendas_mes"]["qtd"] == 1
+    assert rel["vendas_ano"]["total"] == 15000
+    assert rel["vendas_ano"]["qtd"] == 2
+    assert len(rel["vendas_ano"]["evolucao"]) == 12
+    evo = {e["mes"]: e for e in rel["vendas_ano"]["evolucao"]}
+    assert evo[mes_atual[:7]]["total"] == 10000
+    assert evo[mes_outro[:7]]["total"] == 5000
+    assert rel["orcamentos"]["qtd"] == 2
+    assert rel["orcamentos"]["valor"] == 5000
+    assert rel["orcamentos"]["aceitas"] == 1
+    por_origem = {o["origem"]: o for o in rel["vendas_por_origem"]}
+    assert por_origem["Instagram"]["valor"] == 10000
+    assert por_origem["Indicacao"]["valor"] == 5000

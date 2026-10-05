@@ -568,6 +568,13 @@ export interface CrmReport {
   };
   vendas_por_parceiro: unknown[];
   top_products?: TopProduct[];
+  vendas_mes?: { year: number; month: number; qtd: number; total: number };
+  vendas_ano?: {
+    year: number; qtd: number; total: number;
+    evolucao: { mes: string; qtd: number; total: number }[];
+  };
+  orcamentos?: { qtd: number; valor: number; aceitas: number };
+  vendas_por_origem?: { origem: string; qtd: number; valor: number; share: number }[];
 }
 
 // ── Painel inicial: meta comercial e pendencias ──────────────────

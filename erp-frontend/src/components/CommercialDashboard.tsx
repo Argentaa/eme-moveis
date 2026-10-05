@@ -10,7 +10,7 @@
  * valor estimado) — o campo `origem` diz qual base foi usada.
  */
 import { useEffect, useState } from 'react';
-import { Loader2, Percent, Target, TrendingDown, Users } from 'lucide-react';
+import { Loader2, Percent, Target, TrendingDown, Users, BadgeDollarSign, CalendarCheck, FileText } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
   PieChart, Pie, Legend,
@@ -78,9 +78,56 @@ export default function CommercialDashboard() {
 
   const ticket = rel.ticket_medio;
 
+  const vendasMes = rel.vendas_mes;
+  const vendasAno = rel.vendas_ano;
+  const orcamentos = rel.orcamentos;
+  const porOrigem = rel.vendas_por_origem || [];
+
+  const MESES_PT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const evolucaoData = (vendasAno?.evolucao || []).map(e => {
+    const mm = parseInt((e.mes || '').slice(5, 7), 10);
+    return {
+      ...e,
+      rotulo: Number.isFinite(mm) && mm >= 1 && mm <= 12 ? MESES_PT[mm - 1] : e.mes,
+    };
+  });
+
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="glass-panel p-5 rounded-lg border-l-4 border-l-emerald-600">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
+            <BadgeDollarSign className="w-3 h-3" /> Vendas do mês
+          </span>
+          <p className="text-2xl font-bold font-sans text-white mt-2">
+            {fmt(vendasMes?.total ?? 0)}
+          </p>
+          <p className="text-[11px] text-zinc-500 font-mono mt-1">
+            {vendasMes?.qtd ?? 0} venda(s) no mês
+          </p>
+        </div>
+        <div className="glass-panel p-5 rounded-lg border-l-4 border-l-emerald-600">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
+            <CalendarCheck className="w-3 h-3" /> Vendas do ano
+          </span>
+          <p className="text-2xl font-bold font-sans text-white mt-2">
+            {fmt(vendasAno?.total ?? 0)}
+          </p>
+          <p className="text-[11px] text-zinc-500 font-mono mt-1">
+            {vendasAno?.qtd ?? 0} venda(s) em {vendasAno?.year ?? ''}
+          </p>
+        </div>
+        <div className="glass-panel p-5 rounded-lg">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
+            <FileText className="w-3 h-3" /> Orçamentos enviados
+          </span>
+          <p className="text-2xl font-bold font-sans text-white mt-2">
+            {orcamentos?.qtd ?? 0}
+          </p>
+          <p className="text-[11px] text-zinc-500 font-mono mt-1">
+            {fmt(orcamentos?.valor ?? 0)} · {orcamentos?.aceitas ?? 0} aceito(s)
+          </p>
+        </div>
         <div className="glass-panel p-5 rounded-lg">
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
             <Users className="w-3 h-3" /> Clientes no CRM
@@ -128,6 +175,82 @@ export default function CommercialDashboard() {
           <p className="text-[11px] text-zinc-500 font-mono mt-1">
             de {rel.negociacoes?.total ?? 0} negociação(ões)
           </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="glass-panel p-5 rounded-lg">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">
+            Evolução das vendas no ano
+          </span>
+          <p className="text-[11px] text-zinc-500 font-mono mt-0.5 mb-3">
+            Total vendido mês a mês em {vendasAno?.year ?? ''} · passe o mouse para ver valores
+          </p>
+          {evolucaoData.every(e => (e.total || 0) === 0) ? (
+            <p className="text-xs text-zinc-500 font-mono">Nenhuma venda no ano ainda.</p>
+          ) : (
+            <div className="h-64 text-xs font-mono">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={evolucaoData} margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                  <XAxis dataKey="rotulo" stroke="#a1a1aa" tickLine={false} fontSize={11} />
+                  <YAxis
+                    stroke="#71717a" axisLine={false} tickLine={false}
+                    tickFormatter={(v: number) => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
+                    width={70}
+                  />
+                  <Tooltip
+                    {...chartTooltipProps}
+                    formatter={(v: number, _n: string, entry: any) => [
+                      `${fmt(Number(v || 0))} · ${entry.payload.qtd ?? 0} venda(s)`,
+                      'Total',
+                    ]}
+                  />
+                  <Bar dataKey="total" name="Vendas" radius={[4, 4, 0, 0]} maxBarSize={28} fill="#059669" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+
+        <div className="glass-panel p-5 rounded-lg">
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">
+            Vendas por origem
+          </span>
+          <p className="text-[11px] text-zinc-500 font-mono mt-0.5 mb-3">
+            Valor vendido por origem · passe o mouse para ver quantidade e participação
+          </p>
+          {porOrigem.length === 0 ? (
+            <p className="text-xs text-zinc-500 font-mono">Nenhuma venda registrada.</p>
+          ) : (
+            <div className="h-64 text-xs font-mono">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={porOrigem as any[]}
+                    dataKey="valor"
+                    nameKey="origem"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={80}
+                    label={({ origem, share }: any) => `${origem} (${share}%)`}
+                  >
+                    {porOrigem.map((_, i) => (
+                      <Cell key={i} fill={TRENDING_COLORS[i % TRENDING_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    {...chartTooltipProps}
+                    formatter={(v: number, _n: string, entry: any) => [
+                      `${fmt(Number(v || 0))} · ${entry.payload.qtd ?? 0} venda(s) · ${entry.payload.share ?? 0}%`,
+                      'Origem',
+                    ]}
+                  />
+                  <Legend formatter={(value: string) => <span style={{ color: '#d4d4d8', fontSize: 11 }}>{value}</span>} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
       </div>
 

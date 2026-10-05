@@ -22,7 +22,7 @@ from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
     CalendarEvent, Client, FinancialRecord, Machine, Partner, ProductionIssue, Project,
-    ProjectEnvironment, Sale, SaleItem, ServiceTicket, StockItem, StockMovement, TimeEntry, Worker,
+    ProjectEnvironment, Proposal, Sale, SaleItem, ServiceTicket, StockItem, StockMovement, TimeEntry, Worker,
 )
 
 bp = Blueprint("reports", __name__)
@@ -939,6 +939,75 @@ def _build_crm():
         for t in top_list[:8]
     ]
 
+    # ── Fase 1 Comercial: vendas mês/ano + orçamentos + pizza por origem ──
+    # Fonte de verdade: Sale (venda gerada pelo botão "Gerar venda").
+    # sale_date NUNCA é nula (coluna NOT NULL); origem = Sale.lead_source
+    # com fallback para o lead_source do cliente.
+    vendas = db.session.query(Sale).all()
+    clients_by_id = {c.id: c for c in clients}
+    ano_corrente, mes_corrente = today.year, today.month
+    vendas_do_mes = [s for s in vendas
+                     if s.sale_date and s.sale_date.year == ano_corrente
+                     and s.sale_date.month == mes_corrente]
+    vendas_mes = {
+        "year": ano_corrente,
+        "month": mes_corrente,
+        "qtd": len(vendas_do_mes),
+        "total": round(sum(float(s.total_value or 0) for s in vendas_do_mes), 2),
+    }
+    evolucao = []
+    for mm in range(1, 13):
+        do_mes = [s for s in vendas
+                  if s.sale_date and s.sale_date.year == ano_corrente
+                  and s.sale_date.month == mm]
+        evolucao.append({
+            "mes": f"{ano_corrente:04d}-{mm:02d}",
+            "qtd": len(do_mes),
+            "total": round(sum(float(s.total_value or 0) for s in do_mes), 2),
+        })
+    vendas_do_ano = [s for s in vendas
+                     if s.sale_date and s.sale_date.year == ano_corrente]
+    vendas_ano = {
+        "year": ano_corrente,
+        "qtd": len(vendas_do_ano),
+        "total": round(sum(float(s.total_value or 0) for s in vendas_do_ano), 2),
+        "evolucao": evolucao,
+    }
+    # Orçamentos enviados = propostas ENVIADA ou ACEITA (RASCUNHO/RECUSADA
+    # não contam). Valor = computed_total (soma dos itens) com fallback
+    # para total_value.
+    enviadas = db.session.query(Proposal).filter(
+        Proposal.status.in_(("ENVIADA", "ACEITA"))).all()
+    def _prop_valor(p):
+        try:
+            tot = float(p.computed_total or 0)
+        except Exception:
+            tot = 0.0
+        if not tot:
+            tot = float(p.total_value or 0)
+        return tot
+    orcamentos = {
+        "qtd": len(enviadas),
+        "valor": round(sum(_prop_valor(p) for p in enviadas), 2),
+        "aceitas": sum(1 for p in enviadas if (p.status or "").upper() == "ACEITA"),
+    }
+    # Pizza vendas por origem: VALOR vendido (não qtd de leads) por origem.
+    origem_map: dict = {}
+    for s in vendas:
+        cli = clients_by_id.get(getattr(s, "client_id", None))
+        origem = (getattr(s, "lead_source", None)
+                  or (cli.lead_source if cli else None)
+                  or "Não informado")
+        g = origem_map.setdefault(origem, {"origem": origem, "qtd": 0, "valor": 0.0})
+        g["qtd"] += 1
+        g["valor"] += float(s.total_value or 0)
+    total_origem_valor = sum(g["valor"] for g in origem_map.values())
+    vendas_por_origem = [
+        {**g, "valor": round(g["valor"], 2),
+         "share": round(g["valor"] / total_origem_valor * 100, 1) if total_origem_valor else 0}
+        for g in sorted(origem_map.values(), key=lambda g: g["valor"], reverse=True)
+    ]
+
     return {
         "periodo": {"date_from": iso(df), "date_to": iso(dt)},
         "negociacoes": {"total": len(clients), "por_etapa": by_stage,
@@ -952,6 +1021,10 @@ def _build_crm():
         "parceiros": partner_sales,
         "partner_clients_count": partner_clients_count,
         "top_products": top_products,
+        "vendas_mes": vendas_mes,
+        "vendas_ano": vendas_ano,
+        "orcamentos": orcamentos,
+        "vendas_por_origem": vendas_por_origem,
     }
 
 
