@@ -1357,6 +1357,16 @@ export const whatsappService = {
     const response = await api.post(`/api/whatsapp/conversations/${conversationId}/sync`);
     return response.data;
   },
+  /** Renomeia e/ou vincula cliente (só no ERP). */
+  async update(conversationId: string, data: { name?: string; client_id?: string | null }): Promise<WhatsappConversation> {
+    const response = await api.put(`/api/whatsapp/conversations/${conversationId}`, data);
+    return response.data;
+  },
+  /** Apaga conversa + mensagens só no ERP (o celular não é tocado). */
+  async remove(conversationId: string): Promise<{ ok: boolean; deleted_messages: number }> {
+    const response = await api.delete(`/api/whatsapp/conversations/${conversationId}`);
+    return response.data;
+  },
   mediaUrl(messageId: string): string {
     return `/api/whatsapp/messages/${messageId}/media`;
   },

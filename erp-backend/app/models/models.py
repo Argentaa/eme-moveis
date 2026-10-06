@@ -1993,6 +1993,12 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("WhatsApp: excluir conversa, renomear e vincular cliente",
+     "Na conversa agora tem lápis (editar nome e vínculo com cliente) e lixeira (apagar a conversa com as mensagens) — só ADMIN/GERENTE. Apagar limpa só o ERP: no celular continua tudo. O nome que você colocar não é sobrescrito pelas mensagens que chegam.",
+     "NOVIDADE", "2026-10-06"),
+    ("WhatsApp: erro mostra o motivo real",
+     "Correção: quando a Evolution falha (ex.: gerar QR logo após desconectar), a tela mostrava só 'respondeu 500'. Agora a mensagem traz o motivo real devolvido pela Evolution, e o QR tenta uma segunda vez sozinho antes de acusar erro (a sessão pode ainda estar limpando).",
+     "CORRECAO", "2026-10-06"),
     ("WhatsApp: desconectar mostra o estado real",
      "Correção: ao desconectar, a tela dizia 'desconectado' mas o selo continuava 'Conectado' — a releitura do estado pegava a sessão ainda caindo na Evolution e marcava de volta. Agora o sistema espera a sessão cair de verdade antes de responder, e a tela mostra o estado confirmado. Se a sessão demorar, ele avisa para aguardar em vez de fingir que desconectou.",
      "CORRECAO", "2026-10-06"),

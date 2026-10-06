@@ -4889,6 +4889,69 @@ def test_whatsapp_logout_espera_sessao_cair(client, monkeypatch):
     assert body["ok"] is True and body["connection"] == "close", body
 
 
+def test_whatsapp_qr_mostra_motivo_real_e_tenta_de_novo(client, monkeypatch):
+    """QR: em 5xx tenta UMA vez de novo (transitorio pos-logout); se persistir,
+    o detail traz o motivo real da Evolution, nao so o 'respondeu 500'."""
+    import app.api.whatsapp_bp as wb
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        if not db.session.query(AppSetting).filter_by(key="evolution_key").first():
+            db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+        if not db.session.query(AppSetting).filter_by(key="evolution_url").first():
+            db.session.add(AppSetting(key="evolution_url", value="https://evo.exemplo.com"))
+        db.session.commit()
+    calls = []
+    def fake_transitorio(method, path, key, body=None, timeout=None):
+        calls.append(path)
+        if len(calls) == 1:
+            return 500, {"error": "Evolution API respondeu 500",
+                         "raw": '{"message": "session cleaning up, try again"}'}
+        return 200, {"base64": "AAA", "pairingCode": "", "code": "x"}
+    monkeypatch.setattr(wb, "_evo_call", fake_transitorio)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    r = client.get("/api/whatsapp/qr", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["base64"] == "AAA"
+    assert len(calls) == 2, calls
+    monkeypatch.setattr(
+        wb, "_evo_call",
+        lambda *a, **k: (500, {"error": "Evolution API respondeu 500",
+                               "raw": '{"response": {"message": "instance not found"}}'}))
+    r2 = client.get("/api/whatsapp/qr", headers=h)
+    assert r2.status_code == 502, r2.get_data(as_text=True)
+    body2 = r2.get_json()
+    assert "instance not found" in body2["detail"], body2
+    assert body2["hint"] == "Aguarde alguns segundos e tente de novo."
+
+
+def test_whatsapp_conversa_renomeia_vincula_e_apaga(client):
+    """PUT renomeia + vincula/desvincula cliente; DELETE apaga so no ERP."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cli Zap", "phone": "5555999000444"}).get_json()["id"]
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999000444"}).get_json()
+    assert conv["client_id"] == cid  # auto-link pelo telefone
+    base = f"/api/whatsapp/conversations/{conv['id']}"
+    r = client.put(base, headers=h, json={"name": "Joao da Obra"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["name"] == "Joao da Obra"
+    assert r.get_json()["client_id"] == cid  # vinculo preservado
+    r2 = client.put(base, headers=h, json={"client_id": None})
+    assert r2.status_code == 200 and r2.get_json()["client_id"] is None
+    r3 = client.put(base, headers=h, json={"client_id": cid})
+    assert r3.get_json()["client_id"] == cid
+    assert client.put(base, headers=h, json={"client_id": "nao-existe"}).status_code == 404
+    assert client.put("/api/whatsapp/conversations/nao-existe", headers=h,
+                      json={"name": "x"}).status_code == 404
+    assert client.delete("/api/whatsapp/conversations/nao-existe", headers=h).status_code == 404
+    d = client.delete(base, headers=h)
+    assert d.get_json() == {"ok": True, "deleted_messages": 0}, d.get_json()
+    assert client.get(f"{base}/messages", headers=h).status_code == 404
+
+
 def test_whatsapp_telefone_ambiguo_nao_vincula(client):
     """O MESMO telefone em DOIS clientes: conversa sem client_id (pior e entregar errado)."""
     from app.api.whatsapp_bp import webhook_token

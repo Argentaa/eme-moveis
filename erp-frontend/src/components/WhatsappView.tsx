@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   MessageCircle, QrCode, Send, Paperclip, RefreshCw, Plus, X,
   CheckCircle, Phone, Download, Settings, Wifi, WifiOff, CheckCheck,
+  Pencil, Trash2,
 } from 'lucide-react';
-import { api, whatsappService, getApiErrorMessage } from '../services/api';
-import type { WhatsappConversation, WhatsappMessage, WhatsappStatus } from '../types';
+import { api, whatsappService, clientService, getApiErrorMessage } from '../services/api';
+import type { WhatsappConversation, WhatsappMessage, WhatsappStatus, Client } from '../types';
 import ModuleTabs, { type ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
 
 const WHATSAPP_TABS: ModuleTab[] = [
@@ -112,6 +113,7 @@ function MediaPreview({ m }: { m: WhatsappMessage }) {
 export default function WhatsappView({ userRole }: WhatsappViewProps) {
   const [activeTab, setActiveTab] = useModuleTab('whatsapp', WHATSAPP_TABS, 'conversas');
   const isAdmin = userRole === 'ADMIN';
+  const canManage = userRole === 'ADMIN' || userRole === 'GERENTE';
 
   // ── estado compartilhado ──────────────────────────────────────────
   const [status, setStatus] = useState<WhatsappStatus | null>(null);
@@ -138,6 +140,15 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
   const [newPhone, setNewPhone] = useState('');
   const [newName, setNewName] = useState('');
   const [newError, setNewError] = useState('');
+
+  // ── editar conversa (nome + vínculo com cliente, só no ERP) ──────────
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editClientId, setEditClientId] = useState('');
+  const [clientsList, setClientsList] = useState<Client[]>([]);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   // ── config ────────────────────────────────────────────────────────
   const [cfgUrl, setCfgUrl] = useState('');
@@ -277,6 +288,59 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
       if (selected) await loadMessages(selected.id);
     } catch {
       setSendError('Não foi possível baixar o arquivo.');
+    }
+  }
+
+  /** Abre o modal de edição com os dados atuais + cadastro de clientes. */
+  async function openEdit() {
+    if (!selected) return;
+    setEditError('');
+    setEditName(selected.name || '');
+    setEditClientId(selected.client_id || '');
+    setIsEditOpen(true);
+    try {
+      const list = await clientService.getAll();
+      setClientsList([...list].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')));
+    } catch {
+      setClientsList([]);
+    }
+  }
+
+  async function handleEditSave(e: FormEvent) {
+    e.preventDefault();
+    if (!selected || editSaving) return;
+    setEditSaving(true);
+    setEditError('');
+    try {
+      await whatsappService.update(selected.id, {
+        name: editName.trim(),
+        client_id: editClientId || null,
+      });
+      setIsEditOpen(false);
+      await loadConversations();
+    } catch (err) {
+      setEditError(getApiErrorMessage(err, 'Não foi possível salvar.'));
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  /** Apaga a conversa só no ERP (o celular não é tocado). */
+  async function handleDelete() {
+    if (!selected || deleting) return;
+    const label = selected.name || selected.phone;
+    if (!window.confirm(`Apagar a conversa com "${label}" e as ${messages.length} mensagem(ns)? Isso limpa só o ERP — no celular continua tudo.`)) return;
+    setDeleting(true);
+    try {
+      await whatsappService.remove(selected.id);
+      setSelectedId(null);
+      setMessages([]);
+      setSyncMsg('');
+      await loadConversations();
+    } catch (err) {
+      setSendError(getApiErrorMessage(err, 'Não foi possível apagar a conversa.'));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -476,6 +540,18 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
                       <RefreshCw size={13} className={syncing ? 'animate-spin' : ''} />
                       {syncing ? 'Sincronizando…' : 'Sincronizar'}
                     </button>
+                    {canManage && (
+                      <>
+                        <button type="button" title="Editar nome e vínculo com cliente" onClick={openEdit}
+                          className="p-2 rounded-full bg-zinc-800 hover:bg-zinc-700 shrink-0">
+                          <Pencil size={14} />
+                        </button>
+                        <button type="button" title="Apagar conversa (só no ERP)" onClick={handleDelete} disabled={deleting}
+                          className="p-2 rounded-full bg-zinc-800 hover:bg-red-900 text-zinc-300 hover:text-red-200 disabled:opacity-50 shrink-0">
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    )}
                   </div>
                   <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-3"
                     style={{ backgroundImage: 'radial-gradient(#27272a 0.8px, transparent 0.8px)', backgroundSize: '18px 18px' }}>
@@ -693,6 +769,55 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
               {newError && <p className="text-xs text-red-400">{newError}</p>}
               <button type="submit" className="w-full px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-sm">
                 Abrir conversa
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isEditOpen && selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setIsEditOpen(false)}>
+          <div className="glass-panel w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-4">
+              <Pencil size={17} className="text-emerald-400" />
+              <h3 className="font-semibold">Editar conversa</h3>
+              <div className="flex-1" />
+              <button type="button" onClick={() => setIsEditOpen(false)} title="Fechar">
+                <X size={17} />
+              </button>
+            </div>
+            <form onSubmit={handleEditSave} className="space-y-3">
+              <div>
+                <label className="text-xs text-zinc-400">Telefone</label>
+                <input value={selected.phone} disabled
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm mt-1 text-zinc-500" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Nome / apelido (vazio = mostra o telefone)</label>
+                <input value={editName} onChange={(e) => setEditName(e.target.value)} maxLength={160}
+                  placeholder={selected.phone}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm mt-1" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Cliente vinculado</label>
+                <select value={editClientId} onChange={(e) => setEditClientId(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm mt-1">
+                  <option value="">Sem vínculo</option>
+                  {selected.client_id && !clientsList.some((c) => c.id === selected.client_id) && (
+                    <option value={selected.client_id}>Vinculado atualmente</option>
+                  )}
+                  {clientsList.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{c.phone ? ` · ${c.phone}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {editError && <p className="text-xs text-red-400">{editError}</p>}
+              <button type="submit" disabled={editSaving}
+                className="w-full px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-sm disabled:opacity-50">
+                {editSaving ? 'Salvando…' : 'Salvar'}
               </button>
             </form>
           </div>

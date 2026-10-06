@@ -8,7 +8,9 @@ O que este blueprint faz, em ordem de uso:
 2. `GET /api/whatsapp/status`: configurado? estado real (open/close/...) e
    numero conectado. A tela consulta para mostrar desconectada/QR/conectada.
 3. `GET /api/whatsapp/qr`: QR novo a cada chamada (vale ~3 min, por isso
-   nunca e persistido) + pairing code.
+   nunca e persistido) + pairing code. Em 5xx tenta UMA vez de novo após 4 s
+   (pós-logout a sessão pode estar limpando) e o erro traz o motivo real da
+   Evolution (`_evo_fail`), não só o "respondeu 500".
 4. `POST /api/whatsapp/webhook?token=...` (SEM login): recebe MESSAGES_UPSERT
    e grava conversa+mensagem. Token derivado via hmac da chave global —
    nada guardado no banco. fromMe=True (enviado pelo celular pareado) entra
@@ -24,6 +26,12 @@ O que este blueprint faz, em ordem de uso:
 7. `POST /api/whatsapp/conversations/<id>/sync`: puxa o historico da
    Evolution (findMessages) e grava o que falta — e o botao "Sincronizar" da
    tela, p/ usar celular e ERP juntos sem perder mensagem.
+8. `PUT /api/whatsapp/conversations/<id>` (ADMIN/GERENTE): renomeia a
+   conversa e/ou vincula/desvincula cliente — só no ERP, sem tocar a
+   Evolution nem criar Client.
+9. `DELETE /api/whatsapp/conversations/<id>` (ADMIN/GERENTE): apaga conversa
+   e mensagens SÓ no ERP (o celular continua com tudo); apaga os arquivos de
+   mídia enviada junto (melhor esforço).
 
 Contrato v2 real (nao o da doc v1): connect e GET, hash vem no create,
 fetchInstances usa name/connectionStatus/ownerJid. Envio de midia tenta o
@@ -118,6 +126,63 @@ def _evo_call(method, path, global_key, body=None, timeout=15):
         return status, (json.loads(raw) if raw.strip() else {})
     except (ValueError, AttributeError):
         return status, {"raw": (raw or "")[:300]}
+
+
+def _evo_message(resp):
+    """Motivo real devolvido pela Evolution (o 'respondeu 500' sozinho nao diz nada).
+
+    Formatos que a v2 usa no erro: {"message": ...} | {"response":
+    {"message": ...}} | {"response": "texto"} | {"error": ...} | {"raw":
+    "<json ou texto>"}.
+    """
+    if not isinstance(resp, dict):
+        return ""
+    for key in ("response", "data"):
+        node = resp.get(key)
+        if isinstance(node, dict):
+            for mk in ("message", "error", "detail"):
+                if node.get(mk):
+                    return str(node[mk])[:200]
+        elif isinstance(node, str) and node.strip():
+            return node.strip()[:200]
+    raw = resp.get("raw") or ""
+    if isinstance(raw, str) and raw.strip():
+        try:
+            node = json.loads(raw)
+        except (ValueError, AttributeError):
+            node = None
+        if isinstance(node, dict):
+            for kk in ("message", "error", "detail"):
+                if node.get(kk):
+                    return str(node[kk])[:200]
+            r2 = node.get("response")
+            if isinstance(r2, dict):
+                for kk in ("message", "error"):
+                    if r2.get(kk):
+                        return str(r2[kk])[:200]
+            elif isinstance(r2, str) and r2.strip():
+                return r2.strip()[:200]
+        else:
+            return raw.strip()[:200]
+    for key in ("message", "error"):
+        v = resp.get(key)
+        if isinstance(v, str) and v.strip() and not v.strip().startswith("Evolution API respondeu"):
+            return v.strip()[:200]
+    return ""
+
+
+def _evo_fail(resp, fallback):
+    """Payload de erro com o motivo real + cru p/ diagnostico.
+
+    A tela mostra `detail`; `evolution_raw` fica p/ investigar sem adivinhar.
+    """
+    msg = _evo_message(resp)
+    base = (resp or {}).get("error") or fallback
+    detail = f"{fallback}: {msg}" if msg else base
+    out = {"detail": detail[:400]}
+    if isinstance(resp, dict) and resp.get("raw"):
+        out["evolution_raw"] = str(resp["raw"])[:300]
+    return out
 
 
 def _digits(value):
@@ -313,7 +378,7 @@ def setup_instance():
     if status not in (200, 201):
         # 403/422 = instancia ja existe: segue o baile (reaproveita).
         if status not in (403, 422, 409):
-            return jsonify({"detail": (resp or {}).get("error") or "falha ao criar instancia",
+            return jsonify({**_evo_fail(resp, "Falha ao criar instancia"),
                             "status": status, "saved": True}), 502
     inst = (resp or {}).get("instance") or {}
     inst_key = (resp or {}).get("hash") or inst.get("apikey") or (resp or {}).get("apikey") or ""
@@ -388,9 +453,16 @@ def whatsapp_qr():
     if not (cfg.get("evolution_url") and global_key):
         return jsonify({"detail": "WhatsApp nao configurado (rode o setup)"}), 409
     status, resp = _evo_call("GET", f"/instance/connect/{instance}", global_key, timeout=20)
+    if status >= 500:
+        # Pos-logout a sessao pode ainda estar limpando na Evolution: o
+        # connect falha de cara e passa segundos depois (transitorio). Uma
+        # 2a tentativa evita mostrar erro a toa.
+        time.sleep(4)
+        status, resp = _evo_call("GET", f"/instance/connect/{instance}", global_key, timeout=20)
     if status != 200:
-        return jsonify({"detail": (resp or {}).get("error") or "falha ao gerar QR",
-                        "status": status}), 502
+        return jsonify({**_evo_fail(resp, "Falha ao gerar QR"),
+                        "status": status,
+                        "hint": "Aguarde alguns segundos e tente de novo."}), 502
     code = (resp or {}).get("code") or ""
     b64 = (resp or {}).get("base64") or ""
     if b64.startswith("data:image"):
@@ -428,7 +500,7 @@ def whatsapp_logout():
     # 404 = instancia ja sumiu na Evolution: considera desconectado mesmo
     # assim e atualiza o espelho local. 0 = sem rede (vira 502 honesto).
     if status not in (200, 201, 404):
-        return jsonify({"detail": (resp or {}).get("error") or "falha ao desconectar",
+        return jsonify({**_evo_fail(resp, "Falha ao desconectar"),
                         "status": status}), 502
     connection, phone = "close", ""
     if status != 404:
@@ -601,7 +673,7 @@ def send_message(conv_id):
         b64 = base64.b64encode(blob).decode()
         status, resp = _send_media(global_key, instance, conv.phone, kind, b64, original, caption)
         if status >= 300 or status == 0:
-            return jsonify({"detail": (resp or {}).get("error") or "falha ao enviar midia",
+            return jsonify({**_evo_fail(resp, "Falha ao enviar midia"),
                             "status": status}), 502
         stored = uuid.uuid4().hex + ext
         path = os.path.join(current_app.config["UPLOAD_DIR"], stored)
@@ -622,7 +694,7 @@ def send_message(conv_id):
             return jsonify({"detail": "text ou file obrigatorio"}), 400
         status, resp = _send_text(global_key, instance, conv.phone, text[:4000])
         if status >= 300 or status == 0:
-            return jsonify({"detail": (resp or {}).get("error") or "falha ao enviar",
+            return jsonify({**_evo_fail(resp, "Falha ao enviar"),
                             "status": status}), 502
         row = WhatsappMessage(
             conversation_id=conv.id, direction="out", kind="text",
@@ -688,16 +760,18 @@ def sync_conversation(conv_id):
     items = []
     via = ""
     last_err = ""
+    last_resp: dict = {}
     for body in attempts:
         status, resp = _evo_call("POST", f"/chat/findMessages/{instance}", global_key, body, timeout=30)
         if status == 0 or status >= 300:
             last_err = (resp or {}).get("error") or f"status {status}"
+            last_resp = resp if isinstance(resp, dict) else {}
             continue
         items = _as_msg_list(resp)
         via = f"findMessages where={list(body['where'].keys())}"
         break
     if not via:
-        return jsonify({"detail": last_err or "falha ao buscar historico"}), 502
+        return jsonify({**_evo_fail(last_resp, last_err or "Falha ao buscar historico")}), 502
     stored = dup = ignored = 0
     for it in items:
         r = _store_inbound(instance, it)
@@ -744,8 +818,7 @@ def download_media(msg_id):
     except (ValueError, TypeError):
         blob = b""
     if status >= 300 or status == 0 or not blob:
-        return jsonify({"detail": (resp or {}).get("error")
-                        or "Midia indisponivel na Evolution (mensagem antiga?)"}), 502
+        return jsonify({**_evo_fail(resp, "Midia indisponivel na Evolution (mensagem antiga?)")}), 502
     mime = str((resp or {}).get("mimetype") or row.media_mime or "")
     ext = os.path.splitext(row.media_filename or "")[1].lower() or ".bin"
     stored = uuid.uuid4().hex + ext
@@ -780,3 +853,59 @@ def start_conversation():
         .first()
     )
     return jsonify(conv.to_dict(last=last)), 201
+
+
+@bp.put("/api/whatsapp/conversations/<conv_id>")
+@token_required(roles=["ADMIN", "GERENTE"])
+def update_conversation(conv_id):
+    """Renomeia a conversa e/ou vincula/desvincula cliente.
+
+    Só no ERP: não toca a Evolution nem cria Client. `name` vazio limpa o
+    apelido (a tela volta a mostrar o telefone); `client_id` null/vazio
+    desvincula; id inexistente volta 404.
+    """
+    conv = db.session.get(WhatsappConversation, conv_id)
+    if not conv:
+        return jsonify({"detail": "Conversa nao encontrada"}), 404
+    data = body_json() or {}
+    if "name" in data:
+        conv.name = (data.get("name") or "").strip()[:160]
+    if "client_id" in data:
+        cid = data.get("client_id") or None
+        if isinstance(cid, str):
+            cid = cid.strip() or None
+        if cid is not None and not db.session.get(Client, cid):
+            return jsonify({"detail": "Cliente nao encontrado"}), 404
+        conv.client_id = cid
+    db.session.commit()
+    last = (
+        db.session.query(WhatsappMessage)
+        .filter_by(conversation_id=conv.id)
+        .order_by(WhatsappMessage.created_at.desc())
+        .first()
+    )
+    return jsonify(conv.to_dict(last=last))
+
+
+@bp.delete("/api/whatsapp/conversations/<conv_id>")
+@token_required(roles=["ADMIN", "GERENTE"])
+def delete_conversation(conv_id):
+    """Apaga conversa + mensagens SÓ no ERP (o celular não é tocado).
+
+    Os arquivos de mídia enviada vão junto (melhor esforço: órfão em disco
+    nunca pode falhar o delete).
+    """
+    conv = db.session.get(WhatsappConversation, conv_id)
+    if not conv:
+        return jsonify({"detail": "Conversa nao encontrada"}), 404
+    rows = db.session.query(WhatsappMessage).filter_by(conversation_id=conv.id).all()
+    arquivos = [m.media_stored for m in rows if m.media_stored]
+    total = len(rows)
+    db.session.delete(conv)
+    db.session.commit()
+    for nome in arquivos:
+        try:
+            os.remove(os.path.join(current_app.config["UPLOAD_DIR"], nome))
+        except OSError:
+            pass
+    return jsonify({"ok": True, "deleted_messages": total})
