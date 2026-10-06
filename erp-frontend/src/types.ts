@@ -555,8 +555,16 @@ export interface ReportResult {
 // ── Relatorio comercial (/api/reports/crm) ───────────────────────
 // Formato proprio: este endpoint NAO segue o padrao {summary, columns, rows}
 // dos outros relatorios. Tipar aqui evita tratar `summary` como se existisse.
+export interface FechamentoItem {
+  client_id: string | null;
+  name: string;
+  data: string | null;
+  valor: number;
+  origem: 'sale' | 'crm';
+}
+
 export interface CrmReport {
-  conversao: { taxa: number; total_clientes: number; total_fechamentos: number };
+  conversao: { taxa: number; total_clientes: number; total_fechamentos: number; undated?: number };
   fluxo_caixa: { mes: string; receitas: number; despesas: number; resultado: number }[];
   fontes_lead: { fonte: string; total: number }[];
   negociacoes: {
@@ -567,7 +575,11 @@ export interface CrmReport {
   };
   parceiros: unknown[];
   partner_clients_count: number;
-  periodo: { date_from: string | null; date_to: string | null };
+  periodo: { date_from: string | null; date_to: string | null; year?: number; month?: number; period?: string; de?: string; ate?: string };
+  fechamentos_periodo?: {
+    qtd: number; valor_total: number; undated: number; de: string; ate: string;
+    itens: FechamentoItem[];
+  };
   ticket_medio: {
     maximo: number; media: number; minimo: number;
     total_faturado: number; total_projetos: number;
@@ -575,10 +587,11 @@ export interface CrmReport {
   };
   vendas_por_parceiro: unknown[];
   top_products?: TopProduct[];
-  vendas_mes?: { year: number; month: number; qtd: number; total: number };
+  vendas_mes?: { year: number; month: number; qtd: number; total: number; itens?: FechamentoItem[] };
   vendas_ano?: {
     year: number; qtd: number; total: number;
     evolucao: { mes: string; rotulo: string; qtd: number; total: number }[];
+    itens?: FechamentoItem[];
   };
   orcamentos?: { qtd: number; valor: number; aceitas: number };
   vendas_por_origem?: { origem: string; qtd: number; valor: number; share: number }[];

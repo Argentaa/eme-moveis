@@ -1993,6 +1993,12 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Dashboard abre no mês e período mensal/trimestral/semestral/anual",
+     "Correção + novidade (pedido do vídeo): o Dashboard Executivo mostrava no mês números do ano inteiro — no dia 1º, sem vender nada, apareciam 2 vendas. Agora o painel abre no mês corrente e o que aparece é só do período: dá para trocar entre mensal, trimestral, semestral e anual. O Fluxo de Caixa do Financeiro ganhou o mesmo seletor (antes só filtrava por ano). Venda fechada sem data de fechamento (cadastro antigo) aparece separada, fora da conta do período, para o número não enganar.",
+     "MELHORIA", "2026-10-06"),
+    ("Cards clicáveis: ver quais vendas e quais contas",
+     "Novidade (pedido do vídeo): no Dashboard Executivo, clicar em Vendas realizadas abre a lista de quais vendas fecharam no período e de qual cliente (com valor, data e origem — Gerar venda ou CRM). No Dashboard comercial, os cards Vendas do mês e Vendas do ano abrem a mesma lista. No Financeiro, clicar numa faixa do aging (Vencidas, Vence em até 7 dias etc.) filtra a lista abaixo para mostrar exatamente quais contas estão naquela faixa; clicar de novo limpa o filtro.",
+     "NOVIDADE", "2026-10-06"),
     ("Comercial: vendas do mês/ano, orçamentos e pizza por origem",
      "O Dashboard comercial ganhou 3 cards novos: Vendas do mês (total vendido no mês), Vendas do ano (total no ano) e Orçamentos enviados (quantidade, valor total e quantos foram aceitos — conta proposta enviada ou aceita da aba Propostas). Também entraram dois gráficos: a evolução das vendas mês a mês no ano e uma pizza de vendas por origem em valor (indicação, arquiteto, Instagram etc. — agora pelo valor vendido, não só pela quantidade de leads). Dá para trocar o ano e ver mensal, trimestral, semestral ou anual.",
      "NOVIDADE", "2026-10-05"),

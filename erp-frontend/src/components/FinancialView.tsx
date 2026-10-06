@@ -98,6 +98,8 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   const [cfYear, setCfYear] = useState(new Date().getFullYear());
   // Demonstração do fluxo de caixa: realizado (pago) x projetado (inclui em aberto)
   const [cfMode, setCfMode] = useState<'realizado' | 'projetado'>('realizado');
+  // Granularidade do fluxo estilo DRE (pedido do dono, vídeo 2026-10-01).
+  const [cfPeriod, setCfPeriod] = useState('mensal');
 
   // Indicadores do ano (Faturamento, Recebimentos, Margem, Inadimplência):
   // vêm do summary do relatório financeiro filtrado no ano do fluxo.
@@ -361,7 +363,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
   useEffect(() => {
     let active = true;
     setCfLoading(true);
-    reportService.getReport('cash-flow', { year: String(cfYear), mode: cfMode })
+    reportService.getReport('cash-flow', { year: String(cfYear), mode: cfMode, period: cfPeriod })
       .then((data) => { if (active) setCfData(data); })
       .catch(() => { if (active) setCfData(null); })
       .finally(() => { if (active) setCfLoading(false); });
@@ -369,7 +371,7 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
       .then((data) => { if (active) setFinYear(data); })
       .catch(() => { if (active) setFinYear(null); });
     return () => { active = false; };
-  }, [cfYear, cfMode]);
+  }, [cfYear, cfMode, cfPeriod]);
 
   useEffect(() => {
     let active = true;
@@ -742,7 +744,22 @@ export default function FinancialView({ userRole }: FinancialViewProps) {
             <BarChart3 className="w-4 h-4 text-red-500" />
             <h3 className="text-sm font-semibold text-white font-sans">Fluxo de Caixa Mensal</h3>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center rounded border border-zinc-800 overflow-hidden">
+              {(['mensal', 'trimestral', 'semestral', 'anual'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setCfPeriod(p)}
+                  title={p === 'mensal' ? 'Mês a mês' : p === 'trimestral' ? 'Por trimestre' : p === 'semestral' ? 'Por semestre' : 'Ano fechado'}
+                  className={`px-2.5 py-1.5 text-[11px] font-mono uppercase transition cursor-pointer ${
+                    cfPeriod === p ? 'bg-red-600 text-white font-semibold' : 'bg-zinc-900 text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {p === 'mensal' ? 'Mensal' : p === 'trimestral' ? 'Trim.' : p === 'semestral' ? 'Sem.' : 'Anual'}
+                </button>
+              ))}
+            </div>
             <label className="text-xs text-zinc-400 font-mono">Ano:</label>
             <select
               value={cfYear}

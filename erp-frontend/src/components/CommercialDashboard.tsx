@@ -18,7 +18,8 @@ import {
 import { dashboardService, getApiErrorMessage } from '../services/api';
 import { chartTooltipProps, shortTick } from './FinancialView';
 import PeriodFilter, { MESES_LONGOS } from './PeriodFilter';
-import { CrmReport } from '../types';
+import SalesDrillModal from './SalesDrillModal';
+import { CrmReport, FechamentoItem } from '../types';
 
 const fmt = (v: number) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -34,6 +35,8 @@ export default function CommercialDashboard() {
   const [year, setYear] = useState(hoje.getFullYear());
   const [month, setMonth] = useState(hoje.getMonth() + 1);
   const [period, setPeriod] = useState('mensal');
+  // Drill-down (pedido do dono): quais vendas / de qual cliente.
+  const [drill, setDrill] = useState<{ titulo: string; subtitulo: string; itens: FechamentoItem[] } | null>(null);
 
   useEffect(() => {
     let ativo = true;
@@ -112,7 +115,16 @@ export default function CommercialDashboard() {
         />
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="glass-panel p-5 rounded-lg border-l-4 border-l-emerald-600">
+        <button
+          type="button"
+          onClick={() => setDrill({
+            titulo: 'Vendas do mês',
+            subtitulo: `${nomeMes} de ${vendasMes?.year ?? year}`,
+            itens: vendasMes?.itens || [],
+          })}
+          title="Ver quais vendas e de qual cliente"
+          className="text-left glass-panel p-5 rounded-lg border-l-4 border-l-emerald-600 hover:border hover:border-zinc-700 transition cursor-pointer"
+        >
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
             <BadgeDollarSign className="w-3 h-3" /> Vendas do mês
           </span>
@@ -120,10 +132,19 @@ export default function CommercialDashboard() {
             {fmt(vendasMes?.total ?? 0)}
           </p>
           <p className="text-[11px] text-zinc-500 font-mono mt-1">
-            {vendasMes?.qtd ?? 0} venda(s) em {nomeMes} de {vendasMes?.year ?? year}
+            {vendasMes?.qtd ?? 0} venda(s) em {nomeMes} de {vendasMes?.year ?? year} · clique p/ ver
           </p>
-        </div>
-        <div className="glass-panel p-5 rounded-lg border-l-4 border-l-emerald-600">
+        </button>
+        <button
+          type="button"
+          onClick={() => setDrill({
+            titulo: 'Vendas do ano',
+            subtitulo: `Acumulado de ${vendasAno?.year ?? year}`,
+            itens: vendasAno?.itens || [],
+          })}
+          title="Ver quais vendas e de qual cliente"
+          className="text-left glass-panel p-5 rounded-lg border-l-4 border-l-emerald-600 hover:border hover:border-zinc-700 transition cursor-pointer"
+        >
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
             <CalendarCheck className="w-3 h-3" /> Vendas do ano
           </span>
@@ -131,9 +152,9 @@ export default function CommercialDashboard() {
             {fmt(vendasAno?.total ?? 0)}
           </p>
           <p className="text-[11px] text-zinc-500 font-mono mt-1">
-            {vendasAno?.qtd ?? 0} venda(s) em {vendasAno?.year ?? ''}
+            {vendasAno?.qtd ?? 0} venda(s) em {vendasAno?.year ?? ''} · clique p/ ver
           </p>
-        </div>
+        </button>
         <div className="glass-panel p-5 rounded-lg">
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
             <FileText className="w-3 h-3" /> Orçamentos enviados
@@ -399,6 +420,14 @@ export default function CommercialDashboard() {
           </div>
         </div>
       </div>
+
+      <SalesDrillModal
+        open={drill !== null}
+        onClose={() => setDrill(null)}
+        titulo={drill?.titulo || ''}
+        subtitulo={drill?.subtitulo}
+        itens={drill?.itens || []}
+      />
     </div>
   );
 }

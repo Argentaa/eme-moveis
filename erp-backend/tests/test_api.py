@@ -5393,3 +5393,99 @@ def test_crm_periodos_buckets(client):
     evo_a = anu["vendas_ano"]["evolucao"]
     assert len(evo_a) == 1 and evo_a[0]["total"] == 7000
     assert client.get("/api/reports/crm?period=quinzenal", headers=h).status_code == 400
+
+
+def test_crm_conversao_respeita_periodo_e_declara_undated(client):
+    """Pedido do dono (video 2026-10-01): o dashboard inicial somava fechados
+    de todos os tempos dentro do mes. conversao agora e do periodo; fechado
+    sem data (fluxo antigo / arrasto p/ ganho, que nao grava closed_at) sai da
+    conta mas aparece declarado em undated."""
+    import datetime as _dt
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Fechado Hoje"}).get_json()["id"]
+    assert client.post(f"/api/clients/{cid}/conclude-sale", headers=h, json={}).status_code == 201
+    und = client.post("/api/clients", headers=h,
+                      json={"name": "Fechado Antigo", "funnel_status": "FECHAMENTO"})
+    assert und.status_code == 201, und.get_data(as_text=True)
+
+    crm = client.get("/api/reports/crm", headers=h).get_json()
+    conv = crm["conversao"]
+    assert conv["total_fechamentos"] == 1, conv
+    assert conv["undated"] == 1, conv
+    assert conv["total_clientes"] == 2, conv
+    assert conv["taxa"] == 50.0, conv
+
+    fp = crm["fechamentos_periodo"]
+    assert fp["qtd"] == 1 and fp["undated"] == 1, fp
+    assert fp["itens"][0]["origem"] == "crm", fp
+    assert fp["itens"][0]["name"] == "Fechado Hoje", fp
+
+    # mes antigo vazio: nada do periodo, undated continua declarado
+    vazio = client.get("/api/reports/crm?year=2001&month=1", headers=h).get_json()
+    assert vazio["conversao"]["total_fechamentos"] == 0, vazio["conversao"]
+    assert vazio["conversao"]["undated"] == 1, vazio["conversao"]
+    assert vazio["fechamentos_periodo"]["qtd"] == 0
+
+
+def test_crm_fechamentos_periodo_une_sale_e_crm_sem_dobrar(client):
+    """Gerar venda grava Sale + closed_at juntos: o drill-down conta uma vez
+    (a Sale vence o CRM no dedup por cliente)."""
+    import datetime as _dt
+    h = _login(client)
+    hoje = _dt.date.today()
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Gerar"}).get_json()["id"]
+    r = client.post("/api/sales", headers=h, json={
+        "client_id": cid, "total_value": 3000, "down_payment": 3000,
+        "installments": 0, "installment_value": 0, "installments_due": [],
+        "sale_date": hoje.isoformat(), "environments": [],
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    crm = client.get("/api/reports/crm", headers=h).get_json()
+    fp = crm["fechamentos_periodo"]
+    assert fp["qtd"] == 1, fp
+    assert fp["itens"][0]["origem"] == "sale", fp
+    assert fp["itens"][0]["name"] == "Cliente Gerar", fp
+    assert fp["valor_total"] == 3000, fp
+    assert crm["vendas_mes"]["qtd"] == 1
+    assert len(crm["vendas_mes"]["itens"]) == 1, crm["vendas_mes"]
+    assert crm["vendas_ano"]["qtd"] == 1
+    assert len(crm["vendas_ano"]["itens"]) == 1, crm["vendas_ano"]
+
+
+def _brl_num(txt):
+    return float(str(txt).replace("R$", "").replace(".", "").replace(",", ".").strip())
+
+
+def test_cash_flow_periodo_trimestral_e_default_mensal(client):
+    """Fluxo de caixa aceita ?period= estilo DRE; default mensal inalterado."""
+    import datetime as _dt
+    h = _login(client)
+    ano = _dt.date.today().year
+    for dia, tipo, valor in (("02-10", "ENTRADA", 1000), ("05-20", "SAIDA", 200)):
+        r = client.post("/api/financial", headers=h, json={
+            "description": "CF %s" % tipo, "type": tipo, "category": "Teste",
+            "amount": valor, "date": "%d-%s" % (ano, dia), "status": "PAGO"})
+        assert r.status_code == 201, r.get_data(as_text=True)
+    base = "/api/reports/cash-flow?year=%d" % ano
+    mens = client.get(base, headers=h).get_json()
+    assert len(mens["rows"]) == 12, len(mens["rows"])
+    assert mens["filters_applied"]["period"] == "mensal"
+    assert mens["rows"][1]["month"] == "2 - Fevereiro", mens["rows"][1]
+    assert _brl_num(mens["rows"][1]["income"]) == 1000
+    tri = client.get(base + "&period=trimestral", headers=h).get_json()
+    assert len(tri["rows"]) == 4, tri["rows"]
+    assert tri["rows"][0]["month"] == "1º Trimestre", tri["rows"][0]
+    assert _brl_num(tri["rows"][0]["income"]) == 1000
+    assert _brl_num(tri["rows"][0]["outcome"]) == 0
+    assert _brl_num(tri["rows"][1]["outcome"]) == 200
+    sem = client.get(base + "&period=semestral", headers=h).get_json()
+    assert len(sem["rows"]) == 2
+    assert sem["rows"][0]["month"] == "1º Semestre"
+    assert _brl_num(sem["rows"][0]["income"]) == 1000
+    anu = client.get(base + "&period=anual", headers=h).get_json()
+    assert len(anu["rows"]) == 1
+    assert _brl_num(anu["rows"][0]["income"]) == 1000
+    assert _brl_num(anu["rows"][0]["outcome"]) == 200
+    assert client.get(base + "&period=quinzenal", headers=h).status_code == 400

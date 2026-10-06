@@ -70,6 +70,25 @@ def _parse_period():
     return period, None
 
 
+def _crm_range(year, month, period):
+    """(d0, d1) do recorte do CRM a partir de ?year=&month=&period=.
+
+    mensal -> o mes; trimestral -> o trimestre que contem o mes; semestral ->
+    o semestre que contem o mes; anual -> o ano inteiro.
+    """
+    from calendar import monthrange
+    if period == "trimestral":
+        t = (month - 1) // 3
+        m0, m1 = t * 3 + 1, t * 3 + 3
+    elif period == "semestral":
+        m0, m1 = (1, 6) if month <= 6 else (7, 12)
+    elif period == "anual":
+        m0, m1 = 1, 12
+    else:
+        m0, m1 = month, month
+    return date(year, m0, 1), date(year, m1, monthrange(year, m1)[1])
+
+
 def _bucket_key(year, month, period):
     """(chave estável, rótulo curto) do bucket de um mês no período."""
     if period == "trimestral":
@@ -728,11 +747,36 @@ def _build_cash_flow():
         year = int(request.args.get("year") or today.year)
     except (TypeError, ValueError):
         return jsonify({"detail": "year invalido"}), 400
+    period, err = _parse_period()
+    if err:
+        return err
 
     mode = _cash_flow_mode()
     # Competencia: vencimento quando houver, senao a data do lancamento.
     # Usar a MESMA referencia nos dois modos faz os meses baterem lado a lado.
     eff_date = func.coalesce(FinancialRecord.due_date, FinancialRecord.date)
+
+    # Faixas estilo DRE (pedido do dono, video 2026-10-01): o fluxo so filtrava
+    # por ano. mensal = 12 meses (saida identica a anterior); trimestral = T1-T4;
+    # semestral = S1-S2; anual = 1 linha. O front (tabela + grafico) e generico
+    # por linha e nao muda.
+    if period == "mensal":
+        slots = [(i, MONTH_LABELS[i - 1]) for i in range(1, 13)]
+    elif period == "trimestral":
+        slots = [(t, "%dº Trimestre" % t) for t in range(1, 5)]
+    elif period == "semestral":
+        slots = [(1, "1º Semestre"), (2, "2º Semestre")]
+    else:
+        slots = [(1, "Ano %d" % year)]
+
+    def slot_of(d):
+        if period == "trimestral":
+            return (d.month - 1) // 3 + 1
+        if period == "semestral":
+            return 1 if d.month <= 6 else 2
+        if period == "anual":
+            return 1
+        return d.month
 
     def _bucket(rows):
         out = {}
@@ -740,7 +784,7 @@ def _build_cash_flow():
             d = r.due_date or r.date
             if not d:
                 continue
-            b = out.setdefault(d.month, {"income": 0.0, "outcome": 0.0})
+            b = out.setdefault(slot_of(d), {"income": 0.0, "outcome": 0.0})
             v = float(r.amount or 0)
             if r.type == "ENTRADA":
                 b["income"] += v
@@ -767,9 +811,9 @@ def _build_cash_flow():
     acc = 0.0
     total_in = 0.0
     total_out = 0.0
-    for i in range(1, 13):
-        p = paid_month.get(i, {"income": 0.0, "outcome": 0.0})
-        q = pend_month.get(i, {"income": 0.0, "outcome": 0.0})
+    for key, label in slots:
+        p = paid_month.get(key, {"income": 0.0, "outcome": 0.0})
+        q = pend_month.get(key, {"income": 0.0, "outcome": 0.0})
         inc = p["income"] + (q["income"] if is_proj else 0.0)
         out = p["outcome"] + (q["outcome"] if is_proj else 0.0)
         bal = inc - out
@@ -777,7 +821,7 @@ def _build_cash_flow():
         total_in += inc
         total_out += out
         result_rows.append({
-            "month": MONTH_LABELS[i - 1],
+            "month": label,
             "income": _fmt_brl(inc),
             "outcome": _fmt_brl(out),
             "balance": _fmt_brl(bal),
@@ -790,7 +834,7 @@ def _build_cash_flow():
     return {
         "title": "Fluxo de Caixa Projetado" if is_proj else "Fluxo de Caixa Realizado",
         "generated_at": _now_iso(),
-        "filters_applied": {"year": year, "mode": mode},
+        "filters_applied": {"year": year, "mode": mode, "period": period},
         "summary": [
             {"label": "Entradas Previstas" if is_proj else "Entradas Realizadas",
              "value": _fmt_brl(total_in), "tone": "positive"},
@@ -931,14 +975,33 @@ def _build_crm():
              "created_at": iso(c.created_at)}
             for c in clients if c.funnel_status == "PERDIDO"]
 
+    # Recorte do periodo (?year=&month=&period=): mensal = o mes, trimestral =
+    # o trimestre que contem o mes, semestral = o semestre, anual = o ano.
+    d0, d1 = _crm_range(year, month, period)
+
+    def _fecha_data(c):
+        dt = c.closed_at or c.sale_concluded_at
+        return dt.date() if dt is not None else None
+
     # Venda fechada = etapa FECHAMENTO OU botao Concluir venda (sale_concluded_at).
     # O botao tira o card do funil sem passar pela ultima coluna, entao contar
     # so o status escondia essas vendas do Dashboard comercial (bug real).
-    total_closed = sum(
-        1 for c in clients
-        if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None
-    )
-    taxa = round(total_closed / len(clients) * 100, 1) if clients else 0
+    # Recorte por periodo (pedido do dono, video 2026-10-01): o dashboard inicial
+    # somava fechados de todos os tempos dentro do mes. Fechado sem data
+    # (fluxo antigo / arrasto p/ ganho, que nao grava closed_at) = undated:
+    # declarado no payload, fora da conta do periodo.
+    fechados = [c for c in clients
+                if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None]
+    em_periodo = []
+    for c in fechados:
+        fd = _fecha_data(c)
+        if fd is not None and d0 <= fd <= d1:
+            em_periodo.append(c)
+    undated = sum(1 for c in fechados if _fecha_data(c) is None)
+    base = [c for c in clients
+            if c.created_at and d0 <= c.created_at.date() <= d1]
+    total_closed = len(em_periodo)
+    taxa = round(total_closed / len(base) * 100, 1) if base else 0
 
     concluidos = db.session.query(Project).filter(
         Project.concluded_at.isnot(None)
@@ -1059,11 +1122,22 @@ def _build_crm():
     vendas_do_ano = [s for s in vendas
                      if s.sale_date and s.sale_date.year == year]
     vendas_do_mes = [s for s in vendas_do_ano if s.sale_date.month == month]
+
+    def _sale_item(s):
+        cli = clients_by_id.get(getattr(s, "client_id", None))
+        return {"client_id": getattr(s, "client_id", None),
+                "name": cli.name if cli else "—",
+                "data": s.sale_date.isoformat() if s.sale_date else None,
+                "valor": round(float(s.total_value or 0), 2),
+                "origem": "sale"}
+
     vendas_mes = {
         "year": year,
         "month": month,
         "qtd": len(vendas_do_mes),
         "total": round(sum(float(s.total_value or 0) for s in vendas_do_mes), 2),
+        "itens": sorted((_sale_item(s) for s in vendas_do_mes),
+                        key=lambda i: i["data"] or "", reverse=True),
     }
     evo_map: dict = {}
     for s in vendas_do_ano:
@@ -1081,6 +1155,8 @@ def _build_crm():
         "qtd": len(vendas_do_ano),
         "total": round(sum(float(s.total_value or 0) for s in vendas_do_ano), 2),
         "evolucao": evolucao,
+        "itens": sorted((_sale_item(s) for s in vendas_do_ano),
+                        key=lambda i: i["data"] or "", reverse=True),
     }
     # Orçamentos enviados = propostas ENVIADA ou ACEITA (RASCUNHO/RECUSADA
     # não contam). Valor = computed_total (soma dos itens) com fallback
@@ -1118,13 +1194,51 @@ def _build_crm():
         for g in sorted(origem_map.values(), key=lambda g: g["valor"], reverse=True)
     ]
 
+    # Drill-down do periodo (pedido do dono, video 2026-10-01): quais vendas e
+    # de qual cliente. Une Gerar-venda (Sale.sale_date no range, fonte de
+    # verdade) + CRM fechados com data no range; dedup por cliente (a venda
+    # vence, pois o POST /api/sales grava closed_at junto e contaria em dobro).
+    vendas_range = [s for s in vendas if s.sale_date and d0 <= s.sale_date <= d1]
+    por_cliente = {}
+    for s in vendas_range:
+        por_cliente[getattr(s, "client_id", None)] = _sale_item(s)
+    for c in em_periodo:
+        if c.id in por_cliente:
+            continue
+        try:
+            nv = c.negotiation_value
+        except Exception:
+            nv = None
+        valor = float(nv or 0) or float(c.estimated_value or 0)
+        fd = _fecha_data(c)
+        por_cliente[c.id] = {
+            "client_id": c.id,
+            "name": c.name,
+            "data": fd.isoformat() if fd else None,
+            "valor": round(valor, 2),
+            "origem": "crm",
+        }
+    fp_itens = sorted(por_cliente.values(),
+                      key=lambda i: i["data"] or "", reverse=True)
+    fechamentos_periodo = {
+        "qtd": len(fp_itens),
+        "valor_total": round(sum(i["valor"] for i in fp_itens), 2),
+        "undated": undated,
+        "de": d0.isoformat(),
+        "ate": d1.isoformat(),
+        "itens": fp_itens,
+    }
+
     return {
         "periodo": {"date_from": iso(df), "date_to": iso(dt),
-                    "year": year, "month": month, "period": period},
+                    "year": year, "month": month, "period": period,
+                    "de": d0.isoformat(), "ate": d1.isoformat()},
         "negociacoes": {"total": len(clients), "por_etapa": by_stage,
                         "perdidas": lost, "total_perdidas": len(lost)},
-        "conversao": {"total_clientes": len(clients),
-                      "total_fechamentos": total_closed, "taxa": taxa},
+        "conversao": {"total_clientes": len(base),
+                      "total_fechamentos": total_closed, "taxa": taxa,
+                      "undated": undated},
+        "fechamentos_periodo": fechamentos_periodo,
         "ticket_medio": ticket,
         "fluxo_caixa": fluxo,
         "fontes_lead": fontes,

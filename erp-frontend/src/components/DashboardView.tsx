@@ -16,6 +16,7 @@ import { Client, Project, FinancialRecord, StockItem, StockMovement, ReportResul
 import OverdueProjectsCard from './OverdueProjectsCard';
 import UpcomingEventsCard from './UpcomingEventsCard';
 import UpcomingPaymentsCard from './UpcomingPaymentsCard';
+import SalesDrillModal from './SalesDrillModal';
 import { chartTooltipProps, shortTick } from './FinancialView';
 
 interface DashboardViewProps {
@@ -42,6 +43,12 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
   const [selectedYear, setSelectedYear] = useState(today.getFullYear());
   // Visualização do demonstrativo de fluxo de caixa: realizado x projetado
   const [cfMode, setCfMode] = useState<'realizado' | 'projetado'>('realizado');
+  // Período do painel estilo DRE (pedido do dono, vídeo 2026-10-01): abre no
+  // mês corrente e troca p/ trimestre/semestre/ano. O fluxo semanal e a meta
+  // continuam mensais; o resto do painel segue este período.
+  const [crmPeriod, setCrmPeriod] = useState('mensal');
+  // Drill-down das vendas realizadas (quais vendas / de qual cliente).
+  const [drillOpen, setDrillOpen] = useState(false);
 
   const MONTH_NAMES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
                        'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -66,7 +73,7 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         setStock(st);
         setMovements(movs);
       } else {
-        const [cls, projs, fins, st, movs, prod, overview, crm, att] = await Promise.all([
+        const [cls, projs, fins, st, movs, prod, overview, att] = await Promise.all([
           clientService.getAll(),
           projectService.getAll(),
           financialService.getAll(),
@@ -77,8 +84,8 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
           // ao carregamento do painel inteiro.
           reportService.getReport('production', {}).catch(() => null),
           bankAccountService.overview().catch(() => null),
-          // Formato proprio do CRM (nao segue {summary, columns, rows}).
-          dashboardService.crmReport().catch(() => null),
+          // O relatório comercial carrega no effect do mês/período (com recorte),
+          // para o painel abrir no mês corrente (pedido do dono).
           dashboardService.attention().catch(() => null),
         ]);
         setClients(cls);
@@ -88,7 +95,6 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         setMovements(movs);
         if (prod) setProductionReport(prod);
         if (overview) setBankOverview(overview);
-        if (crm) setCrmReport(crm);
         if (att) setAttention(att);
       }
     } catch (err) {
@@ -102,7 +108,8 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
     loadData();
   }, [userRole]);
 
-  // Blocos que dependem do mês/ano selecionado: fluxo de caixa semanal e meta.
+  // Blocos que dependem do mês/ano selecionado: fluxo de caixa semanal, meta
+  // e relatório comercial (recortado pelo período — pedido do dono).
   // Separado do loadData para não recarregar clientes/projetos a cada troca de mês.
   useEffect(() => {
     if (userRole === 'ESTOQUE') return;
@@ -112,13 +119,17 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         year: selectedYear, month: selectedMonth, mode: cfMode,
       }).catch(() => null),
       goalService.summary({ year: selectedYear, month: selectedMonth }).catch(() => null),
-    ]).then(([weekly, goal]) => {
+      dashboardService.crmReport({
+        year: String(selectedYear), month: String(selectedMonth), period: crmPeriod,
+      }).catch(() => null),
+    ]).then(([weekly, goal, crm]) => {
       if (!active) return;
       if (weekly) setWeeklyReport(weekly);
       if (goal) setGoalSummary(goal);
+      if (crm) setCrmReport(crm);
     });
     return () => { active = false; };
-  }, [selectedYear, selectedMonth, cfMode, userRole]);
+  }, [selectedYear, selectedMonth, cfMode, crmPeriod, userRole]);
 
   /** Converte "R$ 1.000,00" / "R$ -300,00" em número, para o gráfico. */
   const parseBRL = (value: string): number => {
@@ -248,10 +259,26 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
     );
   }
 
-  // Executive/Admin Calculations — filtrados pelo mês/ano selecionado
+  // Executive/Admin Calculations — recortados pelo período selecionado
+  // (mensal = o mês; o resto acompanha o toggle: tri/sem/ano que contém o mês).
+  const rangeIso = (m: number, d: number) =>
+    `${selectedYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const rangeLast = (m: number) => new Date(selectedYear, m, 0).getDate();
+  const [rangeDe, rangeAte] = (() => {
+    if (crmPeriod === 'trimestral') {
+      const m0 = Math.floor((selectedMonth - 1) / 3) * 3 + 1;
+      return [rangeIso(m0, 1), rangeIso(m0 + 2, rangeLast(m0 + 2))] as [string, string];
+    }
+    if (crmPeriod === 'semestral') {
+      const m0 = selectedMonth <= 6 ? 1 : 7;
+      return [rangeIso(m0, 1), rangeIso(m0 + 5, rangeLast(m0 + 5))] as [string, string];
+    }
+    if (crmPeriod === 'anual') return [rangeIso(1, 1), rangeIso(12, 31)] as [string, string];
+    return [rangeIso(selectedMonth, 1), rangeIso(selectedMonth, rangeLast(selectedMonth))] as [string, string];
+  })();
   const financialsByMonth = financials.filter(f => {
-    const d = new Date(`${f.date}T00:00:00`);
-    return d.getMonth() + 1 === selectedMonth && d.getFullYear() === selectedYear;
+    const dia = String(f.date || '').slice(0, 10);
+    return dia >= rangeDe && dia <= rangeAte;
   });
   const activeProjects = projects.filter(p => p.status !== 'CONCLUIDO');
   const finishedProjects = projects.filter(p => p.status === 'CONCLUIDO');
@@ -276,6 +303,14 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
     .reduce((acc, f) => acc + f.amount, 0);
   const projectsInProduction = projects.filter(p => p.status !== 'CONCLUIDO').length;
   const monthLabel = `${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}`;
+  // Rótulo do recorte (o fluxo semanal e a meta continuam mensais e usam monthLabel).
+  const rangeLabel = crmPeriod === 'mensal'
+    ? monthLabel
+    : crmPeriod === 'trimestral'
+      ? `T${Math.floor((selectedMonth - 1) / 3) + 1} · ${selectedYear}`
+      : crmPeriod === 'semestral'
+        ? `S${selectedMonth <= 6 ? 1 : 2} · ${selectedYear}`
+        : `${selectedYear}`;
 
   // Resumo comercial: o /api/reports/crm tem formato proprio (nao tem
   // `summary`), entao os KPIs sao montados a partir dos campos reais.
@@ -350,6 +385,26 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>
+      </div>
+
+      {/* Período do painel (pedido do dono, vídeo 2026-10-01): abre no mês,
+          troca p/ trimestre/semestre/ano que contém o mês selecionado. */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex bg-zinc-900 border border-zinc-800 rounded p-1">
+          {([['mensal', 'Mensal'], ['trimestral', 'Trimestral'], ['semestral', 'Semestral'], ['anual', 'Anual']] as const).map(([v, label]) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setCrmPeriod(v)}
+              className={`px-3 py-1.5 text-xs font-mono uppercase rounded transition cursor-pointer ${
+                crmPeriod === v ? 'bg-red-600 text-white font-semibold' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] text-zinc-500 font-mono">Mostrando: {rangeLabel}</span>
       </div>
 
       {/* Projetos atrasados */}
@@ -591,9 +646,21 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
         <div className="glass-panel p-5 rounded-lg">
           <h3 className="text-lg font-serif text-white tracking-wide">Resumo Comercial</h3>
           {crmReport ? (
+            <>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+              <button
+                type="button"
+                onClick={() => setDrillOpen(true)}
+                title="Ver quais vendas e de qual cliente"
+                className="text-left rounded-lg p-3 -m-1 hover:bg-zinc-900/50 transition cursor-pointer border border-transparent hover:border-zinc-800"
+              >
+                <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">Vendas realizadas</p>
+                <p className="text-base font-bold font-sans mt-0.5 text-white">
+                  {crmReport.fechamentos_periodo?.qtd ?? crmReport.conversao?.total_fechamentos ?? 0}
+                </p>
+                <p className="text-[10px] text-zinc-600 font-mono mt-0.5">em {rangeLabel} · clique p/ ver</p>
+              </button>
               {[
-                { label: 'Vendas realizadas', value: String(crmReport.conversao?.total_fechamentos ?? 0) },
                 { label: 'Taxa de conversão', value: `${Number(crmReport.conversao?.taxa ?? 0).toFixed(1)}%` },
                 { label: 'Em orçamento', value: String(crmStage('ORCAMENTO')) },
                 { label: 'Em negociação', value: String(crmStage('NEGOCIACAO')) },
@@ -606,6 +673,12 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
                 </div>
               ))}
             </div>
+            {(crmReport.fechamentos_periodo?.undated ?? 0) > 0 && (
+              <p className="text-[10px] text-amber-400 font-mono mt-2">
+                + {crmReport.fechamentos_periodo?.undated} fechamento(s) sem data (fluxo antigo) — fora da conta do período.
+              </p>
+            )}
+            </>
           ) : (
             <p className="text-xs text-zinc-500 font-mono mt-3">Resumo indisponível.</p>
           )}
@@ -869,6 +942,16 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
 
       {/* Próximos Compromissos */}
       <UpcomingEventsCard />
+
+      {/* Drill-down das vendas do período (pedido do dono) */}
+      <SalesDrillModal
+        open={drillOpen}
+        onClose={() => setDrillOpen(false)}
+        titulo="Vendas realizadas"
+        subtitulo={`Vendas fechadas em ${rangeLabel}`}
+        itens={crmReport?.fechamentos_periodo?.itens || []}
+        undated={crmReport?.fechamentos_periodo?.undated}
+      />
 
     </div>
   );

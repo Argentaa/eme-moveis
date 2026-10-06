@@ -45,11 +45,28 @@ function diasAte(vencimento: string | null | undefined): number | null {
   return Math.round((hoje.getTime() - alvo.getTime()) / 86400000);
 }
 
+/**
+ * Bucket de um lançamento, com a MESMA regra do backend (/api/financial/aging):
+ * dias > 0 = vencida; -7..0 = 0_7; -30..-8 = 8_30; resto = acima_30.
+ * Sem vencimento ('sem') só aparece sem filtro, como no backend.
+ */
+function bucketDe(vencimento: string | null | undefined): string {
+  const d = diasAte(vencimento);
+  if (d === null) return 'sem';
+  if (d > 0) return 'vencidas';
+  if (d >= -7) return '0_7';
+  if (d >= -30) return '8_30';
+  return 'acima_30';
+}
+
 export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) {
   const [aging, setAging] = useState<AgingResult | null>(null);
   const [registros, setRegistros] = useState<FinancialRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Drill-down (pedido do dono, vídeo 2026-10-01): clicar no bucket filtra a
+  // lista abaixo p/ mostrar QUAL conta está em cada faixa; clica de novo e limpa.
+  const [filtro, setFiltro] = useState<string | null>(null);
 
   const aPagar = type === 'SAIDA';
   const titulo = aPagar ? 'Contas a Pagar' : 'Contas a Receber';
@@ -98,6 +115,9 @@ export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) 
   if (!aging) return null;
 
   const Icone = aPagar ? TrendingDown : TrendingUp;
+  const alternar = (chave: string) => setFiltro((atual) => (atual === chave ? null : chave));
+  const visiveis = filtro ? registros.filter((r) => bucketDe(r.due_date) === filtro) : registros;
+  const rotuloFiltro = filtro ? BUCKETS.find((b) => b.key === filtro)?.label : null;
 
   return (
     <div className="space-y-5">
@@ -122,7 +142,12 @@ export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) 
           </p>
         </div>
 
-        <div className="glass-panel p-5 rounded-lg border-l-4 border-l-red-650">
+        <button
+          type="button"
+          onClick={() => alternar('vencidas')}
+          title="Mostrar quais contas estão vencidas"
+          className={`text-left glass-panel p-5 rounded-lg border-l-4 border-l-red-650 transition cursor-pointer hover:border hover:border-zinc-700 ${filtro === 'vencidas' ? 'ring-2 ring-red-600' : ''}`}
+        >
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-rose-500" />
             <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono">
@@ -133,9 +158,9 @@ export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) 
             {fmt(aging.buckets.vencidas.total)}
           </p>
           <p className="text-[11px] text-zinc-500 font-mono mt-1">
-            {aging.buckets.vencidas.count} lançamento(s) em atraso
+            {aging.buckets.vencidas.count} lançamento(s) em atraso · clique p/ ver
           </p>
-        </div>
+        </button>
       </div>
 
       {/* Aging */}
@@ -148,7 +173,13 @@ export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) 
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {BUCKETS.map((b) => (
-            <div key={b.key} className={`glass-panel p-4 rounded-lg border-l-4 ${b.tone}`}>
+            <button
+              key={b.key}
+              type="button"
+              onClick={() => alternar(b.key)}
+              title={`Mostrar quais contas: ${b.label}`}
+              className={`text-left glass-panel p-4 rounded-lg border-l-4 ${b.tone} transition cursor-pointer hover:border hover:border-zinc-700 ${filtro === b.key ? 'ring-2 ring-red-600' : ''}`}
+            >
               <span className="text-[10px] text-zinc-400 uppercase tracking-widest font-mono block">
                 {b.label}
               </span>
@@ -158,7 +189,7 @@ export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) 
               <p className="text-[10px] text-zinc-500 font-mono mt-0.5">
                 {aging.buckets[b.key].count} lançamento(s)
               </p>
-            </div>
+            </button>
           ))}
         </div>
 
@@ -174,10 +205,22 @@ export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) 
 
       {/* Lista */}
       <div className="glass-panel rounded-lg overflow-hidden">
-        <div className="p-4 border-b border-zinc-900">
+        <div className="p-4 border-b border-zinc-900 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-white font-sans">
             Lançamentos pendentes
+            {rotuloFiltro && (
+              <span className="ml-2 text-[11px] font-mono text-zinc-400">· {rotuloFiltro}</span>
+            )}
           </h3>
+          {filtro && (
+            <button
+              type="button"
+              onClick={() => setFiltro(null)}
+              className="text-[11px] font-mono text-zinc-400 hover:text-white border border-zinc-800 rounded px-2.5 py-1 transition cursor-pointer"
+            >
+              Limpar filtro ✕
+            </button>
+          )}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-zinc-300">
@@ -190,7 +233,7 @@ export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) 
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-900">
-              {registros.map((r) => {
+              {visiveis.map((r) => {
                 const dias = diasAte(r.due_date);
                 const atrasado = dias !== null && dias > 0;
                 return (
@@ -230,10 +273,10 @@ export default function FinancialAgingPanel({ type }: FinancialAgingPanelProps) 
                 );
               })}
 
-              {registros.length === 0 && (
+              {visiveis.length === 0 && (
                 <tr>
                   <td colSpan={4} className="py-12 text-center text-zinc-500 font-mono">
-                    Nenhuma conta em aberto.
+                    {filtro ? 'Nenhuma conta nesta faixa.' : 'Nenhuma conta em aberto.'}
                   </td>
                 </tr>
               )}
