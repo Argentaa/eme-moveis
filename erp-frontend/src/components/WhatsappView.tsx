@@ -150,6 +150,8 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
   const [qrBase64, setQrBase64] = useState('');
   const [qrLoading, setQrLoading] = useState(false);
   const [qrError, setQrError] = useState('');
+  const [discLoading, setDiscLoading] = useState(false);
+  const [discMsg, setDiscMsg] = useState('');
 
   const loadStatus = useCallback(async () => {
     try {
@@ -325,6 +327,22 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
       setQrError(getApiErrorMessage(err, 'Não foi possível gerar o QR.'));
     } finally {
       setQrLoading(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    if (!window.confirm('Desconectar o WhatsApp deste aparelho? As conversas e mensagens ficam salvas — depois é só gerar um QR novo para parear de novo.')) return;
+    setDiscMsg('');
+    setDiscLoading(true);
+    try {
+      await whatsappService.logout();
+      setQrBase64('');
+      setDiscMsg('Desconectado. Gere um QR novo abaixo para parear outra conta.');
+      await loadStatus();
+    } catch (err) {
+      setDiscMsg(getApiErrorMessage(err, 'Não foi possível desconectar.'));
+    } finally {
+      setDiscLoading(false);
     }
   }
 
@@ -585,18 +603,43 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
             ) : !status?.configured ? (
               <p className="text-sm text-zinc-400">WhatsApp não configurado. Preencha ao lado e salve — a instância é criada sozinha.</p>
             ) : connected ? (
-              <p className="text-sm text-emerald-300 flex items-center gap-1">
-                <CheckCircle size={15} /> Conectado{status.phone ? ` · ${status.phone}` : ''}. Pode usar o chat.
-              </p>
+              <>
+                <p className="text-sm text-emerald-300 flex items-center gap-1">
+                  <CheckCircle size={15} /> Conectado{status.phone ? ` · ${status.phone}` : ''}. Pode usar o chat.
+                </p>
+                {isAdmin ? (
+                  <div className="mt-3">
+                    <button type="button" onClick={handleDisconnect} disabled={discLoading}
+                      className="px-4 py-2 rounded-lg bg-red-800 hover:bg-red-700 text-sm disabled:opacity-50">
+                      {discLoading ? 'Desconectando…' : 'Desconectar conta'}
+                    </button>
+                    <p className="text-[11px] text-zinc-500 mt-2">
+                      Desconecta este aparelho sem apagar conversas. Para parear outra conta, desconecte e gere um QR novo.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-zinc-500 mt-2">Só ADMIN desconecta a conta.</p>
+                )}
+                {discMsg && <p className="text-xs text-zinc-300 mt-2">{discMsg}</p>}
+              </>
             ) : (
               <>
                 <p className="text-sm text-zinc-300 mb-3">
                   Estado: <b>{status.connection}</b>. Gere o QR e leia com o WhatsApp do celular (Aparelhos conectados).
                 </p>
-                <button type="button" onClick={handleQr} disabled={qrLoading}
-                  className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm disabled:opacity-50 mb-3">
-                  {qrLoading ? 'Gerando…' : 'Gerar QR code'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <button type="button" onClick={handleQr} disabled={qrLoading}
+                    className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm disabled:opacity-50">
+                    {qrLoading ? 'Gerando…' : qrBase64 ? 'Gerar novo QR code' : 'Gerar QR code'}
+                  </button>
+                  {isAdmin && (
+                    <button type="button" onClick={handleDisconnect} disabled={discLoading} title="Forçar desconexão da sessão (se o aparelho travou conectado)"
+                      className="px-4 py-2 rounded-lg border border-red-900 text-red-300 hover:bg-red-950/40 text-sm disabled:opacity-50">
+                      {discLoading ? 'Desconectando…' : 'Desconectar conta'}
+                    </button>
+                  )}
+                </div>
+                {discMsg && <p className="text-xs text-zinc-300 mb-2">{discMsg}</p>}
                 {qrError && <p className="text-xs text-red-400">{qrError}</p>}
                 {qrBase64 && (
                   <div>

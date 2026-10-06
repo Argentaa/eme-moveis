@@ -1321,6 +1321,11 @@ export const whatsappService = {
     const response = await api.get('/api/whatsapp/qr');
     return response.data;
   },
+  /** Desconecta o aparelho pareado (só ADMIN); conversas e mensagens ficam. */
+  async logout(): Promise<{ ok: boolean; instance: string }> {
+    const response = await api.post('/api/whatsapp/logout');
+    return response.data;
+  },
   async conversations(): Promise<WhatsappConversation[]> {
     const response = await api.get('/api/whatsapp/conversations');
     return response.data;

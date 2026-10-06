@@ -1993,6 +1993,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("WhatsApp: desconectar conta e gerar novo QR",
+     "Na aba Configuração do WhatsApp agora tem o botão Desconectar conta (só ADMIN): ele derruba a sessão no aparelho sem apagar conversas nem mensagens — para trocar de conta ou parear de novo, é só gerar um QR novo em seguida. O botão de QR agora chama 'Gerar novo QR code' depois do primeiro, e a desconexão também aparece como opção de emergência quando a conexão trava.",
+     "NOVIDADE", "2026-10-06"),
     ("WhatsApp sincronizado com o celular",
      "Correção (pedido do dono): o que você manda pelo celular agora aparece no ERP — antes só a resposta do cliente entrava, porque a mensagem enviada pelo aparelho pareado era descartada. Também entrou o botão Sincronizar na conversa: ele puxa o histórico da Evolution (até 200 mensagens) para trazer o que foi falado antes de conectar ou com o sistema fora — dá para usar o celular e o ERP juntos sem perder mensagem, e o que já está no banco não duplica.",
      "CORRECAO", "2026-10-06"),

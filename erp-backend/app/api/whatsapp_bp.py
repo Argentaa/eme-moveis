@@ -388,6 +388,35 @@ def whatsapp_qr():
                     "code": code})
 
 
+@bp.post("/api/whatsapp/logout")
+@token_required(roles=["ADMIN"])
+def whatsapp_logout():
+    """Desconecta o aparelho pareado (POST /instance/logout) sem apagar nada.
+
+    Mantem instancia, conversas e mensagens no ERP — so derruba a sessao no
+    celular, para parear outra conta gerando um QR novo em seguida. 409 sem
+    config; 502 se a Evolution falhar.
+    """
+    cfg = _cfg()
+    global_key = cfg.get("evolution_key", "")
+    instance = cfg.get("evolution_instance", "") or DEFAULT_INSTANCE
+    if not (cfg.get("evolution_url") and global_key):
+        return jsonify({"detail": "WhatsApp nao configurado (rode o setup)"}), 409
+    status, resp = _evo_call("POST", f"/instance/logout/{instance}", global_key, {}, timeout=20)
+    # 404 = instancia ja sumiu na Evolution: considera desconectado mesmo
+    # assim e atualiza o espelho local. 0 = sem rede (vira 502 honesto).
+    if status not in (200, 201, 404):
+        return jsonify({"detail": (resp or {}).get("error") or "falha ao desconectar",
+                        "status": status}), 502
+    row = db.session.query(WhatsappInstance).filter_by(name=instance).first()
+    if row:
+        row.status = "desconectada"
+        row.phone = ""
+        row.updated_at = utcnow()
+        db.session.commit()
+    return jsonify({"ok": True, "instance": instance, "logout_status": status})
+
+
 # ── webhook (SEM login; token na URL) ────────────────────────────────
 
 

@@ -4821,6 +4821,39 @@ def test_whatsapp_sync_puxa_historico_sem_duplicar(client, monkeypatch):
     assert r2.get_json()["stored"] == 0 and r2.get_json()["duplicate"] == 2, r2.get_json()
 
 
+def test_whatsapp_logout_desconecta_sem_apagar(client, monkeypatch):
+    """POST /logout derruba a sessão na Evolution e marca o espelho local
+    como desconectada — sem apagar conversas nem mensagens."""
+    import app.api.whatsapp_bp as wb
+    from app.models.models import AppSetting, WhatsappConversation, WhatsappInstance, WhatsappMessage
+    h = _login(client)
+    # sem config → 409 honesto
+    assert client.post("/api/whatsapp/logout", headers=h).status_code == 409
+    with client.application.app_context():
+        from app.extensions import db
+        db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+        db.session.add(AppSetting(key="evolution_url", value="https://evo.exemplo.com"))
+        db.session.add(WhatsappInstance(name="eme-moveis", status="conectada", phone="5555999998888"))
+        db.session.commit()
+    calls = []
+    def fake_evo(method, path, key, body=None, timeout=None):
+        calls.append((method, path))
+        return 200, {}
+    monkeypatch.setattr(wb, "_evo_call", fake_evo)
+    r = client.post("/api/whatsapp/logout", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["ok"] is True
+    assert calls == [("POST", "/instance/logout/eme-moveis")], calls
+    with client.application.app_context():
+        from app.extensions import db
+        row = db.session.query(WhatsappInstance).filter_by(name="eme-moveis").first()
+        assert row.status == "desconectada" and row.phone == ""
+    # Evolution fora do ar → 502 (não finge que desconectou)
+    monkeypatch.setattr(wb, "_evo_call", lambda *a, **k: (0, {"error": "sem rede"}))
+    r2 = client.post("/api/whatsapp/logout", headers=h)
+    assert r2.status_code == 502, r2.get_data(as_text=True)
+
+
 def test_whatsapp_telefone_ambiguo_nao_vincula(client):
     """O MESMO telefone em DOIS clientes: conversa sem client_id (pior e entregar errado)."""
     from app.api.whatsapp_bp import webhook_token
