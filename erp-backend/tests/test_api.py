@@ -4838,12 +4838,18 @@ def test_whatsapp_logout_desconecta_sem_apagar(client, monkeypatch):
     calls = []
     def fake_evo(method, path, key, body=None, timeout=None):
         calls.append((method, path))
+        if path.startswith("/instance/logout/"):
+            return 200, {}
+        if path.startswith("/instance/connectionState/"):
+            return 200, {"instance": {"state": "close"}}
         return 200, {}
     monkeypatch.setattr(wb, "_evo_call", fake_evo)
     r = client.post("/api/whatsapp/logout", headers=h)
     assert r.status_code == 200, r.get_data(as_text=True)
     assert r.get_json()["ok"] is True
-    assert calls == [("POST", "/instance/logout/eme-moveis")], calls
+    assert r.get_json()["connection"] == "close", r.get_json()
+    assert calls[0] == ("POST", "/instance/logout/eme-moveis"), calls
+    assert any(p.startswith("/instance/connectionState/") for _, p in calls), calls
     with client.application.app_context():
         from app.extensions import db
         row = db.session.query(WhatsappInstance).filter_by(name="eme-moveis").first()
@@ -4852,6 +4858,35 @@ def test_whatsapp_logout_desconecta_sem_apagar(client, monkeypatch):
     monkeypatch.setattr(wb, "_evo_call", lambda *a, **k: (0, {"error": "sem rede"}))
     r2 = client.post("/api/whatsapp/logout", headers=h)
     assert r2.status_code == 502, r2.get_data(as_text=True)
+
+
+def test_whatsapp_logout_espera_sessao_cair(client, monkeypatch):
+    """Se a Evolution ainda responde 'open' logo após o logout (estado
+    transitório — o bug do print), o endpoint espera até sair do open em
+    vez de devolver 'desconectado' e a tela voltar a mostrar Conectado."""
+    import app.api.whatsapp_bp as wb
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        if not db.session.query(AppSetting).filter_by(key="evolution_key").first():
+            db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+        if not db.session.query(AppSetting).filter_by(key="evolution_url").first():
+            db.session.add(AppSetting(key="evolution_url", value="https://evo.exemplo.com"))
+        db.session.commit()
+    states = ["open", "close"]
+    def fake_evo(method, path, key, body=None, timeout=None):
+        if path.startswith("/instance/logout/"):
+            return 200, {}
+        if path.startswith("/instance/connectionState/"):
+            return 200, {"instance": {"state": states.pop(0) if len(states) > 1 else states[0]}}
+        return 200, []
+    monkeypatch.setattr(wb, "_evo_call", fake_evo)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    r = client.post("/api/whatsapp/logout", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["ok"] is True and body["connection"] == "close", body
 
 
 def test_whatsapp_telefone_ambiguo_nao_vincula(client):

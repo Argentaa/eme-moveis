@@ -335,10 +335,22 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
     setDiscMsg('');
     setDiscLoading(true);
     try {
-      await whatsappService.logout();
+      // A resposta já traz o estado VERIFICADO na Evolution (o backend espera
+      // a sessão cair): atualiza a tela por ela, sem reconsultar na hora —
+      // era essa releitura imediata que trazia o "open" transitório e o selo
+      // voltava a mostrar Conectado.
+      const r = await whatsappService.logout();
       setQrBase64('');
-      setDiscMsg('Desconectado. Gere um QR novo abaixo para parear outra conta.');
-      await loadStatus();
+      setStatus((prev) => ({
+        configured: true,
+        instance: r.instance,
+        connection: r.connection,
+        phone: r.phone,
+        webhook: prev?.webhook,
+      }));
+      setDiscMsg(r.ok
+        ? 'Desconectado. Gere um QR novo abaixo para parear outra conta.'
+        : 'A Evolution ainda mostra conectado — aguarde uns segundos e clique em Atualizar estado.');
     } catch (err) {
       setDiscMsg(getApiErrorMessage(err, 'Não foi possível desconectar.'));
     } finally {

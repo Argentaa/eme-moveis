@@ -1993,6 +1993,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("WhatsApp: desconectar mostra o estado real",
+     "Correção: ao desconectar, a tela dizia 'desconectado' mas o selo continuava 'Conectado' — a releitura do estado pegava a sessão ainda caindo na Evolution e marcava de volta. Agora o sistema espera a sessão cair de verdade antes de responder, e a tela mostra o estado confirmado. Se a sessão demorar, ele avisa para aguardar em vez de fingir que desconectou.",
+     "CORRECAO", "2026-10-06"),
     ("WhatsApp: desconectar conta e gerar novo QR",
      "Na aba Configuração do WhatsApp agora tem o botão Desconectar conta (só ADMIN): ele derruba a sessão no aparelho sem apagar conversas nem mensagens — para trocar de conta ou parear de novo, é só gerar um QR novo em seguida. O botão de QR agora chama 'Gerar novo QR code' depois do primeiro, e a desconexão também aparece como opção de emergência quando a conexão trava.",
      "NOVIDADE", "2026-10-06"),

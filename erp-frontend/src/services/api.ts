@@ -1322,7 +1322,7 @@ export const whatsappService = {
     return response.data;
   },
   /** Desconecta o aparelho pareado (só ADMIN); conversas e mensagens ficam. */
-  async logout(): Promise<{ ok: boolean; instance: string }> {
+  async logout(): Promise<{ ok: boolean; instance: string; connection: string; phone: string }> {
     const response = await api.post('/api/whatsapp/logout');
     return response.data;
   },

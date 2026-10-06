@@ -35,6 +35,7 @@ import hmac
 import io
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -340,21 +341,7 @@ def whatsapp_status():
     if not url or not global_key:
         return jsonify({"configured": False, "instance": instance,
                         "connection": "unknown", "phone": ""})
-    status, resp = _evo_call("GET", f"/instance/connectionState/{instance}", global_key)
-    connection = "unknown"
-    if status == 200 and isinstance(resp, dict):
-        inst = resp.get("instance") or {}
-        connection = str(inst.get("state") or resp.get("state") or "unknown")
-    phone = ""
-    if connection == "open":
-        _, lst = _evo_call("GET", "/instance/fetchInstances", global_key)
-        items = lst if isinstance(lst, list) else []
-        for it in items:
-            nm = it.get("name") or (it.get("instance") or {}).get("instanceName")
-            if nm == instance:
-                owner = it.get("ownerJid") or ""
-                phone = _digits(str(owner).split("@")[0])
-                break
+    connection, phone = _read_connection(global_key, instance)
     row = db.session.query(WhatsappInstance).filter_by(name=instance).first()
     if row:
         row.status = "conectada" if connection == "open" else (
@@ -365,6 +352,30 @@ def whatsapp_status():
     return jsonify({"configured": True, "instance": instance, "connection": connection,
                     "phone": phone,
                     "webhook": _webhook_url(instance, global_key)})
+
+
+def _read_connection(global_key, instance):
+    """Estado real na Evolution: (connection, phone). Sem efeito colateral.
+
+    Extraido do /status para o /logout reaproveitar na espera da
+    desconexao — sem isso cada um lia de um jeito e divergia.
+    """
+    status, resp = _evo_call("GET", f"/instance/connectionState/{instance}", global_key, timeout=10)
+    connection = "unknown"
+    if status == 200 and isinstance(resp, dict):
+        inst = resp.get("instance") or {}
+        connection = str(inst.get("state") or resp.get("state") or "unknown")
+    phone = ""
+    if connection == "open":
+        _, lst = _evo_call("GET", "/instance/fetchInstances", global_key, timeout=10)
+        items = lst if isinstance(lst, list) else []
+        for it in items:
+            nm = it.get("name") or (it.get("instance") or {}).get("instanceName")
+            if nm == instance:
+                owner = it.get("ownerJid") or ""
+                phone = _digits(str(owner).split("@")[0])
+                break
+    return connection, phone
 
 
 @bp.get("/api/whatsapp/qr")
@@ -396,6 +407,10 @@ def whatsapp_logout():
     Mantem instancia, conversas e mensagens no ERP — so derruba a sessao no
     celular, para parear outra conta gerando um QR novo em seguida. 409 sem
     config; 502 se a Evolution falhar.
+
+    Depois do logout, espera a Evolution confirmar (poll do connectionState):
+    sem isso o /status imediato ainda via "open" (estado transitorio) e a
+    tela voltava a mostrar Conectado — bug real.
     """
     cfg = _cfg()
     global_key = cfg.get("evolution_key", "")
@@ -408,13 +423,26 @@ def whatsapp_logout():
     if status not in (200, 201, 404):
         return jsonify({"detail": (resp or {}).get("error") or "falha ao desconectar",
                         "status": status}), 502
+    connection, phone = "close", ""
+    if status != 404:
+        # A sessao leva segundos para cair: consulta até sair do "open"
+        # (6 x 2 s). Se continuar open, devolve open — a tela avisa para
+        # aguardar em vez de fingir que desconectou.
+        for _ in range(6):
+            connection, phone = _read_connection(global_key, instance)
+            if connection != "open":
+                break
+            time.sleep(2)
     row = db.session.query(WhatsappInstance).filter_by(name=instance).first()
     if row:
-        row.status = "desconectada"
-        row.phone = ""
+        row.status = ("conectada" if connection == "open"
+                      else "desconectada")
+        row.phone = phone if connection == "open" else ""
         row.updated_at = utcnow()
         db.session.commit()
-    return jsonify({"ok": True, "instance": instance, "logout_status": status})
+    return jsonify({"ok": connection != "open", "instance": instance,
+                    "connection": connection, "phone": phone,
+                    "logout_status": status})
 
 
 # ── webhook (SEM login; token na URL) ────────────────────────────────
