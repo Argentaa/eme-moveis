@@ -1347,6 +1347,11 @@ export const whatsappService = {
     const response = await api.post('/api/whatsapp/conversations', { phone, name });
     return response.data;
   },
+  /** Puxa o histórico da conversa na Evolution (celular + ERP juntos). */
+  async sync(conversationId: string): Promise<{ ok: boolean; stored: number; duplicate: number; ignored: number }> {
+    const response = await api.post(`/api/whatsapp/conversations/${conversationId}/sync`);
+    return response.data;
+  },
   mediaUrl(messageId: string): string {
     return `/api/whatsapp/messages/${messageId}/media`;
   },

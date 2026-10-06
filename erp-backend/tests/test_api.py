@@ -4734,7 +4734,10 @@ def test_whatsapp_webhook_grava_e_dedupa(client):
     assert len(msgs2) == 1  # nao duplicou
 
 
-def test_whatsapp_webhook_ignora_fromme_e_outros_eventos(client):
+def test_whatsapp_webhook_fromme_vira_saida_e_evento_outro_ignora(client):
+    """fromMe=True (celular pareado) entra como direction=out — sem isso o que
+    o dono manda pelo celular nunca aparece no ERP (bug real: só a resposta do
+    cliente aparecia). Evento que não é messages.upsert continua ignorado."""
     from app.api.whatsapp_bp import webhook_token
     from app.models.models import AppSetting
     h = _login(client)
@@ -4745,13 +4748,77 @@ def test_whatsapp_webhook_ignora_fromme_e_outros_eventos(client):
             db.session.commit()
     tok = webhook_token("segredo-local", "eme-moveis")
     antes = len(client.get("/api/whatsapp/conversations", headers=h).get_json())
-    r = _wa_hook(client, tok, _wa_upsert("eme-moveis", "MID-ECO", "5555999000111", "eco", from_me=True))
-    assert r.get_json()["ignored"] == 1
+    r = _wa_hook(client, tok, _wa_upsert("eme-moveis", "MID-ECO", "5555999000111", "oi, sou eu pelo celular", from_me=True))
+    assert r.get_json()["stored"] == 1, r.get_data(as_text=True)
+    convs = client.get("/api/whatsapp/conversations", headers=h).get_json()
+    assert len(convs) == antes + 1
+    msgs = client.get(f"/api/whatsapp/conversations/{convs[-1]['id']}/messages", headers=h).get_json()
+    assert len(msgs) == 1 and msgs[0]["direction"] == "out", msgs
+    assert convs[-1]["last_direction"] == "out"
     r2 = client.post(f"/api/whatsapp/webhook?token={tok}",
                      json={"event": "connection.update", "instance": "eme-moveis", "data": {}})
     assert r2.get_json()["skipped"] == "connection.update"
-    depois = len(client.get("/api/whatsapp/conversations", headers=h).get_json())
-    assert antes == depois  # nada criado
+
+
+def test_whatsapp_eco_do_envio_proprio_nao_duplica(client, monkeypatch):
+    """O send grava o provider_id da Evolution; o eco (webhook fromMe com o
+    mesmo id) cai no dedupe em vez de virar segunda linha."""
+    import app.api.whatsapp_bp as wb
+    from app.api.whatsapp_bp import webhook_token
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        if not db.session.query(AppSetting).filter_by(key="evolution_key").first():
+            db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+        if not db.session.query(AppSetting).filter_by(key="evolution_url").first():
+            db.session.add(AppSetting(key="evolution_url", value="https://evo.exemplo.com"))
+        db.session.commit()
+    monkeypatch.setattr(wb, "_evo_call", lambda *a, **k: (200, {"key": {"id": "ECHO-99"}}))
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999000222", "name": "Eco"}).get_json()
+    r = client.post(f"/api/whatsapp/conversations/{conv['id']}/send", headers=h,
+                    json={"text": "mensagem do ERP"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["provider_id"] == "ECHO-99", r.get_json()
+    tok = webhook_token("segredo-local", "eme-moveis")
+    eco = _wa_hook(client, tok, _wa_upsert("eme-moveis", "ECHO-99", "5555999000222", "mensagem do ERP", from_me=True))
+    assert eco.get_json()["duplicate"] == 1, eco.get_data(as_text=True)
+    msgs = client.get(f"/api/whatsapp/conversations/{conv['id']}/messages", headers=h).get_json()
+    assert len(msgs) == 1, msgs
+
+
+def test_whatsapp_sync_puxa_historico_sem_duplicar(client, monkeypatch):
+    """POST /sync grava in+out do findMessages; a 2ª chamada só dedupa."""
+    import app.api.whatsapp_bp as wb
+    from app.models.models import AppSetting
+    h = _login(client)
+    with client.application.app_context():
+        from app.extensions import db
+        if not db.session.query(AppSetting).filter_by(key="evolution_key").first():
+            db.session.add(AppSetting(key="evolution_key", value="segredo-local"))
+        if not db.session.query(AppSetting).filter_by(key="evolution_url").first():
+            db.session.add(AppSetting(key="evolution_url", value="https://evo.exemplo.com"))
+        db.session.commit()
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999000333", "name": "Sync"}).get_json()
+    hist = {"messages": [
+        {"key": {"remoteJid": "5555999000333@s.whatsapp.net", "fromMe": True, "id": "H-1"},
+         "pushName": "Dono", "message": {"conversation": "enviei antes pelo celular"},
+         "messageTimestamp": 1700000000},
+        {"key": {"remoteJid": "5555999000333@s.whatsapp.net", "fromMe": False, "id": "H-2"},
+         "pushName": "Cliente", "message": {"conversation": "resposta posterior"},
+         "messageTimestamp": 1700000600},
+    ]}
+    monkeypatch.setattr(wb, "_evo_call", lambda *a, **k: (200, hist))
+    r = client.post(f"/api/whatsapp/conversations/{conv['id']}/sync", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["stored"] == 2, r.get_json()
+    msgs = client.get(f"/api/whatsapp/conversations/{conv['id']}/messages", headers=h).get_json()
+    assert [m["direction"] for m in msgs] == ["out", "in"], msgs
+    assert msgs[0]["body"] == "enviei antes pelo celular"
+    r2 = client.post(f"/api/whatsapp/conversations/{conv['id']}/sync", headers=h)
+    assert r2.get_json()["stored"] == 0 and r2.get_json()["duplicate"] == 2, r2.get_json()
 
 
 def test_whatsapp_telefone_ambiguo_nao_vincula(client):

@@ -1993,6 +1993,12 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("WhatsApp sincronizado com o celular",
+     "Correção (pedido do dono): o que você manda pelo celular agora aparece no ERP — antes só a resposta do cliente entrava, porque a mensagem enviada pelo aparelho pareado era descartada. Também entrou o botão Sincronizar na conversa: ele puxa o histórico da Evolution (até 200 mensagens) para trazer o que foi falado antes de conectar ou com o sistema fora — dá para usar o celular e o ERP juntos sem perder mensagem, e o que já está no banco não duplica.",
+     "CORRECAO", "2026-10-06"),
+    ("WhatsApp com cara de WhatsApp Web",
+     "A aba Conversas foi redesenhada: lista com avatar de iniciais, hora/data da última mensagem, prévia com 'Você:' e bolinha de não-lidas; conversa com bolhas verdes (suas) e cinzas (recebidas), divisores de dia (Hoje/Ontem/data), hora com duplo-tique nas enviadas e barra de digitação arredondada — tudo no tema escuro do sistema. A conversa mais recente abre sozinha.",
+     "NOVIDADE", "2026-10-06"),
     ("Dashboard abre no mês e período mensal/trimestral/semestral/anual",
      "Correção + novidade (pedido do vídeo): o Dashboard Executivo mostrava no mês números do ano inteiro — no dia 1º, sem vender nada, apareciam 2 vendas. Agora o painel abre no mês corrente e o que aparece é só do período: dá para trocar entre mensal, trimestral, semestral e anual. O Fluxo de Caixa do Financeiro ganhou o mesmo seletor (antes só filtrava por ano). Venda fechada sem data de fechamento (cadastro antigo) aparece separada, fora da conta do período, para o número não enganar.",
      "MELHORIA", "2026-10-06"),

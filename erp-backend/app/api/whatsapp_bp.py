@@ -11,12 +11,19 @@ O que este blueprint faz, em ordem de uso:
    nunca e persistido) + pairing code.
 4. `POST /api/whatsapp/webhook?token=...` (SEM login): recebe MESSAGES_UPSERT
    e grava conversa+mensagem. Token derivado via hmac da chave global —
-   nada guardado no banco. Ignora fromMe (eco do que o ERP enviou), ignora
-   evento que nao seja messages.upsert, dedupa pelo id da Evolution.
+   nada guardado no banco. fromMe=True (enviado pelo celular pareado) entra
+   como direction=out — sem isso o ERP nunca mostra o que o dono mandou pelo
+   celular. Ignora evento que nao seja messages.upsert, dedupa pelo id da
+   Evolution (o eco do envio do ERP cai no mesmo dedupe, pois o send grava o
+   provider_id retornado pela Evolution).
 5. `GET /api/whatsapp/conversations` + `.../<id>/messages`: o chat le daqui.
 6. `POST /api/whatsapp/conversations/<id>/send`: texto (JSON) ou midia
-   (multipart file + caption). Sai via sendText/sendMedia e grava como out.
+   (multipart file + caption). Sai via sendText/sendMedia e grava como out
+   (com o provider_id da Evolution, p/ o eco do webhook dedupar).
    Arquivo respeita o mesmo teto de upload do ERP (413 honesto acima).
+7. `POST /api/whatsapp/conversations/<id>/sync`: puxa o historico da
+   Evolution (findMessages) e grava o que falta — e o botao "Sincronizar" da
+   tela, p/ usar celular e ERP juntos sem perder mensagem.
 
 Contrato v2 real (nao o da doc v1): connect e GET, hash vem no create,
 fetchInstances usa name/connectionStatus/ownerJid. Envio de midia tenta o
@@ -29,7 +36,7 @@ import io
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, g, jsonify, request, send_file
 from werkzeug.utils import secure_filename
@@ -183,17 +190,43 @@ def _extract_text(message):
     return "text", ""
 
 
+def _msg_time(item):
+    """Data da mensagem (p/ o histórico sincronizado manter a ordem real).
+
+    Webhook e findMessages trazem `messageTimestamp` em segundos (int, float
+    ou string de dígitos). Ausente/inválido = agora.
+    """
+    raw = (item or {}).get("messageTimestamp")
+    try:
+        ts = float(raw)
+    except (TypeError, ValueError):
+        return utcnow()
+    if ts <= 0:
+        return utcnow()
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return utcnow()
+
+
 def _store_inbound(instance, item):
-    """Grava UM messages.upsert. Devolve 'stored'|'duplicate'|'ignored'."""
+    """Grava UM messages.upsert. Devolve 'stored'|'duplicate'|'ignored'.
+
+    fromMe=True (enviado pelo celular pareado ou eco do envio do ERP) entra
+    como direction=out — sem isso, o que o dono manda pelo celular nunca
+    aparece no ERP, só a resposta do cliente (bug real). O eco do envio feito
+    pelo próprio ERP não duplica: o send grava o provider_id da Evolution e o
+    dedupe abaixo cobre os dois sentidos. pushName do fromMe NÃO renomeia a
+    conversa (é o nome do próprio dono).
+    """
     key = (item or {}).get("key") or {}
-    if key.get("fromMe"):
-        return "ignored"
+    from_me = bool(key.get("fromMe"))
     digits = _sender_digits(key, (item or {}).get("participant"))
     if not digits:
         return "ignored"
     message = (item or {}).get("message") or {}
     kind, texto = _extract_text(message)
-    push = str((item or {}).get("pushName") or "")
+    push = "" if from_me else str((item or {}).get("pushName") or "")
     provider_id = str(key.get("id") or "")
     if provider_id:
         dup = db.session.query(WhatsappMessage).filter_by(provider_id=provider_id).first()
@@ -214,16 +247,27 @@ def _store_inbound(instance, item):
         conversation_id=conv.id,
         provider_id=provider_id or None,
         remote_jid=remote_jid,
-        direction="in",
+        direction="out" if from_me else "in",
         kind=kind if kind in MEDIA_KINDS or kind == "text" else "text",
         body=(texto or "")[:4000],
         media_filename=(str(media_node.get("fileName") or "")[:255] if media_node else None),
         media_mime=(str(media_node.get("mimetype") or "")[:120] if media_node else None),
         media_size=media_len,
         status="stored",
+        created_at=_msg_time(item),
     )
     db.session.add(row)
-    conv.last_message_at = utcnow()
+    # last_message_at acompanha a mensagem mais nova. Normaliza tz: o SQLite
+    # devolve naive e o utcnow/fromtimestamp gera aware — comparar direto
+    # estoura TypeError.
+    def _naive(dt):
+        try:
+            return dt.replace(tzinfo=None) if dt and dt.tzinfo else dt
+        except Exception:
+            return None
+    if not _naive(conv.last_message_at) or (
+            _naive(row.created_at) and _naive(row.created_at) >= _naive(conv.last_message_at)):
+        conv.last_message_at = row.created_at
     db.session.flush()
     return "stored"
 
@@ -429,6 +473,22 @@ def _send_text(global_key, instance, number, text):
                      {"number": number, "text": text}, timeout=20)
 
 
+def _extract_provider_id(resp):
+    """Id da mensagem no retorno do envio (p/ o eco do webhook dedupar).
+
+    A Evolution varia o shape: {key: {id}} | {id} | {messageId} | {keyId}.
+    Ausente = None (o eco, se chegar sem id, vira linha separada — raro).
+    """
+    if not isinstance(resp, dict):
+        return None
+    key = resp.get("key") or {}
+    for cand in (key.get("id") if isinstance(key, dict) else None,
+                 resp.get("id"), resp.get("messageId"), resp.get("keyId")):
+        if cand:
+            return str(cand)[:120]
+    return None
+
+
 def _send_media(global_key, instance, number, kind, b64, filename, caption):
     payloads = [
         {"number": number, "mediatype": kind, "media": b64,
@@ -488,7 +548,7 @@ def send_message(conv_id):
             conversation_id=conv.id, direction="out", kind=kind,
             body=caption, media_stored=stored, media_filename=original,
             media_mime=file.mimetype or "", media_size=len(blob),
-            status="sent",
+            status="sent", provider_id=_extract_provider_id(resp),
             created_by=g.current_user.username if hasattr(g, "current_user") else "",
         )
     else:
@@ -503,6 +563,7 @@ def send_message(conv_id):
         row = WhatsappMessage(
             conversation_id=conv.id, direction="out", kind="text",
             body=text[:4000], status="sent",
+            provider_id=_extract_provider_id(resp),
             created_by=g.current_user.username if hasattr(g, "current_user") else "",
         )
     db.session.add(row)
@@ -511,6 +572,80 @@ def send_message(conv_id):
         conv.client_id = _match_client_id(conv.phone)
     db.session.commit()
     return jsonify(row.to_dict()), 201
+
+
+def _as_msg_list(resp):
+    """Extrai a lista de mensagens do findMessages (o envelope varia).
+
+    Formatos vistos: lista pura | {messages: [...]} | {messages: {records:
+    [...]}} | {records|data|result: [...]}.
+    """
+    if isinstance(resp, list):
+        return [i for i in resp if isinstance(i, dict)]
+    if isinstance(resp, dict):
+        for k in ("records", "data", "result"):
+            v = resp.get(k)
+            if isinstance(v, list):
+                return [i for i in v if isinstance(i, dict)]
+        mid = resp.get("messages")
+        if isinstance(mid, list):
+            return [i for i in mid if isinstance(i, dict)]
+        if isinstance(mid, dict):
+            for k in ("records", "messages", "data"):
+                v = mid.get(k)
+                if isinstance(v, list):
+                    return [i for i in v if isinstance(i, dict)]
+    return []
+
+
+@bp.post("/api/whatsapp/conversations/<conv_id>/sync")
+@token_required()
+def sync_conversation(conv_id):
+    """Puxa o historico da conversa na Evolution (celular + ERP juntos).
+
+    O webhook só recebe o que chega DEPOIS da conexão: o que foi trocado
+    antes (ou com o webhook fora) só aparece via este sync — é o botão
+    "Sincronizar" da tela. Reaproveita `_store_inbound`, então o dedupe por
+    provider_id impede duplicar o que já está no banco.
+    """
+    cfg = _cfg()
+    global_key = cfg.get("evolution_key", "")
+    instance = cfg.get("evolution_instance", "") or DEFAULT_INSTANCE
+    if not (cfg.get("evolution_url") and global_key):
+        return jsonify({"detail": "WhatsApp nao configurado (rode o setup)"}), 409
+    conv = db.session.get(WhatsappConversation, conv_id)
+    if not conv:
+        return jsonify({"detail": "Conversa nao encontrada"}), 404
+    jid = f"{_digits(conv.phone)}@s.whatsapp.net"
+    attempts = [
+        {"where": {"key": {"remoteJid": jid}}, "limit": 200},
+        {"where": {"remoteJid": jid}, "limit": 200},
+    ]
+    items = []
+    via = ""
+    last_err = ""
+    for body in attempts:
+        status, resp = _evo_call("POST", f"/chat/findMessages/{instance}", global_key, body, timeout=30)
+        if status == 0 or status >= 300:
+            last_err = (resp or {}).get("error") or f"status {status}"
+            continue
+        items = _as_msg_list(resp)
+        via = f"findMessages where={list(body['where'].keys())}"
+        break
+    if not via:
+        return jsonify({"detail": last_err or "falha ao buscar historico"}), 502
+    stored = dup = ignored = 0
+    for it in items:
+        r = _store_inbound(instance, it)
+        if r == "stored":
+            stored += 1
+        elif r == "duplicate":
+            dup += 1
+        else:
+            ignored += 1
+    db.session.commit()
+    return jsonify({"ok": True, "stored": stored, "duplicate": dup,
+                    "ignored": ignored, "via": via})
 
 
 @bp.get("/api/whatsapp/messages/<msg_id>/media")
