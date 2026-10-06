@@ -4848,7 +4848,7 @@ def test_whatsapp_logout_desconecta_sem_apagar(client, monkeypatch):
     assert r.status_code == 200, r.get_data(as_text=True)
     assert r.get_json()["ok"] is True
     assert r.get_json()["connection"] == "close", r.get_json()
-    assert calls[0] == ("POST", "/instance/logout/eme-moveis"), calls
+    assert calls[0] == ("DELETE", "/instance/logout/eme-moveis"), calls
     assert any(p.startswith("/instance/connectionState/") for _, p in calls), calls
     with client.application.app_context():
         from app.extensions import db

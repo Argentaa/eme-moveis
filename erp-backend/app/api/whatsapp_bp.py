@@ -402,7 +402,7 @@ def whatsapp_qr():
 @bp.post("/api/whatsapp/logout")
 @token_required(roles=["ADMIN"])
 def whatsapp_logout():
-    """Desconecta o aparelho pareado (POST /instance/logout) sem apagar nada.
+    """Desconecta o aparelho pareado (DELETE /instance/logout) sem apagar nada.
 
     Mantem instancia, conversas e mensagens no ERP — so derruba a sessao no
     celular, para parear outra conta gerando um QR novo em seguida. 409 sem
@@ -417,7 +417,14 @@ def whatsapp_logout():
     instance = cfg.get("evolution_instance", "") or DEFAULT_INSTANCE
     if not (cfg.get("evolution_url") and global_key):
         return jsonify({"detail": "WhatsApp nao configurado (rode o setup)"}), 409
-    status, resp = _evo_call("POST", f"/instance/logout/{instance}", global_key, {}, timeout=20)
+    # A doc atual da Evolution usa DELETE /instance/logout (o POST cai em 404
+    # "Cannot POST" — e o 404 era tratado como "desconectado", fingindo um
+    # logout que nunca aconteceu: bug real do selo que voltava a Conectado).
+    # Autentica com a chave da instancia (hash do create) quando houver,
+    # senao com a chave global.
+    _row = db.session.query(WhatsappInstance).filter_by(name=instance).first()
+    logout_key = (_row.api_key if _row and _row.api_key else None) or global_key
+    status, resp = _evo_call("DELETE", f"/instance/logout/{instance}", logout_key, timeout=20)
     # 404 = instancia ja sumiu na Evolution: considera desconectado mesmo
     # assim e atualiza o espelho local. 0 = sem rede (vira 502 honesto).
     if status not in (200, 201, 404):
