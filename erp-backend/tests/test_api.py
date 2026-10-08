@@ -4359,6 +4359,14 @@ def test_meta_conta_pela_data_da_venda_nao_pela_conclusao(client):
     assert outro["achieved"] == "R$ 0,00", outro
     assert outro["deals_closed"] == 0, outro
 
+    # o mes da conclusao (botao) NAO pode contar a venda (bug: dedup so
+    # valia p/ Sales do proprio periodo)
+    mes_conclusao = client.get("/api/goals/summary", headers=h,
+                               query_string={"year": hoje.year, "month": hoje.month}).get_json()
+    if hoje.month != 1:
+        assert mes_conclusao["achieved"] == "R$ 0,00", mes_conclusao
+        assert mes_conclusao["deals_closed"] == 0, mes_conclusao
+
 
 def test_concluir_venda_idempotente_nao_reescreve_closed_at(client):
     """Concluir duas vezes nao muda a data original de fechamento."""

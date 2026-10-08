@@ -228,13 +228,13 @@ def summary():
     # na meta de outubro). Concluido pelo botao SEM Sale conta por
     # closed_at (sem duplicar: cliente com Sale nao entra aqui).
     start_d, end_d = start.date(), end.date()
-    com_sale = set()
+    todas = db.session.query(Sale).all()
+    com_sale = {s.client_id for s in todas if s.client_id}
     achieved = 0.0
     deals = set()
-    for s in db.session.query(Sale).all():
+    for s in todas:
         if s.sale_date and start_d <= s.sale_date < end_d:
             achieved += float(s.total_value or 0)
-            com_sale.add(s.client_id)
             deals.add(s.client_id)
     for c in db.session.query(Client).filter(
         Client.closed_at.isnot(None),
