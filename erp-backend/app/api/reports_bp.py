@@ -8,6 +8,8 @@ Contratos replicados do FastAPI original:
   realizado (status PAGO) e projetado (PAGO + PENDENTE)
 - crm -> {periodo, negociacoes{...}, conversao{...}, ticket_medio{...},
   fluxo_caixa[], fontes_lead[]}
+  conversao/fechamentos_periodo derivam de Sale.sale_date (competencia da
+  venda); fechado sem Sale vai para vendas_pendentes_geracao, fora da conta.
 - lead-sources -> ReportResponse (origem dos leads: fonte/campanha, conversao e valores)
 """
 import io
@@ -983,24 +985,47 @@ def _build_crm():
         dt = c.closed_at or c.sale_concluded_at
         return dt.date() if dt is not None else None
 
-    # Venda fechada = etapa FECHAMENTO OU botao Concluir venda (sale_concluded_at).
-    # O botao tira o card do funil sem passar pela ultima coluna, entao contar
-    # so o status escondia essas vendas do Dashboard comercial (bug real).
-    # Recorte por periodo (pedido do dono, video 2026-10-01): o dashboard inicial
-    # somava fechados de todos os tempos dentro do mes. Fechado sem data
-    # (fluxo antigo / arrasto p/ ganho, que nao grava closed_at) = undated:
-    # declarado no payload, fora da conta do periodo.
+    # ── Fonte única da verdade: Sale.sale_date ──
+    # Fechado no período = Sale com sale_date dentro de [d0, d1].
+    # Client.closed_at/sale_concluded_at marcam QUANDO o botão foi clicado,
+    # não a competência da venda (ex.: venda de agosto gerada em outubro
+    # caía em outubro). Por isso conversão, taxa e drill-down derivam só
+    # de Sale.sale_date. Cliente em FECHAMENTO (ou com sale_concluded_at)
+    # mas SEM nenhuma Sale não conta no período: vai para
+    # `vendas_pendentes_geracao` (aguardando "Gerar venda").
+    vendas_todas = db.session.query(Sale).all()
+    vendas_periodo = [s for s in vendas_todas
+                      if s.sale_date is not None and d0 <= s.sale_date <= d1]
     fechados = [c for c in clients
                 if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None]
-    em_periodo = []
+    sales_client_ids = {getattr(s, "client_id", None) for s in vendas_todas}
+
+    def _valor_fechado(c):
+        try:
+            nv = c.negotiation_value
+        except Exception:
+            nv = None
+        return round(float(nv or 0) or float(c.estimated_value or 0), 2)
+
+    pendentes = []
     for c in fechados:
+        if c.id in sales_client_ids:
+            continue
         fd = _fecha_data(c)
-        if fd is not None and d0 <= fd <= d1:
-            em_periodo.append(c)
+        pendentes.append({
+            "client_id": c.id,
+            "name": c.name,
+            "funnel_status": c.funnel_status,
+            "data": fd.isoformat() if fd else None,
+            "valor": _valor_fechado(c),
+        })
+    pendentes.sort(key=lambda i: i["data"] or "", reverse=True)
+    vendas_pendentes_geracao = {"qtd": len(pendentes), "itens": pendentes}
+
     undated = sum(1 for c in fechados if _fecha_data(c) is None)
     base = [c for c in clients
             if c.created_at and d0 <= c.created_at.date() <= d1]
-    total_closed = len(em_periodo)
+    total_closed = len(vendas_periodo)
     taxa = round(total_closed / len(base) * 100, 1) if base else 0
 
     concluidos = db.session.query(Project).filter(
@@ -1114,10 +1139,10 @@ def _build_crm():
 
     # ── Fase 1 Comercial: vendas mês/ano + orçamentos + pizza por origem ──
     # Fonte de verdade: Sale (venda gerada pelo botão "Gerar venda").
+    # (vendas_todas já carregado acima p/ conversão/drill-down na mesma base.)
+    vendas = vendas_todas
     # sale_date NUNCA é nula (coluna NOT NULL); origem = Sale.lead_source
-    # com fallback para o lead_source do cliente. Evolução fatiada no
-    # período estilo DRE (?period=mensal|trimestral|semestral|anual).
-    vendas = db.session.query(Sale).all()
+    # com fallback para o lead_source do cliente.
     clients_by_id = {c.id: c for c in clients}
     vendas_do_ano = [s for s in vendas
                      if s.sale_date and s.sale_date.year == year]
@@ -1194,31 +1219,9 @@ def _build_crm():
         for g in sorted(origem_map.values(), key=lambda g: g["valor"], reverse=True)
     ]
 
-    # Drill-down do periodo (pedido do dono, video 2026-10-01): quais vendas e
-    # de qual cliente. Une Gerar-venda (Sale.sale_date no range, fonte de
-    # verdade) + CRM fechados com data no range; dedup por cliente (a venda
-    # vence, pois o POST /api/sales grava closed_at junto e contaria em dobro).
-    vendas_range = [s for s in vendas if s.sale_date and d0 <= s.sale_date <= d1]
-    por_cliente = {}
-    for s in vendas_range:
-        por_cliente[getattr(s, "client_id", None)] = _sale_item(s)
-    for c in em_periodo:
-        if c.id in por_cliente:
-            continue
-        try:
-            nv = c.negotiation_value
-        except Exception:
-            nv = None
-        valor = float(nv or 0) or float(c.estimated_value or 0)
-        fd = _fecha_data(c)
-        por_cliente[c.id] = {
-            "client_id": c.id,
-            "name": c.name,
-            "data": fd.isoformat() if fd else None,
-            "valor": round(valor, 2),
-            "origem": "crm",
-        }
-    fp_itens = sorted(por_cliente.values(),
+    # Drill-down do periodo: só Sales com sale_date no range (fonte única).
+    # Fechado sem Sale não entra aqui — está em `vendas_pendentes_geracao`.
+    fp_itens = sorted((_sale_item(s) for s in vendas_periodo),
                       key=lambda i: i["data"] or "", reverse=True)
     fechamentos_periodo = {
         "qtd": len(fp_itens),
@@ -1239,6 +1242,7 @@ def _build_crm():
                       "total_fechamentos": total_closed, "taxa": taxa,
                       "undated": undated},
         "fechamentos_periodo": fechamentos_periodo,
+        "vendas_pendentes_geracao": vendas_pendentes_geracao,
         "ticket_medio": ticket,
         "fluxo_caixa": fluxo,
         "fontes_lead": fontes,

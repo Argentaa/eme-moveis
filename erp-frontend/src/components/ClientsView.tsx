@@ -17,10 +17,12 @@ import PartnersPanel from './PartnersPanel';
 import PlanningPanel from './PlanningPanel';
 import ProductsPanel from './ProductsPanel';
 import CommercialDashboard from './CommercialDashboard';
+import SalesManagementPanel from './SalesManagementPanel';
 
 /** Abas do módulo Comercial, conforme a spec do cliente (17/09). */
 const COMMERCIAL_TABS: ModuleTab[] = [
   { id: 'dashboard', label: 'Dashboard comercial', ready: true },
+  { id: 'sales', label: 'Vendas realizadas', ready: true },
   { id: 'funnel', label: 'Funil de vendas', ready: true },
   { id: 'proposals', label: 'Orçamentos/Propostas', ready: true },
   { id: 'commissions', label: 'Comissões', ready: true },
@@ -760,6 +762,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       <ActiveTabPlaceholder tabs={COMMERCIAL_TABS} active={activeTab} />
 
       {activeTab === 'dashboard' && (<CommercialDashboard />)}
+
+      {activeTab === 'sales' && (<SalesManagementPanel userRole={userRole} />)}
 
       {activeTab === 'proposals' && (<ProposalsPanel />)}
 

@@ -4291,8 +4291,10 @@ def test_concluir_venda_grava_closed_at_e_entra_na_meta(client):
     """Regressao do bug real: venda de R$ 12.570 concluida pelo botao criava o
     projeto mas nao aparecia no Dashboard inicial (meta) nem no comercial.
 
-    Causa: conclude-sale gravava so sale_concluded_at; meta/comissao/CRM leem
-    closed_at (ou a etapa FECHAMENTO). O botao agora grava closed_at junto.
+    Causa: conclude-sale gravava so sale_concluded_at; meta/comissao leem
+    closed_at. O botao agora grava closed_at junto. Já o relatório CRM conta
+    só Sales (por sale_date): concluído sem Sale vai para
+    vendas_pendentes_geracao, fora da conta do período.
     """
     from datetime import datetime
     h = _login(client)
@@ -4315,10 +4317,47 @@ def test_concluir_venda_grava_closed_at_e_entra_na_meta(client):
     assert body["deals_closed"] == 1, body
     assert body["achieved"] == "R$ 12.570,00", body
 
-    # Dashboard comercial: relatorio CRM conta a venda concluida pelo botao
+    # Dashboard comercial (fonte única Sale.sale_date): concluído pelo botão
+    # SEM Sale não conta no período — vai para vendas_pendentes_geracao.
     crm = client.get("/api/reports/crm", headers=h).get_json()
     conv = crm.get("conversao", {})
-    assert conv.get("total_fechamentos") == 1, conv
+    assert conv.get("total_fechamentos") == 0, conv
+    pend = crm.get("vendas_pendentes_geracao", {})
+    assert pend.get("qtd") == 1, pend
+    assert pend["itens"][0]["name"] == "Cliente 12570", pend
+    assert crm["fechamentos_periodo"]["qtd"] == 0
+
+
+def test_meta_conta_pela_data_da_venda_nao_pela_conclusao(client):
+    """Regressao do bug real (video do cliente, out/2026): 3 vendas com
+    sale_date em agosto, concluidas/geradas em outubro, somavam na meta de
+    outubro. A meta tem de contar pela Sale.sale_date.
+    """
+    from datetime import date
+    h = _login(client)
+    hoje = date.today()
+    outro_mes = 6 if hoje.month != 6 else 7
+
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Cliente Agosto", "estimated_value": 5000}).get_json()["id"]
+    r = client.post("/api/sales", headers=h, json={
+        "client_id": cid, "total_value": 5000, "down_payment": 5000,
+        "installments": 0, "installment_value": 0, "installments_due": [],
+        "sale_date": date(hoje.year, 1, 15).isoformat(), "environments": [],
+    })
+    assert r.status_code == 201, r.get_data(as_text=True)
+    # conclusao carimbada agora, mas a venda e de janeiro
+    assert client.get(f"/api/clients/{cid}", headers=h).get_json()["closed_at"]
+
+    jan = client.get("/api/goals/summary", headers=h,
+                     query_string={"year": hoje.year, "month": 1}).get_json()
+    assert jan["achieved"] == "R$ 5.000,00", jan
+    assert jan["deals_closed"] == 1, jan
+
+    outro = client.get("/api/goals/summary", headers=h,
+                       query_string={"year": hoje.year, "month": outro_mes}).get_json()
+    assert outro["achieved"] == "R$ 0,00", outro
+    assert outro["deals_closed"] == 0, outro
 
 
 def test_concluir_venda_idempotente_nao_reescreve_closed_at(client):
@@ -5626,9 +5665,10 @@ def test_crm_periodos_buckets(client):
 
 def test_crm_conversao_respeita_periodo_e_declara_undated(client):
     """Pedido do dono (video 2026-10-01): o dashboard inicial somava fechados
-    de todos os tempos dentro do mes. conversao agora e do periodo; fechado
-    sem data (fluxo antigo / arrasto p/ ganho, que nao grava closed_at) sai da
-    conta mas aparece declarado em undated."""
+    de todos os tempos dentro do mes. Conversão e drill-down derivam de
+    Sale.sale_date; fechado sem Sale (botão concluir ou FECHAMENTO antigo)
+    sai da conta do período mas aparece declarado em
+    vendas_pendentes_geracao (e em undated quando sem data)."""
     import datetime as _dt
     h = _login(client)
     cid = client.post("/api/clients", headers=h,
@@ -5640,26 +5680,30 @@ def test_crm_conversao_respeita_periodo_e_declara_undated(client):
 
     crm = client.get("/api/reports/crm", headers=h).get_json()
     conv = crm["conversao"]
-    assert conv["total_fechamentos"] == 1, conv
+    assert conv["total_fechamentos"] == 0, conv
     assert conv["undated"] == 1, conv
     assert conv["total_clientes"] == 2, conv
-    assert conv["taxa"] == 50.0, conv
+    assert conv["taxa"] == 0.0, conv
 
     fp = crm["fechamentos_periodo"]
-    assert fp["qtd"] == 1 and fp["undated"] == 1, fp
-    assert fp["itens"][0]["origem"] == "crm", fp
-    assert fp["itens"][0]["name"] == "Fechado Hoje", fp
+    assert fp["qtd"] == 0 and fp["undated"] == 1, fp
+    assert fp["itens"] == [], fp
 
-    # mes antigo vazio: nada do periodo, undated continua declarado
+    pend = crm["vendas_pendentes_geracao"]
+    assert pend["qtd"] == 2, pend
+    assert {i["name"] for i in pend["itens"]} == {"Fechado Hoje", "Fechado Antigo"}, pend
+
+    # mes antigo vazio: nada do periodo, pendentes continuam declarados
     vazio = client.get("/api/reports/crm?year=2001&month=1", headers=h).get_json()
     assert vazio["conversao"]["total_fechamentos"] == 0, vazio["conversao"]
     assert vazio["conversao"]["undated"] == 1, vazio["conversao"]
     assert vazio["fechamentos_periodo"]["qtd"] == 0
+    assert vazio["vendas_pendentes_geracao"]["qtd"] == 2
 
 
 def test_crm_fechamentos_periodo_une_sale_e_crm_sem_dobrar(client):
     """Gerar venda grava Sale + closed_at juntos: o drill-down conta uma vez
-    (a Sale vence o CRM no dedup por cliente)."""
+    (fonte única Sale.sale_date; o closed_at carimbado junto não duplica)."""
     import datetime as _dt
     h = _login(client)
     hoje = _dt.date.today()
@@ -5718,3 +5762,123 @@ def test_cash_flow_periodo_trimestral_e_default_mensal(client):
     assert _brl_num(anu["rows"][0]["income"]) == 1000
     assert _brl_num(anu["rows"][0]["outcome"]) == 200
     assert client.get(base + "&period=quinzenal", headers=h).status_code == 400
+
+
+# ── Venda por competência (Sale.sale_date) + PUT/DELETE ──────────────
+
+def test_crm_venda_de_agosto_concluida_em_outubro_conta_em_agosto(client):
+    """Fonte única: Sale com sale_date em agosto gerada em outubro conta em
+    agosto e NÃO em outubro (closed_at/sale_concluded_at não mandam mais)."""
+    h = _login(client)
+    cid = _mk_sale_client(client, h, "Cliente Agosto")
+    r = client.post("/api/sales", headers=h, json=_sale_payload(
+        client, h, cid, sale_date="2026-08-15", total_value=9000,
+        down_payment=9000, installments=0, installment_value=0,
+        installments_due=[]))
+    assert r.status_code == 201, r.get_data(as_text=True)
+    cli = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert cli["closed_at"] and cli["sale_concluded_at"]
+
+    ago = client.get("/api/reports/crm?year=2026&month=8", headers=h).get_json()
+    assert ago["conversao"]["total_fechamentos"] == 1, ago["conversao"]
+    assert ago["fechamentos_periodo"]["qtd"] == 1
+    assert ago["fechamentos_periodo"]["valor_total"] == 9000
+    assert ago["vendas_mes"]["qtd"] == 1
+    assert ago["vendas_pendentes_geracao"]["qtd"] == 0
+
+    out = client.get("/api/reports/crm?year=2026&month=10", headers=h).get_json()
+    assert out["conversao"]["total_fechamentos"] == 0, out["conversao"]
+    assert out["fechamentos_periodo"]["qtd"] == 0
+    assert out["vendas_mes"]["qtd"] == 0
+
+
+def test_crm_fechado_sem_sale_vai_para_pendentes_e_nao_no_relatorio(client):
+    """Fechado com closed_at e valor mas SEM Sale aparece em
+    vendas_pendentes_geracao e NÃO conta no relatório do período."""
+    from datetime import datetime
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Fechada Sem Venda", "estimated_value": 12570,
+        "funnel_status": "FECHAMENTO"}).get_json()["id"]
+    with client.application.app_context():
+        from app.extensions import db
+        from app.models.models import Client as ClientModel
+        c = db.session.get(ClientModel, cid)
+        c.closed_at = datetime(2026, 9, 25, 12, 0)
+        c.sale_concluded_at = datetime(2026, 9, 25, 12, 0)
+        db.session.commit()
+
+    crm = client.get("/api/reports/crm?year=2026&month=9", headers=h).get_json()
+    assert crm["conversao"]["total_fechamentos"] == 0, crm["conversao"]
+    assert crm["fechamentos_periodo"]["qtd"] == 0
+    assert crm["vendas_mes"]["qtd"] == 0
+    pend = crm["vendas_pendentes_geracao"]
+    assert pend["qtd"] == 1, pend
+    assert pend["itens"][0]["name"] == "Fechada Sem Venda", pend
+    assert pend["itens"][0]["valor"] == 12570, pend
+
+
+def test_sale_put_edita_e_valida(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h, "Cliente PUT")
+    sid = client.post("/api/sales", headers=h, json=_sale_payload(
+        client, h, cid, sale_date="2026-08-15", total_value=9000,
+        down_payment=9000, installments=0, installment_value=0,
+        installments_due=[])).get_json()["id"]
+
+    # corrige a competência: agosto -> setembro reflete no CRM
+    r = client.put(f"/api/sales/{sid}", headers=h, json={"sale_date": "2026-09-10"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["sale_date"] == "2026-09-10"
+    assert client.get("/api/reports/crm?year=2026&month=9", headers=h).get_json()["fechamentos_periodo"]["qtd"] == 1
+    assert client.get("/api/reports/crm?year=2026&month=8", headers=h).get_json()["fechamentos_periodo"]["qtd"] == 0
+
+    # valores com contrato coerente (2000 + 2x5000 == 12000)
+    r = client.put(f"/api/sales/{sid}", headers=h, json={
+        "total_value": 12000, "down_payment": 2000,
+        "installments": 2, "installment_value": 5000})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["total_value"] == 12000 and body["installments"] == 2
+    assert body["down_payment"] == 2000 and body["installment_value"] == 5000
+
+    # validações básicas
+    assert client.put(f"/api/sales/{sid}", headers=h, json={"sale_date": "x"}).status_code == 400
+    assert client.put(f"/api/sales/{sid}", headers=h, json={"total_value": 0}).status_code == 400
+    assert client.put(f"/api/sales/{sid}", headers=h, json={"down_payment": -1}).status_code == 400
+    assert client.put(f"/api/sales/{sid}", headers=h, json={"installments": 61}).status_code == 400
+    assert client.put(f"/api/sales/{sid}", headers=h, json={
+        "total_value": 12000, "down_payment": 1,
+        "installments": 2, "installment_value": 5000}).status_code == 400
+    assert client.put("/api/sales/nao-existe", headers=h,
+                      json={"sale_date": "2026-09-10"}).status_code == 404
+
+
+def test_sale_delete_limpa_datas_mantem_funil(client):
+    h = _login(client)
+    cid = _mk_sale_client(client, h, "Cliente DEL")
+    sid = client.post("/api/sales", headers=h,
+                      json=_sale_payload(client, h, cid)).get_json()["id"]
+    antes = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert antes["sale_concluded_at"] and antes["closed_at"]
+    funil_antes = antes["funnel_status"]
+
+    assert client.delete("/api/sales/nao-existe", headers=h).status_code == 404
+    assert client.delete(f"/api/sales/{sid}", headers=h).status_code == 200
+    assert client.get(f"/api/sales/{sid}", headers=h).status_code == 404
+
+    depois = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert depois["sale_concluded_at"] is None and depois["closed_at"] is None
+    assert depois["funnel_status"] == funil_antes
+
+    # cards de produção seguem existindo, só desvinculados da venda
+    projs = client.get("/api/projects", headers=h).get_json()
+    assert not [p for p in projs if p.get("sale_id") == sid]
+    assert [p for p in projs if p.get("client_id") == cid]
+    # financeiro gerado na criação é preservado (auditoria)
+    fins = client.get("/api/financial", headers=h).get_json()
+    assert [f for f in fins if f["client_id"] == cid]
+
+    crm = client.get("/api/reports/crm", headers=h).get_json()
+    assert crm["fechamentos_periodo"]["qtd"] == 0
+    assert crm["conversao"]["total_fechamentos"] == 0

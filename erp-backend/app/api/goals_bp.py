@@ -3,10 +3,9 @@
 Separado de budget_bp, que trata orcamento de DESPESA por categoria.
 Aqui e meta de RECEITA (geral, por vendedor ou por parceiro).
 
-Realizado = soma do valor estimado dos clientes que entraram na ultima etapa do
-funil dentro do periodo (clients.closed_at). closed_at passou a ser gravado no
-update_client; clientes fechados ANTES disso ficam sem data e nao entram em
-nenhum periodo — o campo `undated` do resumo diz quantos sao, para o numero ser
+Realizado = soma das vendas geradas (Sale.total_value) no periodo DA VENDA
+(Sale.sale_date). Concluido pelo botao sem Sale conta por clients.closed_at.
+Fechados sem data e sem Sale ficam em `undated`, para o numero ser
 auditavel em vez de silenciosamente parcial.
 """
 from datetime import date, datetime
@@ -16,7 +15,7 @@ from flask import Blueprint, jsonify, request
 from app.helpers import body_json, iso
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import Client, Funnel, FunnelColumn, SalesGoal, is_won_status, utcnow
+from app.models.models import Client, Funnel, FunnelColumn, Sale, SalesGoal, is_won_status, utcnow
 
 bp = Blueprint("goals", __name__)
 
@@ -169,7 +168,8 @@ def summary():
     """Meta x realizado do periodo.
 
     target: metas do mes quando existirem; senao a meta do ano (month NULL).
-    achieved: valor estimado dos clientes fechados dentro do periodo.
+    achieved: vendas geradas (Sale.total_value) no periodo DA VENDA
+    (Sale.sale_date); concluido pelo botao sem Sale conta por closed_at.
     """
     today = date.today()
     try:
@@ -222,12 +222,30 @@ def summary():
         start = datetime(year, 1, 1)
         end = datetime(year + 1, 1, 1)
 
-    closed = db.session.query(Client).filter(
+    # ── Realizado pela data DA VENDA (fonte unica: Sale.sale_date) ──
+    # Venda gerada conta no periodo da sale_date, nao no da conclusao:
+    # corrige o bug real (3 vendas de agosto concluidas em outubro somavam
+    # na meta de outubro). Concluido pelo botao SEM Sale conta por
+    # closed_at (sem duplicar: cliente com Sale nao entra aqui).
+    start_d, end_d = start.date(), end.date()
+    com_sale = set()
+    achieved = 0.0
+    deals = set()
+    for s in db.session.query(Sale).all():
+        if s.sale_date and start_d <= s.sale_date < end_d:
+            achieved += float(s.total_value or 0)
+            com_sale.add(s.client_id)
+            deals.add(s.client_id)
+    for c in db.session.query(Client).filter(
         Client.closed_at.isnot(None),
         Client.closed_at >= start,
         Client.closed_at < end,
-    ).all()
-    achieved = sum(float(c.estimated_value or 0) for c in closed)
+    ).all():
+        if c.id in com_sale:
+            continue  # ja contado pela Sale (evita duplicar)
+        achieved += float(c.estimated_value or 0)
+        deals.add(c.id)
+    deals_closed = len(deals)
 
     # Clientes em etapa de VENDA GANHA sem data: fechados antes de closed_at
     # existir, ou em funil com nome proprio. Contados a parte para o resumo
@@ -258,9 +276,9 @@ def summary():
         "achieved": _fmt_brl(achieved),
         "remaining": _fmt_brl(remaining),
         "percent": _fmt_pct(percent),
-        "deals_closed": len(closed),
+        "deals_closed": deals_closed,
         "undated": undated,
         "target_basis": target_basis,
-        "basis": "valor estimado dos clientes fechados no periodo",
+        "basis": "vendas geradas no periodo (Sale.sale_date); concluido sem Sale por closed_at",
         "generated_at": iso(utcnow()),
     }

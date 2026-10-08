@@ -563,6 +563,17 @@ export interface FechamentoItem {
   origem: 'sale' | 'crm';
 }
 
+/** Fechado no CRM sem Sale gerada — /api/reports/crm `vendas_pendentes_geracao`. */
+export interface VendaPendenteGeracao {
+  client_id: string;
+  name: string;
+  data?: string | null;
+  valor?: number;
+  closed_at?: string | null;
+  negotiation_value?: number | null;
+  estimated_value?: number | null;
+}
+
 export interface CrmReport {
   conversao: { taxa: number; total_clientes: number; total_fechamentos: number; undated?: number };
   fluxo_caixa: { mes: string; receitas: number; despesas: number; resultado: number }[];
@@ -595,6 +606,8 @@ export interface CrmReport {
   };
   orcamentos?: { qtd: number; valor: number; aceitas: number };
   vendas_por_origem?: { origem: string; qtd: number; valor: number; share: number }[];
+  /** Fechados sem venda gerada (ex: Manúcia Piaia) — com ação "Gerar venda". */
+  vendas_pendentes_geracao?: VendaPendenteGeracao[];
 }
 
 // ── Painel inicial: meta comercial e pendencias ──────────────────
@@ -918,6 +931,20 @@ export interface SaleInstallment {
   value: number;
   status?: string;
   financial_record_id?: string | null;
+}
+
+/** Linha de GET /api/sales (resumo — o financeiro/parcelas vem do detalhe). */
+export interface SaleListRow {
+  id: string;
+  code: string;
+  client_id: string;
+  client_name: string | null;
+  sale_date: string;
+  total_value: number;
+  seller_name: string | null;
+  partner_name: string | null;
+  concluded_at: string | null;
+  delivery_date: string | null;
 }
 
 export interface Sale {

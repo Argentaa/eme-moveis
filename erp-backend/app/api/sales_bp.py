@@ -8,6 +8,11 @@ POST /api/sales  — cria a venda (concluida de uma vez) e dispara:
 
 GET  /api/sales      — lista (client_name/seller_name/partner_name/bank).
 GET  /api/sales/<id> — detalhe com ambientes, itens e parcelas.
+PUT  /api/sales/<id> — edita sale_date/total_value/down_payment/
+  installments(+installment_value); NÃO recalcula o financeiro e os cards
+  de produção já gerados (trilha de auditoria).
+DELETE /api/sales/<id> — apaga a Sale e limpa sale_concluded_at/closed_at
+  do cliente quando ele fica sem nenhuma Sale; NÃO mexe em funnel_status.
 
 Contrato financeiro: entrada + N x valor_parcela == valor_total (tolerancia
 de centavos). Items (produtos vendidos) sao detalhamento informativo — a soma
@@ -292,3 +297,119 @@ def create_sale():
 
     db.session.commit()
     return jsonify(_sale_detail(sale)), 201
+
+
+@bp.put("/api/sales/<sale_id>")
+@token_required(roles=WRITE_ROLES)
+def update_sale(sale_id):
+    """Corrige a Sale (ex.: sale_date com competência errada).
+
+    Campos editáveis: sale_date, total_value, down_payment, installments
+    (+installment_value, necessário p/ validar o contrato financeiro).
+    Validações básicas: sale_date válida, total > 0, entrada >= 0,
+    0 <= parcelas <= 60, parcela >= 0 e entrada + N x parcela == total.
+    NÃO recalcula FinancialRecords nem Projects já gerados na criação
+    (trilha de auditoria do financeiro/produção) e NÃO toca no cliente.
+    """
+    sale = db.session.get(Sale, sale_id)
+    if not sale:
+        return jsonify({"detail": "Venda nao encontrada"}), 404
+    data = body_json()
+
+    if "sale_date" in data:
+        try:
+            sale_date = parse_date(data.get("sale_date"))
+        except (ValueError, TypeError):
+            return jsonify({"detail": "sale_date invalida (formato AAAA-MM-DD)"}), 400
+        if sale_date is None:
+            return jsonify({"detail": "sale_date invalida (formato AAAA-MM-DD)"}), 400
+        sale.sale_date = sale_date
+
+    total = float(sale.total_value or 0)
+    down = float(sale.down_payment or 0)
+    inst = sale.installments or 0
+    iv = float(sale.installment_value or 0)
+    mexeu_financeiro = False
+    if "total_value" in data:
+        try:
+            total = float(data.get("total_value") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"detail": "total_value invalido"}), 400
+        if total <= 0:
+            return jsonify({"detail": "total_value deve ser maior que zero"}), 400
+        mexeu_financeiro = True
+    if "down_payment" in data:
+        try:
+            down = float(data.get("down_payment") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"detail": "down_payment invalido"}), 400
+        if down < 0:
+            return jsonify({"detail": "down_payment nao pode ser negativo"}), 400
+        mexeu_financeiro = True
+    if "installments" in data:
+        try:
+            inst = int(data.get("installments") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"detail": "installments invalido"}), 400
+        if inst < 0 or inst > 60:
+            return jsonify({"detail": "installments deve estar entre 0 e 60"}), 400
+        mexeu_financeiro = True
+    if "installment_value" in data:
+        try:
+            iv = float(data.get("installment_value") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"detail": "installment_value invalido"}), 400
+        if iv < 0:
+            return jsonify({"detail": "installment_value nao pode ser negativo"}), 400
+        mexeu_financeiro = True
+
+    if mexeu_financeiro:
+        if round(down + inst * iv, 2) != round(total, 2):
+            return jsonify({"detail": "Entrada + parcelas deve totalizar o valor da venda (R$ %.2f)" % total}), 400
+        if inst == 0 and round(down, 2) != round(total, 2):
+            return jsonify({"detail": "Venda a vista: entrada deve ser o valor total (R$ %.2f)" % total}), 400
+        sale.total_value = total
+        sale.down_payment = down
+        sale.installments = inst
+        sale.installment_value = iv
+
+    db.session.commit()
+    return jsonify(_sale_detail(sale))
+
+
+@bp.delete("/api/sales/<sale_id>")
+@token_required(roles=WRITE_ROLES)
+def delete_sale(sale_id):
+    """Apaga a Sale (ambientes, itens e parcelas apagam junto por cascata).
+
+    Se o cliente ficar sem nenhuma Sale, limpa sale_concluded_at e
+    closed_at dele (volta a aparecer em `vendas_pendentes_geracao` se
+    estiver fechado). NÃO mexe em funnel_status: o card permanece onde
+    está no funil — a exclusão desfaz a venda gerada, não a negociação.
+    Projects com sale_id são só desvinculados (sale_id NULL) e os
+    FinancialRecords gerados na criação são preservados (auditoria).
+    """
+    sale = db.session.get(Sale, sale_id)
+    if not sale:
+        return jsonify({"detail": "Venda nao encontrada"}), 404
+    client = db.session.get(Client, sale.client_id) if sale.client_id else None
+
+    for p in list(sale.projects):
+        p.sale_id = None
+    db.session.delete(sale)
+    db.session.flush()
+
+    if client is not None:
+        restante = db.session.query(Sale).filter_by(client_id=client.id).count()
+        if restante == 0:
+            client.sale_concluded_at = None
+            client.closed_at = None
+
+    if client is not None:
+        _log_interaction(
+            client.id, "SISTEMA",
+            f"Venda {sale.code} excluída — cliente sem Sale tem datas de "
+            "conclusão limpas (funnel_status preservado).",
+        )
+    db.session.commit()
+    return jsonify({"ok": True})
