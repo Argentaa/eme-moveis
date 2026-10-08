@@ -127,6 +127,20 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
   const sortColumns = (cols: FunnelColumn[]) => [...cols].sort((a, b) => a.position - b.position || a.label.localeCompare(b.label));
 
+  // Coluna de ganho (onde o "Registrar venda" aparece): NUNCA por posição —
+  // o funil CRM padrão termina em PERDIDO, então "última coluna" era a de
+  // perda (bug real). Espelha o is_won_status do backend: chave/rótulo com
+  // token de ganho e sem token de perda. Inclui CONTRATO (o dono renomeou
+  // FECHAMENTO para "Fechamento/Contrato").
+  const isWonColumn = (col: FunnelColumn | undefined | null) => {
+    if (!col) return false;
+    const key = String((col as any).column_key || '').toUpperCase();
+    const label = String((col as any).label || '').toUpperCase();
+    if (/(PERDIDO|PERDA|CANCELAD|DESIST)/.test(key) || /(PERDIDO|PERDA|CANCELAD|DESIST)/.test(label)) return false;
+    const WON = ['FECHAMENTO', 'FECHADO', 'GANHO', 'VENDID', 'CLIENTE', 'CONCLUID', 'CONTRATO'];
+    return WON.some((t) => key.includes(t) || label.includes(t));
+  };
+
   const loadClients = async () => {
     setLoading(true);
     try {
@@ -947,13 +961,13 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                                 <BadgeDollarSign className="w-3.5 h-3.5" />
                               </button>
                             )}
-                            {/* Registrar venda direta: SÓ na última coluna do funil
-                                (FECHAMENTO ou o nome que o dono deu). Venda já
-                                entregue: cria a Sale sem financeiro e sem
-                                produção — só entra em Vendas/relatórios. */}
+                            {/* Registrar venda direta: SÓ na coluna de ganho
+                                (FECHAMENTO/Contrato ou o nome que o dono der).
+                                NUNCA por posição: o funil padrão termina em
+                                PERDIDO. Venda já entregue: cria a Sale sem
+                                financeiro e sem produção. */}
                             {client.funnel_status !== 'PERDIDO' && ['ADMIN', 'GERENTE'].includes(userRole)
-                              && funnelColumns.length > 0
-                              && client.funnel_status === funnelColumns[funnelColumns.length - 1].column_key && (
+                              && isWonColumn(funnelColumns.find((fc) => fc.column_key === client.funnel_status)) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
