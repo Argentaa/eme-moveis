@@ -4334,6 +4334,37 @@ def test_concluir_venda_idempotente_nao_reescreve_closed_at(client):
     assert depois == primeiro, "segunda conclusao nao reescreve closed_at"
 
 
+def test_register_direct_sale_sem_financeiro_nem_producao(client):
+    """Botao Registrar venda do FECHAMENTO: cria Sale sem financeiro/producao."""
+    from app.models.models import FinancialRecord, Project, Sale
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h,
+                      json={"name": "Fechado Entregue", "estimated_value": 8000,
+                            "funnel_status": "FECHAMENTO"}).get_json()["id"]
+    r = client.post(f"/api/clients/{cid}/register-direct-sale", headers=h, json={})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["total_value"] == 8000, body
+    assert body["client_id"] == cid
+    with client.application.app_context():
+        from app.extensions import db
+        assert db.session.query(Sale).filter_by(client_id=cid).count() == 1
+        assert db.session.query(Project).filter_by(client_id=cid).count() == 0
+        assert db.session.query(FinancialRecord).filter_by(client_id=cid).count() == 0
+    cli = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert cli["sale_concluded_at"] and cli["closed_at"]
+    # card sai do funil pela flag, igual ao conclude-sale
+    crm = client.get("/api/reports/crm", headers=h).get_json()
+    assert crm["fechamentos_periodo"]["qtd"] >= 1
+    # sem valor no card e sem valor no body -> 400 honesto
+    cid2 = client.post("/api/clients", headers=h,
+                       json={"name": "Fechado Sem Valor"}).get_json()["id"]
+    r2 = client.post(f"/api/clients/{cid2}/register-direct-sale", headers=h, json={})
+    assert r2.status_code == 400, r2.get_data(as_text=True)
+    assert client.post("/api/clients/nao-existe/register-direct-sale",
+                       headers=h, json={}).status_code == 404
+
+
 def test_satisfaction_envia_e_responde(client):
     """POST /api/satisfaction cria com sent_at; resposta marca answered_at."""
     h = _login(client)

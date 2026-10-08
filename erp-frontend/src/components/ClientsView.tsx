@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Plus, Search, Edit2, Trash2, Mail, Phone, MapPin,
   ArrowLeft, Send, RefreshCw,
-  Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, BadgeDollarSign, Eye, Funnel as FunnelIcon, X
+  Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, BadgeDollarSign, Eye, Funnel as FunnelIcon, X, ReceiptText
 } from 'lucide-react';
 import { FunnelStatus } from '../types';
 import { clientService, projectService, funnelService, calendarService, leadOptionService, partnerService, supplierService, getApiErrorMessage } from '../services/api';
@@ -54,6 +54,12 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [editingFunnelDesc, setEditingFunnelDesc] = useState('');
   const [saleClient, setSaleClient] = useState<Client | null>(null);
   const [saleDefaultValue, setSaleDefaultValue] = useState(0);
+  // Registrar venda direta (FECHAMENTO já entregue): só Sale, sem financeiro/produção.
+  const [directClient, setDirectClient] = useState<Client | null>(null);
+  const [directValue, setDirectValue] = useState('');
+  const [directDate, setDirectDate] = useState(new Date().toISOString().substring(0, 10));
+  const [directError, setDirectError] = useState('');
+  const [directSaving, setDirectSaving] = useState(false);
   const [lostModalClient, setLostModalClient] = useState<Client | null>(null);
   const [lostReason, setLostReason] = useState('');
   const [lostError, setLostError] = useState('');
@@ -941,6 +947,28 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                                 <BadgeDollarSign className="w-3.5 h-3.5" />
                               </button>
                             )}
+                            {/* Registrar venda direta: SÓ na última coluna do funil
+                                (FECHAMENTO ou o nome que o dono deu). Venda já
+                                entregue: cria a Sale sem financeiro e sem
+                                produção — só entra em Vendas/relatórios. */}
+                            {client.funnel_status !== 'PERDIDO' && ['ADMIN', 'GERENTE'].includes(userRole)
+                              && funnelColumns.length > 0
+                              && client.funnel_status === funnelColumns[funnelColumns.length - 1].column_key && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const dv = clientDisplayValue(client, projects).value;
+                                  setDirectClient(client);
+                                  setDirectValue(dv > 0 ? String(dv) : '');
+                                  setDirectDate(new Date().toISOString().substring(0, 10));
+                                  setDirectError('');
+                                }}
+                                className="p-1 text-zinc-500 hover:text-sky-400 cursor-pointer"
+                                title="Registrar venda — venda já entregue: só entra em Vendas/relatórios, sem financeiro e sem Produção"
+                              >
+                                <ReceiptText className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             {['ADMIN', 'GERENTE'].includes(userRole) && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleDelete(client.id, client.name); }}
@@ -1717,6 +1745,67 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
             loadClients();
           }}
         />
+      )}
+
+      {/* Modal Registrar venda direta — FECHAMENTO já entregue (sem financeiro/produção) */}
+      {directClient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setDirectClient(null)}>
+          <div className="glass-panel w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-1">
+              <ReceiptText size={17} className="text-sky-400" />
+              <h3 className="font-semibold">Registrar venda</h3>
+            </div>
+            <p className="text-[11px] text-zinc-500 font-mono mb-4">
+              {directClient.name} · só entra em Vendas/relatórios — sem financeiro e sem Produção.
+            </p>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (directSaving) return;
+                setDirectSaving(true);
+                setDirectError('');
+                try {
+                  await clientService.registerDirectSale(directClient.id, {
+                    total_value: Number(directValue),
+                    sale_date: directDate || undefined,
+                  });
+                  setDirectClient(null);
+                  await loadClients();
+                } catch (err) {
+                  setDirectError(getApiErrorMessage(err, 'Não foi possível registrar a venda.'));
+                } finally {
+                  setDirectSaving(false);
+                }
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <label className="text-xs text-zinc-400">Valor da venda (R$) *</label>
+                <input type="number" min={0} step="0.01" required
+                  value={directValue} onChange={(e) => setDirectValue(e.target.value)}
+                  placeholder="Ex: 8000.00"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm mt-1 font-mono" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Data da venda</label>
+                <input type="date" value={directDate} onChange={(e) => setDirectDate(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm mt-1" />
+              </div>
+              {directError && <p className="text-xs text-red-400">{directError}</p>}
+              <div className="flex justify-end gap-2 pt-1">
+                <button type="button" onClick={() => setDirectClient(null)}
+                  className="px-4 py-2 text-xs bg-zinc-900 text-zinc-300 hover:text-white rounded border border-zinc-800 cursor-pointer font-mono">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={directSaving}
+                  className="px-5 py-2 text-sm bg-sky-700 hover:bg-sky-600 text-white rounded font-semibold disabled:opacity-50 cursor-pointer">
+                  {directSaving ? 'Registrando…' : 'Registrar venda'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
     </div>

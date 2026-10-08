@@ -1993,6 +1993,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Registrar venda do FECHAMENTO sem produção",
+     "Nos cards da última coluna do funil entrou o botão Registrar venda (ícone de recibo, azul): para venda já produzida e entregue, ele cria a venda direto em Vendas/relatórios — sem gerar financeiro e sem criar card na Produção. O valor vem preenchido do card e a data vem como hoje; o card sai do funil igual ao Gerar venda.",
+     "NOVIDADE", "2026-10-06"),
     ("WhatsApp: excluir conversa, renomear e vincular cliente",
      "Na conversa agora tem lápis (editar nome e vínculo com cliente) e lixeira (apagar a conversa com as mensagens) — só ADMIN/GERENTE. Apagar limpa só o ERP: no celular continua tudo. O nome que você colocar não é sobrescrito pelas mensagens que chegam.",
      "NOVIDADE", "2026-10-06"),

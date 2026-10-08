@@ -135,6 +135,16 @@ export const clientService = {
     return response.data;
   },
 
+  // Botao "Registrar venda" do FECHAMENTO: venda ja produzida/entregue —
+  // cria a Sale SEM financeiro e SEM producao (só entra em Vendas/relatórios).
+  async registerDirectSale(
+    id: string,
+    data: { sale_date?: string; total_value?: number } = {}
+  ): Promise<Sale> {
+    const response = await api.post(`/api/clients/${id}/register-direct-sale`, data);
+    return response.data;
+  },
+
   async getDetail(id: string): Promise<ClientDetail> {
     const response = await api.get(`/api/clients/${id}/detail`);
     return response.data;

@@ -562,6 +562,64 @@ def conclude_sale(client_id):
     return jsonify(project.to_dict()), 201
 
 
+@bp.post("/api/clients/<client_id>/register-direct-sale")
+@token_required(roles=["ADMIN", "GERENTE"])
+def register_direct_sale(client_id):
+    """Botao "Registrar venda" do FECHAMENTO: venda já produzida/entregue.
+
+    Cria a `Sale` (entra em Vendas, metas, comissao e CRM via closed_at) SEM
+    financeiro e SEM projeto na Producao — pedido do dono (2026-10-06). O card
+    sai do funil pela mesma flag do conclude-sale (`sale_concluded_at`).
+    body {sale_date?, total_value?}: default hoje + negotiation/estimated.
+    """
+    from app.models.models import Sale
+
+    client = db.session.get(Client, client_id)
+    if not client:
+        return jsonify({"detail": "Cliente nao encontrado"}), 404
+    data = body_json() or {}
+    sale_date = parse_date(data.get("sale_date")) or date.today()
+    raw_value = data.get("total_value")
+    if raw_value in (None, ""):
+        raw_value = num(client.negotiation_value) or num(client.estimated_value) or 0
+    try:
+        total_value = float(raw_value)
+    except (TypeError, ValueError):
+        return jsonify({"detail": "total_value invalido"}), 400
+    if total_value <= 0:
+        return jsonify({"detail": "Informe o valor da venda (card sem valor)"}), 400
+
+    if client.sale_concluded_at is None:
+        client.sale_concluded_at = utcnow()
+    if client.closed_at is None:
+        client.closed_at = client.sale_concluded_at
+
+    n = db.session.query(Sale).count()
+    sale = Sale(
+        code="V-%04d" % (n + 1),
+        client_id=client.id,
+        seller_id=client.seller_id,
+        partner_id=client.partner_id,
+        lead_source=(client.lead_source or ""),
+        sale_date=sale_date,
+        total_value=total_value,
+        down_payment=0,
+        installments=0,
+        installment_value=0,
+        address=(client.address or ""),
+        created_by=getattr(g, "current_user", None).username if getattr(g, "current_user", None) else "",
+    )
+    db.session.add(sale)
+    db.session.flush()
+    _log_interaction(
+        client.id, "SISTEMA",
+        f"Venda {sale.code} registrada sem producao (R$ {total_value:,.2f}) — "
+        "card do FECHAMENTO passado direto para Vendas, sem financeiro.",
+    )
+    db.session.commit()
+    return jsonify(sale.to_dict()), 201
+
+
 @bp.delete("/api/clients/<client_id>")
 @token_required()
 def delete_client(client_id):
