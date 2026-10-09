@@ -606,8 +606,10 @@ export interface CrmReport {
   };
   orcamentos?: { qtd: number; valor: number; aceitas: number };
   vendas_por_origem?: { origem: string; qtd: number; valor: number; share: number }[];
-  /** Fechados sem venda gerada (ex: Manúcia Piaia) — com ação "Gerar venda". */
-  vendas_pendentes_geracao?: VendaPendenteGeracao[];
+  /** Fechados sem venda gerada (ex: Manúcia Piaia) — com ação "Gerar venda".
+   * Backend devolve OBJETO {qtd, itens}; o tipo aceita as duas formas por
+   * compatibilidade (o painel normaliza com Array.isArray antes do .map). */
+  vendas_pendentes_geracao?: VendaPendenteGeracao[] | { qtd: number; itens: VendaPendenteGeracao[] };
 }
 
 // ── Painel inicial: meta comercial e pendencias ──────────────────

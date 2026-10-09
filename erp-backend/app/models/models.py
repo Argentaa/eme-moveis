@@ -1993,6 +1993,9 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("Vendas realizadas abria tela preta",
+     "Correção: ao entrar na aba Vendas realizadas do Comercial, a tela ficava toda preta com erro 'm.map is not a function'. O painel esperava uma lista de pendências, mas o relatório manda um objeto com a lista dentro — agora ele lê a lista de dentro do objeto e a aba abre normal.",
+     "CORRECAO", "2026-10-09"),
     ("Registrar venda do FECHAMENTO sem produção",
      "Nos cards da última coluna do funil entrou o botão Registrar venda (ícone de recibo, azul): para venda já produzida e entregue, ele cria a venda direto em Vendas/relatórios — sem gerar financeiro e sem criar card na Produção. O valor vem preenchido do card e a data vem como hoje; o card sai do funil igual ao Gerar venda.",
      "NOVIDADE", "2026-10-06"),

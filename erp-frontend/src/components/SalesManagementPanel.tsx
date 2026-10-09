@@ -286,7 +286,8 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
     setLoadingSales(true);
     setSalesError('');
     try {
-      setSales(await saleService.list());
+      const rows = await saleService.list();
+      setSales(Array.isArray(rows) ? rows : []);
     } catch (err) {
       setSalesError(getApiErrorMessage(err, 'Erro ao carregar as vendas.'));
     } finally {
@@ -299,7 +300,10 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
     setPendError('');
     try {
       const rel = await dashboardService.crmReport({});
-      setPendentes(rel.vendas_pendentes_geracao || []);
+      // Backend devolve OBJETO {qtd, itens} — normaliza p/ array antes do .map
+      // (objeto direto aqui derrubava a aba com "m.map is not a function").
+      const pend = (rel as any)?.vendas_pendentes_geracao;
+      setPendentes(Array.isArray(pend) ? pend : (pend?.itens || []));
     } catch (err) {
       setPendError(getApiErrorMessage(err, 'Erro ao carregar pendências de geração.'));
     } finally {
