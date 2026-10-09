@@ -5,11 +5,13 @@
  *   parcelas → PUT /api/sales/<id>) e Excluir (confirmação →
  *   DELETE /api/sales/<id>); a lista recarrega após cada ação.
  * - Lista `vendas_pendentes_geracao` do /api/reports/crm (fechados sem Sale
- *   gerada) com ação "Gerar venda" pelo fluxo existente (GenerateSaleModal).
+ *   gerada) com ação "Gerar venda" pelo fluxo existente (GenerateSaleModal)
+ *   e ação "Perdida" (POST /api/clients/<id>/mark-lost com motivo
+ *   obrigatório; o erro 400 do backend é exibido no modal).
  */
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
-  BadgeDollarSign, Pencil, Trash2, X, Loader2, RefreshCw,
+  BadgeDollarSign, Pencil, Trash2, X, XCircle, Loader2, RefreshCw,
   AlertTriangle, ReceiptText, UserPlus,
 } from 'lucide-react';
 import {
@@ -280,6 +282,11 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
   const [genValue, setGenValue] = useState(0);
   const [genLoadingId, setGenLoadingId] = useState<string | null>(null);
 
+  const [lostItem, setLostItem] = useState<VendaPendenteGeracao | null>(null);
+  const [lostReason, setLostReason] = useState('');
+  const [lostError, setLostError] = useState('');
+  const [lostSaving, setLostSaving] = useState(false);
+
   const [msg, setMsg] = useState('');
 
   const loadSales = useCallback(async () => {
@@ -335,6 +342,39 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
       setMsg(getApiErrorMessage(err, 'Erro ao abrir o cliente para gerar a venda.'));
     } finally {
       setGenLoadingId(null);
+    }
+  };
+
+  const openLost = (item: VendaPendenteGeracao) => {
+    setLostItem(item);
+    setLostReason('');
+    setLostError('');
+    setMsg('');
+  };
+
+  const closeLost = () => {
+    setLostItem(null);
+    setLostReason('');
+    setLostError('');
+  };
+
+  const confirmLost = async () => {
+    if (!lostItem) return;
+    const reason = lostReason.trim();
+    if (!reason) { setLostError('Informe o motivo da perda.'); return; }
+    if (lostSaving) return;
+    setLostSaving(true);
+    setLostError('');
+    try {
+      await saleService.markLost(lostItem.client_id, reason);
+      closeLost();
+      setMsg('Venda marcada como perdida.');
+      loadSales();
+      loadPendentes();
+    } catch (err) {
+      setLostError(getApiErrorMessage(err, 'Erro ao marcar a venda como perdida.'));
+    } finally {
+      setLostSaving(false);
     }
   };
 
@@ -454,13 +494,22 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
                   </p>
                 </div>
                 {canWrite && (
-                  <button onClick={() => openGenerate(p)} disabled={genLoadingId === p.client_id}
-                    className="shrink-0 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-medium transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5">
-                    {genLoadingId === p.client_id
-                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      : <BadgeDollarSign className="w-3.5 h-3.5" />}
-                    Gerar venda
-                  </button>
+                  <div className="shrink-0 flex items-center gap-2">
+                    <button onClick={() => openGenerate(p)} disabled={genLoadingId === p.client_id}
+                      title="Gerar venda — cadastra a venda, cria contas a receber e a Produção"
+                      className="shrink-0 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-medium transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5">
+                      {genLoadingId === p.client_id
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <BadgeDollarSign className="w-3.5 h-3.5" />}
+                      Gerar venda
+                    </button>
+                    <button onClick={() => openLost(p)}
+                      title="Marcar como perdida — sai das pendências e da meta"
+                      className="shrink-0 px-3 py-1.5 bg-zinc-900 hover:bg-red-950 text-red-400 rounded text-xs font-medium transition cursor-pointer border border-red-900/60 flex items-center gap-1.5">
+                      <XCircle className="w-3.5 h-3.5" />
+                      Perdida
+                    </button>
+                  </div>
                 )}
               </li>
             ))}
@@ -498,6 +547,50 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
             loadSales(); loadPendentes();
           }}
         />
+      )}
+
+      {/* Modal Perdida — motivo obrigatório → POST mark-lost */}
+      {lostItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={closeLost}>
+          <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-zinc-950 p-5 border-b border-zinc-800 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <XCircle className="w-5 h-5 text-red-500" />
+                <h3 className="text-base font-serif font-semibold text-white">Marcar como perdida</h3>
+              </div>
+              <button onClick={closeLost} className="text-zinc-500 hover:text-white cursor-pointer font-mono text-xs">Sair</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-zinc-400">
+                Marcar o fechamento de <strong className="text-white">{lostItem.name}</strong> como
+                venda perdida? Ele sai das pendências e da meta.
+              </p>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase tracking-wider block">Motivo da perda *</label>
+                <textarea
+                  value={lostReason}
+                  onChange={e => setLostReason(e.target.value)}
+                  placeholder="Ex: Preço acima do esperado, optou por outro fornecedor..."
+                  rows={3}
+                  autoFocus
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600 resize-none"
+                />
+              </div>
+              {lostError && <p className="text-xs text-red-400 font-mono">{lostError}</p>}
+              <div className="flex justify-end gap-3 pt-2">
+                <button onClick={closeLost}
+                  className="px-4 py-2 text-xs bg-zinc-900 text-zinc-400 rounded border border-zinc-800 cursor-pointer font-mono">
+                  Cancelar
+                </button>
+                <button onClick={confirmLost} disabled={lostSaving || !lostReason.trim()}
+                  className="px-5 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded font-semibold cursor-pointer disabled:opacity-50 flex items-center gap-2">
+                  {lostSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Confirmar perda
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

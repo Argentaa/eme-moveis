@@ -1010,6 +1010,16 @@ export const saleService = {
     const response = await api.delete(`/api/sales/${id}`);
     return response.data;
   },
+  /**
+   * Marca o fechado-sem-venda como PERDIDO com motivo
+   * (POST /api/clients/<id>/mark-lost, body { lost_reason }).
+   * O backend devolve 400 com `detail` se já houver Sale gerada ou
+   * produção iniciada — a tela exibe esse texto via getApiErrorMessage.
+   */
+  async markLost(clientId: string, lostReason: string): Promise<Client> {
+    const response = await api.post(`/api/clients/${clientId}/mark-lost`, { lost_reason: lostReason });
+    return response.data;
+  },
 };
 
 // Recurring Financial Services

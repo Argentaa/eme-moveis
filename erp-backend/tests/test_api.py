@@ -5890,3 +5890,117 @@ def test_sale_delete_limpa_datas_mantem_funil(client):
     crm = client.get("/api/reports/crm", headers=h).get_json()
     assert crm["fechamentos_periodo"]["qtd"] == 0
     assert crm["conversao"]["total_fechamentos"] == 0
+
+
+def _mk_fechado_sem_sale(client, h, name="Fechado Sem Venda", valor=7000):
+    r = client.post("/api/clients", headers=h,
+                    json={"name": name, "cpf_cnpj": name, "estimated_value": valor})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    cid = r.get_json()["id"]
+    conc = client.post(f"/api/clients/{cid}/conclude-sale", headers=h,
+                       json={"title": f"Projeto - {name}", "value": valor})
+    assert conc.status_code == 201, conc.get_data(as_text=True)
+    return cid, conc.get_json()["id"]
+
+
+def test_mark_lost_sem_sale_sai_da_meta_e_dos_pendentes(client):
+    h = _login(client)
+    cur_year = date.today().year
+    cid, proj_id = _mk_fechado_sem_sale(client, h, "ML Sem Sale")
+
+    cli = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert cli["closed_at"] and cli["sale_concluded_at"]
+
+    crm = client.get("/api/reports/crm", headers=h).get_json()
+    assert any(i["client_id"] == cid for i in crm["vendas_pendentes_geracao"]["itens"])
+
+    client.post("/api/goals", headers=h,
+                json={"year": cur_year, "scope": "GERAL", "target_value": 100000})
+    antes = client.get("/api/goals/summary", headers=h,
+                       query_string={"year": cur_year}).get_json()
+    assert antes["achieved"] == "R$ 7.000,00", antes["achieved"]
+
+    r = client.post(f"/api/clients/{cid}/mark-lost", headers=h,
+                    json={"lost_reason": "Desistiu do projeto"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["funnel_status"] == "PERDIDO"
+    assert body["lost_reason"] == "Desistiu do projeto"
+    assert body["closed_at"] is None and body["sale_concluded_at"] is None
+
+    # projeto ainda nao iniciado foi deletado junto
+    assert client.get(f"/api/projects/{proj_id}", headers=h).status_code == 404
+
+    crm2 = client.get("/api/reports/crm", headers=h).get_json()
+    assert not any(i["client_id"] == cid for i in crm2["vendas_pendentes_geracao"]["itens"])
+
+    depois = client.get("/api/goals/summary", headers=h,
+                        query_string={"year": cur_year}).get_json()
+    assert depois["achieved"] == "R$ 0,00", depois["achieved"]
+    assert depois["deals_closed"] == 0
+
+
+def test_mark_lost_404_e_com_sale_400(client):
+    h = _login(client)
+    assert client.post("/api/clients/nao-existe/mark-lost", headers=h,
+                       json={"lost_reason": "x"}).status_code == 404
+
+    cid = _mk_sale_client(client, h, "ML Com Sale")
+    r = client.post("/api/sales", headers=h, json=_sale_payload(client, h, cid))
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    r = client.post(f"/api/clients/{cid}/mark-lost", headers=h,
+                    json={"lost_reason": "tentei"})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert "Excluir venda" in r.get_json()["detail"]
+
+    # nada mudou: continua fechado, com datas e com a Sale
+    cli = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert cli["closed_at"] and cli["sale_concluded_at"]
+    assert cli["funnel_status"] != "PERDIDO"
+
+
+def test_arrastar_para_perdido_limpa_datas(client):
+    h = _login(client)
+    cid, _proj = _mk_fechado_sem_sale(client, h, "ML Arrastar")
+
+    up = client.put(f"/api/clients/{cid}", headers=h,
+                    json={"funnel_status": "PERDIDO", "lost_reason": "Preco alto"})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    body = up.get_json()
+    assert body["funnel_status"] == "PERDIDO"
+    assert body["closed_at"] is None and body["sale_concluded_at"] is None
+
+    crm = client.get("/api/reports/crm", headers=h).get_json()
+    assert not any(i["client_id"] == cid for i in crm["vendas_pendentes_geracao"]["itens"])
+
+
+def test_mark_lost_projeto_inicial_deleta_e_iniciado_bloqueia(client):
+    h = _login(client)
+    # projeto ainda na coluna inicial e sem start_date: deleta junto
+    cid1, proj1 = _mk_fechado_sem_sale(client, h, "ML Proj Inicial")
+    assert client.post(f"/api/clients/{cid1}/mark-lost", headers=h,
+                       json={"lost_reason": "sumiu"}).status_code == 200
+    assert client.get(f"/api/projects/{proj1}", headers=h).status_code == 404
+
+    # projeto com start_date (iniciado): bloqueia, nada muda
+    cid2, proj2 = _mk_fechado_sem_sale(client, h, "ML Proj Iniciado")
+    up = client.put(f"/api/projects/{proj2}", headers=h,
+                    json={"start_date": date.today().isoformat()})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    r = client.post(f"/api/clients/{cid2}/mark-lost", headers=h,
+                    json={"lost_reason": "tentei"})
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert "producao" in r.get_json()["detail"].lower()
+    cli = client.get(f"/api/clients/{cid2}", headers=h).get_json()
+    assert cli["funnel_status"] != "PERDIDO"
+    assert cli["closed_at"] and cli["sale_concluded_at"]
+    assert client.get(f"/api/projects/{proj2}", headers=h).status_code == 200
+
+    # projeto movido para frente no funil (mesmo sem start_date): tambem bloqueia
+    cid3, proj3 = _mk_fechado_sem_sale(client, h, "ML Proj Movido")
+    up = client.put(f"/api/projects/{proj3}", headers=h, json={"status": "PRODUCAO"})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    r = client.post(f"/api/clients/{cid3}/mark-lost", headers=h,
+                    json={"lost_reason": "tentei"})
+    assert r.status_code == 400, r.get_data(as_text=True)

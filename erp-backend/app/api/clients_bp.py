@@ -467,6 +467,16 @@ def update_client(client_id):
         if client.funnel_status == "PERDIDO" and client.lost_reason:
             content += " — Motivo: " + client.lost_reason
         _log_interaction(client_id, "SISTEMA", content)
+    if is_lost_status(client.funnel_status):
+        # Perdido nao e realizado: card em etapa de perda nao pode carregar
+        # datas de conclusao, senao o perdido continua na meta comercial
+        # (via closed_at) e nas pendencias de geracao do CRM. Com Sale
+        # existente a meta por sale_date nao muda (a Sale segue contando).
+        if client.sale_concluded_at is not None or client.closed_at is not None:
+            client.sale_concluded_at = None
+            client.closed_at = None
+            _log_interaction(client_id, "SISTEMA",
+                             "Etapa de perda — datas de conclusao limpas (perdido nao e venda realizada).")
     if client.estimated_value != old_value:
         _log_interaction(client_id, "ORCAMENTO", "Valor estimado: " + _fmt_log(old_value) + " -> " + _fmt_log(client.estimated_value))
     if client.lead_source != old_source:
@@ -618,6 +628,76 @@ def register_direct_sale(client_id):
     )
     db.session.commit()
     return jsonify(sale.to_dict()), 201
+
+
+@bp.post("/api/clients/<client_id>/mark-lost")
+@token_required(roles=["ADMIN", "GERENTE"])
+def mark_lost(client_id):
+    """Botao "Marcar como perdida" do FECHAMENTO: fechado sem venda em 1 clique.
+
+    Para cliente fechado (conclude-sale) que nao virou venda: move o card para
+    PERDIDO, limpa closed_at/sale_concluded_at (sai da meta comercial e das
+    pendencias de geracao do CRM) e deleta o projeto da Producao ainda nao
+    iniciado. 400 se o cliente tem alguma Sale (orienta excluir a venda
+    antes) ou se o projeto ja foi iniciado (pede resolver a producao antes).
+    """
+    from app.models.models import Sale
+
+    client = db.session.get(Client, client_id)
+    if not client:
+        return jsonify({"detail": "Cliente nao encontrado"}), 404
+
+    data = body_json() or {}
+    reason = (data.get("lost_reason") or "").strip()
+
+    if db.session.query(Sale).filter_by(client_id=client.id).count():
+        return jsonify({
+            "detail": "Cliente possui venda gerada — use Excluir venda antes de marcar como perdida"
+        }), 400
+
+    # Coluna inicial do funil de Producao: projeto nela e sem start_date
+    # ainda nao foi iniciado e pode ser descartado junto com a perda.
+    funnel = db.session.query(Funnel).filter_by(kind="PROJECTS", is_default=True).first()
+    first_key = "ORCAMENTO"
+    if funnel:
+        col = (
+            db.session.query(FunnelColumn)
+            .filter_by(funnel_id=funnel.id)
+            .order_by(FunnelColumn.position)
+            .first()
+        )
+        if col:
+            first_key = col.column_key
+
+    projects = db.session.query(Project).filter_by(client_id=client.id).all()
+    started = [
+        p for p in projects
+        if p.start_date is not None or p.concluded_at is not None or p.status != first_key
+    ]
+    if started:
+        return jsonify({
+            "detail": "Cliente possui projeto ja iniciado na Producao — resolva a producao antes de marcar como perdida"
+        }), 400
+
+    deleted = len(projects)
+    for p in projects:
+        db.session.delete(p)
+
+    old_funnel = client.funnel_status
+    client.funnel_status = "PERDIDO"
+    client.lost_reason = reason or None
+    client.closed_at = None
+    client.sale_concluded_at = None
+    content = (
+        "Marcado como perdido (etapa: " + _fmt_log(old_funnel) + " -> PERDIDO)"
+        + (" — Motivo: " + reason if reason else "")
+        + " — datas de conclusao limpas (saiu da meta e das pendencias)."
+    )
+    if deleted:
+        content += f" {deleted} projeto(s) nao iniciado(s) da Producao excluido(s)."
+    _log_interaction(client.id, "SISTEMA", content)
+    db.session.commit()
+    return jsonify(client.to_dict())
 
 
 @bp.delete("/api/clients/<client_id>")
