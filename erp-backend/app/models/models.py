@@ -144,6 +144,61 @@ class Client(db.Model):
         return total if total > 0 else None
 
 
+class Deal(db.Model):
+    """Negociacao no funil de vendas: o CARD separado do CADASTRO (multi-card, out/2026).
+
+    Antes, o card ERA o cliente (clients.funnel_id/funnel_status/... — 1 linha
+    = 1 card): cliente com venda concluida caia no limbo (invisivel no kanban e
+    fora do Vincular) e nao havia 2 negociacoes do mesmo cliente no funil.
+    Agora clients vira so cadastro (contato, cpf, endereco, flags de fornecedor)
+    e cada Deal e um card (client_id + funnel_id + etapa + valores + flags de
+    conclusao + vendedor/parceiro). A Sale aponta para o deal que a originou
+    (deal_id); interactions/negotiation_items continuam no CLIENTE (historico
+    do cadastro, nao da negociacao). Backfill na migracao 0036: 1 deal por
+    cliente COM funil; sales/projects ligados pelo client_id.
+    """
+
+    __tablename__ = "deals"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    funnel_id = db.Column(String(36), ForeignKey("funnels.id", ondelete="SET NULL"), nullable=True, index=True)
+    funnel_status = db.Column(String(60), nullable=False, default="PROSPECCAO")  # recebe column_key do funil (ate 60)
+    title = db.Column(String(200), nullable=False, default="")
+    estimated_value = db.Column(Numeric(14, 2), nullable=True)
+    lost_reason = db.Column(Text, nullable=True)
+    seller_id = db.Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    partner_id = db.Column(String(36), ForeignKey("partners.id", ondelete="SET NULL"), nullable=True, index=True)
+    lead_source = db.Column(String(120), nullable=True, default="")
+    campaign = db.Column(String(120), nullable=True, default="")
+    sale_concluded_at = db.Column(DateTime, nullable=True, index=True)
+    closed_at = db.Column(DateTime, nullable=True, index=True)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+
+    client = db.relationship("Client", backref=db.backref("deals", cascade="all, delete-orphan", passive_deletes=False, order_by="Deal.created_at"))
+    seller = db.relationship("User")
+    partner = db.relationship("Partner")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "client_id": self.client_id,
+            "client_name": self.client.name if self.client else None,
+            "funnel_id": self.funnel_id,
+            "funnel_status": self.funnel_status,
+            "title": self.title or "",
+            "estimated_value": num(self.estimated_value),
+            "lost_reason": self.lost_reason,
+            "seller_id": self.seller_id,
+            "seller_name": self.seller.username if self.seller else None,
+            "partner_id": self.partner_id,
+            "partner_name": self.partner.name if getattr(self, "partner", None) else None,
+            "lead_source": self.lead_source or "",
+            "campaign": self.campaign or "",
+            "sale_concluded_at": iso(self.sale_concluded_at),
+            "closed_at": iso(self.closed_at) if self.closed_at else None,
+            "created_at": iso(self.created_at),
+        }
+
 class Supplier(db.Model):
     __tablename__ = "suppliers"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -383,6 +438,10 @@ class Project(db.Model):
     # na migracao 0035 (padrao 0011), o ORM cuida da integridade.
     sale_id = db.Column(String(36), ForeignKey("sales.id", ondelete="SET NULL"), nullable=True, index=True)
     sale = db.relationship("Sale", backref=db.backref("projects", order_by="Project.created_at"))
+    # Negociacao que originou o card (multi-card, out/2026). FK so no modelo
+    # (padrao 0011/0035); nullable para os cards criados antes dos deals.
+    deal_id = db.Column(String(36), ForeignKey("deals.id", ondelete="SET NULL"), nullable=True, index=True)
+    deal = db.relationship("Deal", backref=db.backref("deal_projects", order_by="Project.created_at"))
 
     client = db.relationship("Client", backref=db.backref("projects", cascade="all, delete-orphan", passive_deletes=True))
 
@@ -435,6 +494,7 @@ class Project(db.Model):
             "in_warranty": self.warranty_until is not None and self.warranty_until >= date.today(),
             "sale_id": self.sale_id,
             "sale_code": self.sale.code if self.sale else None,
+            "deal_id": self.deal_id,
             "environments": [e.to_dict() for e in getattr(self, "environments", [])],
             "total_area_m2": float(sum((num(e.area_m2) or 0) for e in getattr(self, "environments", []))),
             "total_environments": len(getattr(self, "environments", [])),
@@ -763,8 +823,12 @@ class Sale(db.Model):
     delivery_date = db.Column(Date, nullable=True)
     concluded_at = db.Column(DateTime, nullable=False, default=utcnow, index=True)
     created_by = db.Column(String(80), nullable=True, default="")
+    # Negociacao que originou a venda (multi-card, out/2026). FK so no modelo
+    # (padrao 0011/0035); nullable para as vendas criadas antes dos deals.
+    deal_id = db.Column(String(36), ForeignKey("deals.id", ondelete="SET NULL"), nullable=True, index=True)
 
     client = db.relationship("Client")
+    deal = db.relationship("Deal", backref=db.backref("sales", order_by="Sale.concluded_at"))
     seller = db.relationship("User", foreign_keys=[seller_id])
     partner = db.relationship("Partner")
     bank = db.relationship("BankAccount")
@@ -775,6 +839,8 @@ class Sale(db.Model):
             "code": self.code,
             "client_id": self.client_id,
             "client_name": self.client.name if self.client else None,
+            "deal_id": self.deal_id,
+            "deal_title": self.deal.title if self.deal else None,
             "seller_id": self.seller_id,
             "seller_name": self.seller.username if self.seller else None,
             "partner_id": self.partner_id,

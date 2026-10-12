@@ -6083,3 +6083,82 @@ def test_comissoes_unem_sale_e_botao_sem_dobrar(client):
     rel2 = client.get("/api/commissions?year=2026&month=10", headers=h).get_json()
     linha2 = [x for x in rel2["rows"] if x["seller_id"] == seller]
     assert linha2 and linha2[0]["sold_value"] == 15000.0, rel2
+
+
+def test_deal_modelo_campos(client):
+    """Deal = o CARD separado do CADASTRO: N cards do mesmo cliente no funil."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Deal QA", "cpf_cnpj": "deal-qa-1"}).get_json()["id"]
+    with client.application.app_context():
+        from app.models.models import Deal, Client as ClientModel
+        d = Deal(client_id=cid, title="Cozinha - QA")
+        db.session.add(d)
+        db.session.commit()
+        assert d.funnel_status == "PROSPECCAO"
+        assert d.title == "Cozinha - QA"
+        body = d.to_dict()
+        assert body["client_id"] == cid and body["client_name"] == "Cliente Deal QA"
+        assert body["sale_concluded_at"] is None and body["closed_at"] is None
+        # 2o card do mesmo cliente (ate no mesmo funil): permitido
+        d2 = Deal(client_id=cid, title="Quarto - QA")
+        db.session.add(d2)
+        db.session.commit()
+        assert db.session.query(Deal).filter_by(client_id=cid).count() == 2
+        # cascade: apaga o cliente, os deals vao junto (ORM; SQLite sem FK)
+        db.session.delete(db.session.get(ClientModel, cid))
+        db.session.commit()
+        assert db.session.query(Deal).filter_by(client_id=cid).count() == 0
+
+
+def test_sale_e_project_aceitam_deal_id(client):
+    """Sale/Project apontam para o deal de origem; vendas antigas ficam NULL."""
+    from app.models.models import Deal, Sale as SaleModel, Project as ProjectModel
+    h = _login(client)
+    cid = _mk_sale_client(client, h, name="Cliente Deal Link")
+    r = client.post("/api/sales", headers=h, json=_sale_payload(client, h, cid))
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json().get("deal_id") is None  # venda sem deal (legado)
+    sale_id = r.get_json()["id"]
+    projs = client.get("/api/projects", headers=h).get_json()
+    card = next(p for p in projs if p.get("sale_id") == sale_id)
+    project_id = card["id"]
+    with client.application.app_context():
+        d = Deal(client_id=cid, title="Cozinha - Link")
+        db.session.add(d)
+        db.session.commit()
+        deal_id = d.id
+        s = db.session.get(SaleModel, sale_id)
+        s.deal_id = deal_id
+        db.session.commit()
+        assert s.deal.title == "Cozinha - Link"
+        p = db.session.get(ProjectModel, project_id)
+        p.deal_id = deal_id
+        db.session.commit()
+        assert p.deal_id == deal_id and p.deal.client_id == cid
+    assert client.get(f"/api/sales/{sale_id}", headers=h).get_json()["deal_id"] == deal_id
+
+
+def test_backfill_0036_um_deal_por_cliente_com_funil(client):
+    """Migracao 0036: 1 deal por cliente COM funil; sem funil nao gera; re-run no-op."""
+    import importlib.util
+    h = _login(client)
+    c1 = client.post("/api/clients", headers=h, json={
+        "name": "BF Com Funil", "cpf_cnpj": "bf-1"}).get_json()["id"]
+    c2 = client.post("/api/clients", headers=h, json={
+        "name": "BF Sem Funil", "cpf_cnpj": "bf-2", "funnel_id": None}).get_json()["id"]
+    spec = importlib.util.spec_from_file_location("m0036", "alembic/versions/0036_deals.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    with client.application.app_context():
+        from app.models.models import Deal
+        m.backfill(db.session.connection())
+        db.session.commit()
+        d1 = db.session.query(Deal).filter_by(client_id=c1).all()
+        assert len(d1) == 1, [d.title for d in d1]
+        assert d1[0].title.startswith("Negociacao inicial")
+        assert d1[0].funnel_status == "PROSPECCAO"
+        assert db.session.query(Deal).filter_by(client_id=c2).count() == 0
+        m.backfill(db.session.connection())  # re-run = no-op
+        db.session.commit()
+        assert db.session.query(Deal).filter_by(client_id=c1).count() == 1
