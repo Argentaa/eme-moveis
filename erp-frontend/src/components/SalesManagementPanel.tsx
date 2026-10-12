@@ -15,7 +15,7 @@ import {
   AlertTriangle, ReceiptText, UserPlus,
 } from 'lucide-react';
 import {
-  saleService, dashboardService, clientService, getApiErrorMessage,
+  saleService, dashboardService, clientService, dealService, getApiErrorMessage,
 } from '../services/api';
 import { Client, Sale, SaleListRow, VendaPendenteGeracao } from '../types';
 import GenerateSaleModal from './GenerateSaleModal';
@@ -279,6 +279,7 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
   const [deleting, setDeleting] = useState<SaleListRow | null>(null);
 
   const [genClient, setGenClient] = useState<Client | null>(null);
+  const [genDealId, setGenDealId] = useState<string | null>(null);
   const [genValue, setGenValue] = useState(0);
   const [genLoadingId, setGenLoadingId] = useState<string | null>(null);
 
@@ -332,12 +333,13 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
   };
 
   const openGenerate = async (item: VendaPendenteGeracao) => {
-    setGenLoadingId(item.client_id);
+    setGenLoadingId(item.deal_id || item.client_id);
     setMsg('');
     try {
       const client = await clientService.getById(item.client_id);
       setGenValue(Number(item.valor ?? item.negotiation_value ?? item.estimated_value ?? 0));
       setGenClient(client);
+      setGenDealId(item.deal_id || null);
     } catch (err) {
       setMsg(getApiErrorMessage(err, 'Erro ao abrir o cliente para gerar a venda.'));
     } finally {
@@ -366,7 +368,11 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
     setLostSaving(true);
     setLostError('');
     try {
-      await saleService.markLost(lostItem.client_id, reason);
+      if (lostItem.deal_id) {
+        await dealService.markLost(lostItem.deal_id, reason);
+      } else {
+        await saleService.markLost(lostItem.client_id, reason);
+      }
       closeLost();
       setMsg('Venda marcada como perdida.');
       loadSales();
@@ -540,9 +546,10 @@ export default function SalesManagementPanel({ userRole }: { userRole: string })
         <GenerateSaleModal
           client={genClient}
           defaultValue={genValue}
-          onClose={() => { setGenClient(null); setGenValue(0); }}
+          dealId={genDealId}
+          onClose={() => { setGenClient(null); setGenDealId(null); setGenValue(0); }}
           onSaved={() => {
-            setGenClient(null); setGenValue(0);
+            setGenClient(null); setGenDealId(null); setGenValue(0);
             setMsg('Venda gerada — contas a receber e Produção criados.');
             loadSales(); loadPendentes();
           }}

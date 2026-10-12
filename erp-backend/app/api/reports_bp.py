@@ -24,7 +24,7 @@ from app.helpers import iso, num, parse_date
 from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
-    CalendarEvent, ChecklistItem, Client, FinancialRecord, Machine, Partner, ProductionIssue, Project,
+    CalendarEvent, ChecklistItem, Client, Deal, FinancialRecord, Machine, Partner, ProductionIssue, Project,
     ProjectEnvironment, Proposal, Sale, SaleItem, ServiceTicket, StockItem, StockMovement, TimeEntry, Worker,
 )
 
@@ -967,15 +967,32 @@ def _build_crm():
     if dt:
         clients = [c for c in clients if c.created_at and c.created_at.date() <= dt]
 
+    # Multi-card (out/2026): o CARD e o deal; por_etapa/perdidas/pendentes
+    # derivam dos deals (com fallback para clients quando ainda nao ha deal,
+    # ex.: banco anterior ao backfill). O espelho deal<->client garante
+    # paridade na transicao (kanban 22=22 em prod-12/10).
+    deals = db.session.query(Deal).all()
+    if df:
+        deals = [d for d in deals if d.created_at and d.created_at.date() >= df]
+    if dt:
+        deals = [d for d in deals if d.created_at and d.created_at.date() <= dt]
+    use_deals = len(deals) > 0
+
     by_stage_map = {}
-    for c in clients:
-        st = c.funnel_status or "PROSPECCAO"
+    for d in (deals if use_deals else clients):
+        st = (d.funnel_status or "PROSPECCAO")
         by_stage_map[st] = by_stage_map.get(st, 0) + 1
     by_stage = [{"funnel_status": k, "total": v} for k, v in by_stage_map.items()]
 
-    lost = [{"name": c.name, "lost_reason": c.lost_reason,
-             "created_at": iso(c.created_at)}
-            for c in clients if c.funnel_status == "PERDIDO"]
+    if use_deals:
+        lost = [{"name": f"{d.title} — {d.client.name}" if d.client and d.client.name else d.title,
+                 "lost_reason": d.lost_reason,
+                 "created_at": iso(d.created_at)}
+                for d in deals if d.funnel_status == "PERDIDO"]
+    else:
+        lost = [{"name": c.name, "lost_reason": c.lost_reason,
+                 "created_at": iso(c.created_at)}
+                for c in clients if c.funnel_status == "PERDIDO"]
 
     # Recorte do periodo (?year=&month=&period=): mensal = o mes, trimestral =
     # o trimestre que contem o mes, semestral = o semestre, anual = o ano.
@@ -996,9 +1013,17 @@ def _build_crm():
     vendas_todas = db.session.query(Sale).all()
     vendas_periodo = [s for s in vendas_todas
                       if s.sale_date is not None and d0 <= s.sale_date <= d1]
-    fechados = [c for c in clients
-                if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None]
+    if use_deals:
+        fechados = [d for d in deals
+                    if d.funnel_status == "FECHAMENTO" or d.sale_concluded_at is not None]
+    else:
+        fechados = [c for c in clients
+                    if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None]
+    sales_deal_ids = {getattr(s, "deal_id", None) for s in vendas_todas if getattr(s, "deal_id", None)}
     sales_client_ids = {getattr(s, "client_id", None) for s in vendas_todas}
+
+    def _valor_fechado_deal(d):
+        return round(float(d.estimated_value or 0), 2)
 
     def _valor_fechado(c):
         try:
@@ -1008,23 +1033,57 @@ def _build_crm():
         return round(float(nv or 0) or float(c.estimated_value or 0), 2)
 
     pendentes = []
-    for c in fechados:
-        if c.id in sales_client_ids:
-            continue
-        fd = _fecha_data(c)
-        pendentes.append({
-            "client_id": c.id,
-            "name": c.name,
-            "funnel_status": c.funnel_status,
-            "data": fd.isoformat() if fd else None,
-            "valor": _valor_fechado(c),
-        })
+    if use_deals:
+        # Deal pendente = em FECHAMENTO/concluido SEM Sale propria (por deal_id).
+        # Sale legada sem deal_id cobre apenas o deal mais antigo do cliente
+        # naquele caso (foi o backfill que a ligaria); deals novos do mesmo
+        # cliente com sale propria por deal_id contam normalmente (multi-card).
+        oldest_by_client = {}
+        for d in sorted(deals, key=lambda x: x.created_at or ""):
+            oldest_by_client.setdefault(d.client_id, d.id)
+        for d in fechados:
+            if d.id in sales_deal_ids:
+                continue
+            coberta_por_legada = any(
+                getattr(s, "client_id", None) == d.client_id and not getattr(s, "deal_id", None)
+                for s in vendas_todas
+            ) and oldest_by_client.get(d.client_id) == d.id
+            if coberta_por_legada:
+                continue
+            fd = _fecha_data(d)
+            _cli = d.client
+            _cli_name = _cli.name if _cli and _cli.name else None
+            pendentes.append({
+                "deal_id": d.id,
+                "client_id": d.client_id,
+                "name": f"{d.title} — {_cli_name}" if _cli_name else d.title,
+                "title": d.title,
+                "funnel_status": d.funnel_status,
+                "data": fd.isoformat() if fd else None,
+                "valor": _valor_fechado_deal(d),
+            })
+    else:
+        for c in fechados:
+            if c.id in sales_client_ids:
+                continue
+            fd = _fecha_data(c)
+            pendentes.append({
+                "client_id": c.id,
+                "name": c.name,
+                "funnel_status": c.funnel_status,
+                "data": fd.isoformat() if fd else None,
+                "valor": _valor_fechado(c),
+            })
     pendentes.sort(key=lambda i: i["data"] or "", reverse=True)
     vendas_pendentes_geracao = {"qtd": len(pendentes), "itens": pendentes}
 
     undated = sum(1 for c in fechados if _fecha_data(c) is None)
-    base = [c for c in clients
-            if c.created_at and d0 <= c.created_at.date() <= d1]
+    if use_deals:
+        base = [d for d in deals
+                if d.created_at and d0 <= d.created_at.date() <= d1]
+    else:
+        base = [c for c in clients
+                if c.created_at and d0 <= c.created_at.date() <= d1]
     total_closed = len(vendas_periodo)
     taxa = round(total_closed / len(base) * 100, 1) if base else 0
 
@@ -1038,18 +1097,25 @@ def _build_crm():
         # Fallback: vendas fechadas no CRM (etapa FECHAMENTO ou botão
         # Concluir venda). Cobre o caso em que nenhum projeto foi concluído
         # pelo botão mas há vendas com valor de negociação.
-        fechados = [
-            c for c in clients
-            if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None
-        ]
-        for c in fechados:
-            try:
-                nv = c.negotiation_value
-            except Exception:
-                nv = None
-            v = float(nv or 0) or float(c.estimated_value or 0)
-            if v > 0:
-                vals.append(v)
+        if use_deals:
+            for d in deals:
+                if d.funnel_status == "FECHAMENTO" or d.sale_concluded_at is not None:
+                    v = float(d.estimated_value or 0)
+                    if v > 0:
+                        vals.append(v)
+        else:
+            fechados = [
+                c for c in clients
+                if c.funnel_status == "FECHAMENTO" or c.sale_concluded_at is not None
+            ]
+            for c in fechados:
+                try:
+                    nv = c.negotiation_value
+                except Exception:
+                    nv = None
+                v = float(nv or 0) or float(c.estimated_value or 0)
+                if v > 0:
+                    vals.append(v)
         if vals:
             origem_ticket = "vendas fechadas no CRM"
     ticket = {
@@ -1236,7 +1302,7 @@ def _build_crm():
         "periodo": {"date_from": iso(df), "date_to": iso(dt),
                     "year": year, "month": month, "period": period,
                     "de": d0.isoformat(), "ate": d1.isoformat()},
-        "negociacoes": {"total": len(clients), "por_etapa": by_stage,
+        "negociacoes": {"total": len(deals if use_deals else clients), "por_etapa": by_stage,
                         "perdidas": lost, "total_perdidas": len(lost)},
         "conversao": {"total_clientes": len(base),
                       "total_fechamentos": total_closed, "taxa": taxa,

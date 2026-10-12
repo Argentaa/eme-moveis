@@ -179,10 +179,16 @@ class Deal(db.Model):
     partner = db.relationship("Partner")
 
     def to_dict(self):
+        _dc = self.client
         return {
             "id": self.id,
             "client_id": self.client_id,
-            "client_name": self.client.name if self.client else None,
+            "client_name": _dc.name if _dc else None,
+            "client_email": _dc.email if _dc else "",
+            "client_phone": _dc.phone if _dc else "",
+            "client_cpf_cnpj": _dc.cpf_cnpj if _dc else "",
+            "client_is_supplier": bool(_dc.is_supplier) if _dc else False,
+            "client_partner_name": _dc.partner.name if _dc and getattr(_dc, "partner", None) else None,
             "funnel_id": self.funnel_id,
             "funnel_status": self.funnel_status,
             "title": self.title or "",

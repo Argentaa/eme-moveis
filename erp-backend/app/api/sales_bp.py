@@ -28,6 +28,7 @@ from app.extensions import db
 from app.models.models import (
     BankAccount,
     Client,
+    Deal,
     FinancialRecord,
     Funnel,
     FunnelColumn,
@@ -41,7 +42,7 @@ from app.models.models import (
     User,
     utcnow,
 )
-from app.api.clients_bp import _log_interaction
+from app.api.clients_bp import _log_interaction, _mirror_client_to_principal_deal
 
 bp = Blueprint("sales", __name__)
 
@@ -117,9 +118,25 @@ def get_sale(sale_id):
 def create_sale():
     data = body_json()
 
-    client = db.session.get(Client, data.get("client_id") or "")
+    deal = None
+    if data.get("deal_id"):
+        deal = db.session.get(Deal, str(data.get("deal_id")).strip())
+        if not deal:
+            return jsonify({"detail": "Negociacao nao encontrada"}), 404
+
+    client = db.session.get(Client, data.get("client_id") or (deal.client_id if deal else ""))
     if not client:
         return jsonify({"detail": "Cliente nao encontrado"}), 404
+    if deal is not None and deal.client_id != client.id:
+        return jsonify({"detail": "Negociacao nao pertence a este cliente"}), 400
+    if deal is None:
+        # Chamada legada sem deal_id: com 1 unico deal, a venda e dele
+        # (vincula + marca flags; sem isso o deal principal ficava sem data
+        # e caia em `undated`). Com N deals, nao ha como saber qual — fica
+        # sem vinculo (conservador: sem atribuicao errada).
+        only = db.session.query(Deal).filter_by(client_id=client.id).all()
+        if len(only) == 1:
+            deal = only[0]
 
     seller = None
     if data.get("seller_id"):
@@ -224,11 +241,17 @@ def create_sale():
         client.sale_concluded_at = utcnow()
     if client.closed_at is None:
         client.closed_at = client.sale_concluded_at
+    if deal is not None:
+        if deal.sale_concluded_at is None:
+            deal.sale_concluded_at = utcnow()
+        if deal.closed_at is None:
+            deal.closed_at = deal.sale_concluded_at
 
     code = _resolve_code()
     sale = Sale(
         code=code,
         client_id=client.id,
+        deal_id=deal.id if deal is not None else None,
         seller_id=seller.id if seller else None,
         partner_id=partner.id if partner else None,
         lead_source=(data.get("lead_source") or "").strip(),
@@ -286,7 +309,7 @@ def create_sale():
             title=title, client_id=client.id, description="",
             status=first_key, value=0, deadline=delivery_date,
             steps=STEPS_DEFAULT_PRODUCAO, funnel_id=proj_funnel_id,
-            sale_id=sale.id,
+            sale_id=sale.id, deal_id=deal.id if deal is not None else None,
         ))
 
     _log_interaction(
@@ -393,17 +416,26 @@ def delete_sale(sale_id):
     if not sale:
         return jsonify({"detail": "Venda nao encontrada"}), 404
     client = db.session.get(Client, sale.client_id) if sale.client_id else None
+    deal = db.session.get(Deal, sale.deal_id) if sale.deal_id else None
 
     for p in list(sale.projects):
         p.sale_id = None
     db.session.delete(sale)
     db.session.flush()
 
+    if deal is not None:
+        restante_deal = db.session.query(Sale).filter_by(deal_id=deal.id).count()
+        if restante_deal == 0:
+            deal.sale_concluded_at = None
+            deal.closed_at = None
     if client is not None:
         restante = db.session.query(Sale).filter_by(client_id=client.id).count()
         if restante == 0:
             client.sale_concluded_at = None
             client.closed_at = None
+            # Legado sem deal_id: o deal principal acompanhava essas flags.
+            if deal is None:
+                _mirror_client_to_principal_deal(client)
 
     if client is not None:
         _log_interaction(

@@ -1,12 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Plus, Search, Edit2, Trash2, Mail, Phone, MapPin,
+  Plus, Search, Edit2, Trash2, Mail, Phone,
   ArrowLeft, Send, RefreshCw,
   Layers, ListTodo, ArrowRight, XCircle, AlertTriangle, BadgeDollarSign, Eye, Funnel as FunnelIcon, X, ReceiptText
 } from 'lucide-react';
-import { FunnelStatus } from '../types';
-import { clientService, projectService, funnelService, calendarService, leadOptionService, partnerService, supplierService, getApiErrorMessage } from '../services/api';
-import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner, Supplier, Sale } from '../types';
+import { clientService, projectService, funnelService, calendarService, leadOptionService, partnerService, supplierService, dealService, getApiErrorMessage } from '../services/api';
+import { Client, Project, LeadOption, Funnel, FunnelColumn, Partner, Supplier, Sale, Deal } from '../types';
 import ClientDetailModal from './ClientDetailModal';
 import GenerateSaleModal from './GenerateSaleModal';
 
@@ -38,6 +37,7 @@ interface ClientsViewProps {
 export default function ClientsView({ userRole }: ClientsViewProps) {
   const [activeTab, setActiveTab] = useModuleTab('commercial', COMMERCIAL_TABS, 'funnel');
   const [clients, setClients] = useState<Client[]>([]);
+  const [deals, setDeals] = useState<Deal[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -46,7 +46,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   // Filtro do cadastro central: todos / so clientes / so fornecedores
   const [supplierFilter, setSupplierFilter] = useState<'ALL' | 'CLIENTS' | 'SUPPLIERS'>('ALL');
   // Drag and drop do Kanban
-  const [draggingClientId, setDraggingClientId] = useState<string | null>(null);
+  const [draggingDealId, setDraggingDealId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
   const [funnels, setFunnels] = useState<Funnel[]>([]);
   const [selectedFunnelId, setSelectedFunnelId] = useState<string>('');
@@ -55,14 +55,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [editingFunnelLabel, setEditingFunnelLabel] = useState('');
   const [editingFunnelDesc, setEditingFunnelDesc] = useState('');
   const [saleClient, setSaleClient] = useState<Client | null>(null);
+  const [saleDealId, setSaleDealId] = useState<string | null>(null);
   const [saleDefaultValue, setSaleDefaultValue] = useState(0);
   // Registrar venda direta (FECHAMENTO já entregue): só Sale, sem financeiro/produção.
   const [directClient, setDirectClient] = useState<Client | null>(null);
+  const [directDealId, setDirectDealId] = useState<string | null>(null);
   const [directValue, setDirectValue] = useState('');
   const [directDate, setDirectDate] = useState(new Date().toISOString().substring(0, 10));
   const [directError, setDirectError] = useState('');
   const [directSaving, setDirectSaving] = useState(false);
-  const [lostModalClient, setLostModalClient] = useState<Client | null>(null);
+  const [lostModalDeal, setLostModalDeal] = useState<Deal | null>(null);
   const [lostReason, setLostReason] = useState('');
   const [lostError, setLostError] = useState('');
 
@@ -86,6 +88,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const [linkClientId, setLinkClientId] = useState('');
   const [linkStage, setLinkStage] = useState('');
   const [linkValue, setLinkValue] = useState('');
+  const [linkTitle, setLinkTitle] = useState('');
   const [linkError, setLinkError] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
   // Venda para fornecedor: o funil aceita cliente E fornecedor, independente.
@@ -146,12 +149,14 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const loadClients = async () => {
     setLoading(true);
     try {
-      const [data, projs, evts] = await Promise.all([
+      const [data, dealsData, projs, evts] = await Promise.all([
         clientService.getAll(),
+        dealService.getAll().catch(() => [] as Deal[]),
         projectService.getAll().catch(() => []),
         calendarService.getAll().catch(() => []),
       ]);
       setClients(data);
+      setDeals(Array.isArray(dealsData) ? dealsData : []);
       setProjects(projs);
       setEvents(evts);
     } catch (err) {
@@ -223,6 +228,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
     setLinkSource('CLIENT');
     setLinkStage('');
     setLinkValue('');
+    setLinkTitle('');
     setLinkError('');
     setShowLinkModal(true);
     setLinkLoading(true);
@@ -283,12 +289,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         setLinkSaving(false);
         return;
       }
-      const payload: any = {
+      // Multi-card: vincular = CRIAR nova negociacao (o cliente pode ter N).
+      const linkedClient = clients.find(c => c.id === targetId);
+      const dealTitle = linkTitle.trim() || `Negociação - ${linkedClient?.name || 'cliente'}`;
+      await dealService.create({
+        client_id: targetId,
         funnel_id: selectedFunnel.id,
         funnel_status: linkStage || funnelColumns[0]?.column_key || 'PROSPECCAO',
-      };
-      if (linkValue.trim() !== '') payload.estimated_value = Number(linkValue);
-      await clientService.update(targetId, payload);
+        title: dealTitle,
+        ...(linkValue.trim() !== '' ? { estimated_value: Number(linkValue) } : {}),
+      });
       setShowLinkModal(false);
       loadClients();
     } catch (err: any) {
@@ -353,46 +363,62 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    // No Comercial, "excluir" = remover DO FUNIL, nao do sistema.
-    // O cadastro continua em Clientes/Fornecedores (funnel_id null).
+    // No Comercial, "excluir" = remover a NEGOCIACAO do funil (multi-card:
+    // o cliente pode ter outras). O cadastro continua em Clientes/Fornecedores.
     if (!['ADMIN', 'GERENTE'].includes(userRole)) {
       alert('Acesso negado: apenas administradores ou gerentes podem remover do funil.');
       return;
     }
 
-    if (confirm(`Remover "${name}" do funil de vendas?\nO cadastro continua em Clientes/Fornecedores e pode ser vinculado de novo.`)) {
+    if (confirm(`Remover a negociação "${name}" do funil de vendas?\nO cadastro continua em Clientes/Fornecedores e pode gerar nova negociação.`)) {
       try {
-        await clientService.update(id, { funnel_id: null } as any);
+        await dealService.remove(id);
         loadClients();
       } catch (err) {
-        console.error('Erro ao remover cliente do funil:', err);
-        alert(getApiErrorMessage(err, 'Falha ao remover cliente do funil.'));
+        console.error('Erro ao remover negociação do funil:', err);
+        alert(getApiErrorMessage(err, 'Falha ao remover negociação do funil.'));
       }
     }
   };
 
-  // Filter clients — o Comercial mostra SO vinculados ao funil.
-  // Quem esta so no cadastro central (funnel_id null) entra via "Vincular Cliente".
-  const funnelClients = clients.filter(c => !!(c as any).funnel_id);
-  const filteredClients = funnelClients.filter(c => {
-    // Venda concluida sai do funil de vendas: o projeto ja nasceu na Producao.
-    // A flag e explicita (sale_concluded_at), nao a coluna do funil — o
-    // cliente renomeia as colunas.
-    if ((c as any).sale_concluded_at) return false;
-    if (supplierFilter === 'SUPPLIERS' && !(c as any).is_supplier) return false;
-    if (supplierFilter === 'CLIENTS' && (c as any).is_supplier) return false;
-    return c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.cpf_cnpj.includes(searchQuery);
+  // Multi-card (out/2026): o CARD e o deal. O Comercial mostra SO negociacoes
+  // vinculadas ao funil; concluida (sale_concluded_at) sai do kanban.
+  // Nova negociacao para qualquer cliente entra via "Vincular Cliente".
+  const clientById = useMemo(() => new Map(clients.map(c => [c.id, c] as [string, Client])), [clients]);
+  const funnelDeals = deals.filter(d => !!d.funnel_id);
+  const dealDisplayValue = (d: Deal) => {
+    // Projetos com deal_id contam para o proprio deal; sem deal_id (legado ou
+    // avulso da Producao) contam quando o cliente tem no maximo 1 deal aberto
+    // (evita duplicar o mesmo projeto em 2 cards do mesmo cliente).
+    const openCount = funnelDeals.filter(x => x.client_id === d.client_id && !x.sale_concluded_at).length;
+    const mine = projects.filter(p => {
+      const pd = (p as any).deal_id as string | null;
+      if (pd) return pd === d.id;
+      return p.client_id === d.client_id && openCount <= 1;
+    });
+    const real = mine.filter(p => p.status !== 'CONCLUIDO').reduce((s, p) => s + (p.value || 0), 0);
+    return {
+      value: real > 0 ? real : (d.estimated_value || 0),
+      isEstimated: real === 0 && (d.estimated_value || 0) > 0,
+    };
+  };
+  const filteredDeals = funnelDeals.filter(d => {
+    if (d.sale_concluded_at) return false;
+    if (supplierFilter === 'SUPPLIERS' && !d.client_is_supplier) return false;
+    if (supplierFilter === 'CLIENTS' && d.client_is_supplier) return false;
+    const q = searchQuery.toLowerCase();
+    return (d.title || '').toLowerCase().includes(q) ||
+      (d.client_name || '').toLowerCase().includes(q) ||
+      (d.client_email || '').toLowerCase().includes(q) ||
+      (d.client_cpf_cnpj || '').includes(searchQuery);
   });
 
   const handleMarkLost = async () => {
-    if (!lostModalClient) return;
+    if (!lostModalDeal) return;
     setLostError('');
     try {
-      await clientService.updateFunnel(lostModalClient.id, 'PERDIDO');
-      await clientService.update(lostModalClient.id, { lost_reason: lostReason } as any);
-      setLostModalClient(null);
+      await dealService.markLost(lostModalDeal.id, lostReason);
+      setLostModalDeal(null);
       setLostReason('');
       loadClients();
     } catch (err) {
@@ -442,15 +468,21 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   };
 
   const handleSaleSaved = (sale: Sale) => {
-    // tira o card do funil: a venda foi concluida e a Producao/Financeiro criados
+    // tira o CARD (deal) do funil: a venda foi concluida e a Producao/Financeiro criados
+    const did = (sale as any).deal_id || saleDealId;
+    const stamp = sale.concluded_at || new Date().toISOString();
+    if (did) {
+      setDeals(prev => prev.map(d => (d.id === did ? { ...d, sale_concluded_at: stamp, closed_at: stamp } : d)));
+    }
     const cid = saleClient?.id;
     if (cid) {
-      setClients(prev => prev.map(c => (c.id === cid ? { ...c, sale_concluded_at: sale.concluded_at || new Date().toISOString() } : c)));
+      setClients(prev => prev.map(c => (c.id === cid ? { ...c, sale_concluded_at: stamp } as Client : c)));
     }
     const nCards = sale.projects?.length || sale.environments?.length || 1;
     const nParc = sale.installments_list?.length || 0;
     const totalRec = (sale.down_payment > 0 ? 'entrada' : '') + (sale.down_payment > 0 && nParc > 0 ? ' + ' : '') + (nParc > 0 ? `${nParc} parcela(s)` : '');
     setSaleClient(null);
+    setSaleDealId(null);
     alert(
       `Venda ${sale.code} gerada!\n` +
       `Contas a receber criadas no Financeiro (${totalRec || 'nenhuma a receber ainda'}).\n` +
@@ -489,33 +521,33 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
   const formFunnelColumns = formFunnel ? sortColumns(formFunnel.columns || []) : [];
   const formStatusExists = formFunnelColumns.some(c => c.column_key === formData.funnel_status);
 
-  const handleShiftFunnel = async (client: Client, direction: 'LEFT' | 'RIGHT') => {
+  const handleShiftFunnel = async (deal: Deal, direction: 'LEFT' | 'RIGHT') => {
     const cols = funnelColumns.map(fc => fc.column_key);
-    const idx = cols.indexOf(client.funnel_status);
+    const idx = cols.indexOf(deal.funnel_status);
     let nextIdx = idx;
     if (direction === 'LEFT' && idx > 0) nextIdx = idx - 1;
     if (direction === 'RIGHT' && idx < cols.length - 1) nextIdx = idx + 1;
     if (nextIdx === idx) return;
     const nextStatus = cols[nextIdx];
     try {
-      setClients(prev => prev.map(c => c.id === client.id ? { ...c, funnel_status: nextStatus as FunnelStatus } : c));
-      await clientService.updateFunnel(client.id, nextStatus);
+      setDeals(prev => prev.map(d => d.id === deal.id ? { ...d, funnel_status: nextStatus } : d));
+      await dealService.updateFunnel(deal.id, nextStatus);
     } catch (err) {
-      alert(getApiErrorMessage(err, 'Erro ao mover cliente no funil.'));
+      alert(getApiErrorMessage(err, 'Erro ao mover negociação no funil.'));
       loadClients();
     }
   };
 
   // Solta o card em outra coluna do funil (drag and drop).
-  const handleDropFunnel = async (clientId: string, columnKey: string) => {
+  const handleDropFunnel = async (dealId: string, columnKey: string) => {
     setDragOverColumn(null);
-    const client = clients.find(c => c.id === clientId);
-    if (!client || client.funnel_status === columnKey) return;
+    const deal = deals.find(d => d.id === dealId);
+    if (!deal || deal.funnel_status === columnKey) return;
     try {
-      setClients(prev => prev.map(c => c.id === clientId ? { ...c, funnel_status: columnKey as FunnelStatus } : c));
-      await clientService.updateFunnel(clientId, columnKey);
+      setDeals(prev => prev.map(d => d.id === dealId ? { ...d, funnel_status: columnKey } : d));
+      await dealService.updateFunnel(dealId, columnKey);
     } catch (err) {
-      alert(getApiErrorMessage(err, 'Erro ao mover cliente no funil.'));
+      alert(getApiErrorMessage(err, 'Erro ao mover negociação no funil.'));
       loadClients();
     }
   };
@@ -673,16 +705,6 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       .catch(err => console.error('Falha ao reposicionar clientes concluídos:', err));
   }, [loading, clients, projects]);
 
-  const clientDisplayValue = (c: Client, projects: Project[]) => {
-    const real = projects
-      .filter(p => p.client_id === c.id && p.status !== 'CONCLUIDO')
-      .reduce((s, p) => s + (p.value || 0), 0);
-    return {
-      value: c.negotiation_value ?? (real > 0 ? real : (c.estimated_value || 0)),
-      isEstimated: c.negotiation_value == null && real === 0 && (c.estimated_value || 0) > 0,
-    };
-  };
-
   return (
     <div className="space-y-6">
       
@@ -800,7 +822,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
           <option value="SUPPLIERS">Só fornecedores</option>
         </select>
         <div className="text-xs text-zinc-400 font-mono w-full md:w-auto text-right">
-          Exibindo {filteredClients.length} de {funnelClients.length} no funil
+          Exibindo {filteredDeals.length} de {funnelDeals.length} negociações no funil
         </div>
       </div>
 
@@ -814,8 +836,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         /* KANBAN FUNIL DE VENDAS */
         <div className="grid grid-cols-1 gap-4 overflow-x-auto pb-4" style={{ gridTemplateColumns: `repeat(${Math.max(1, funnelColumns.length)}, minmax(300px, 1fr))` }}>
           {funnelColumns.map((col, idx) => {
-            const colClients = filteredClients.filter(c => c.funnel_id === selectedFunnel?.id && c.funnel_status === col.column_key);
-            const colTotal = colClients.reduce((acc, c) => acc + clientDisplayValue(c, projects).value, 0);
+            const colDeals = filteredDeals.filter(d => d.funnel_id === selectedFunnel?.id && d.funnel_status === col.column_key);
+            const colTotal = colDeals.reduce((acc, d) => acc + dealDisplayValue(d).value, 0);
             const borderColor = getColumnColor(col.column_key, idx);
             return (
               <div
@@ -824,7 +846,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 onDragLeave={() => setDragOverColumn(prev => (prev === col.column_key ? null : prev))}
                 onDrop={(e) => {
                   e.preventDefault();
-                  const id = e.dataTransfer.getData('text/plain') || draggingClientId;
+                  const id = e.dataTransfer.getData('text/plain') || draggingDealId;
                   if (id) handleDropFunnel(id, col.column_key);
                 }}
                 className={`glass-panel rounded-xl flex flex-col min-h-[500px] min-w-[280px] overflow-hidden border-t-2 ${borderColor} ${dragOverColumn === col.column_key ? 'ring-2 ring-red-600/70' : ''}`}
@@ -878,28 +900,29 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       )}
                     </div>
                     <span className="text-xs font-bold font-mono text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 ml-2 shrink-0">
-                      {colClients.length}
+                      {colDeals.length}
                     </span>
                   </div>
                 </div>
                 <div className="p-3 space-y-3 flex-1 overflow-y-auto max-h-[450px]">
-                  {colClients.map(client => {
-                      const { value: displayValue, isEstimated } = clientDisplayValue(client, projects);
-                      const pendingTasks = events.filter(e => e.client_id === client.id && e.status !== 'CONCLUIDO' && e.status !== 'CANCELADO').length;
+                  {colDeals.map(deal => {
+                      const { value: displayValue, isEstimated } = dealDisplayValue(deal);
+                      const pendingTasks = events.filter(e => e.client_id === deal.client_id && e.status !== 'CONCLUIDO' && e.status !== 'CANCELADO').length;
                       return (
                       <div
-                        key={client.id}
-                        onClick={() => setDetailClient(client)}
+                        key={deal.id}
+                        onClick={() => { const c = clientById.get(deal.client_id); if (c) setDetailClient(c); }}
                         draggable
-                        onDragStart={(e) => { e.dataTransfer.setData('text/plain', client.id); e.dataTransfer.effectAllowed = 'move'; setDraggingClientId(client.id); }}
-                        onDragEnd={() => { setDraggingClientId(null); setDragOverColumn(null); }}
-                        className={`p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg cursor-pointer ${draggingClientId === client.id ? 'opacity-40' : ''}`}
+                        onDragStart={(e) => { e.dataTransfer.setData('text/plain', deal.id); e.dataTransfer.effectAllowed = 'move'; setDraggingDealId(deal.id); }}
+                        onDragEnd={() => { setDraggingDealId(null); setDragOverColumn(null); }}
+                        className={`p-4 bg-zinc-950/70 hover:bg-zinc-900 border border-zinc-900 hover:border-red-800/40 rounded-lg group transition shadow-lg cursor-pointer ${draggingDealId === deal.id ? 'opacity-40' : ''}`}
                       >
-                        <h4 className="text-sm font-semibold text-zinc-100 group-hover:text-white">{client.name}</h4>
-                        {(client as any).partner_name && <span className="inline-flex items-center mt-1 text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded">🤝 {(client as any).partner_name}</span>}
-                        {(client as any).is_supplier && <span className="inline-flex items-center mt-1 ml-1 text-[10px] font-mono text-sky-300 bg-sky-500/10 border border-sky-500/30 px-1.5 py-0.5 rounded">🏭 Fornecedor</span>}
-                        {client.email && <p className="text-[11px] text-zinc-500 mt-0.5 truncate">✉ {client.email}</p>}
-                        {client.phone && <p className="text-[11px] text-zinc-500 truncate">📞 {client.phone}</p>}
+                        <h4 className="text-sm font-semibold text-zinc-100 group-hover:text-white">{deal.title}</h4>
+                        <p className="text-xs text-zinc-400 font-sans mt-0.5">{deal.client_name}</p>
+                        {deal.client_partner_name && <span className="inline-flex items-center mt-1 text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded">🤝 {deal.client_partner_name}</span>}
+                        {deal.client_is_supplier && <span className="inline-flex items-center mt-1 ml-1 text-[10px] font-mono text-sky-300 bg-sky-500/10 border border-sky-500/30 px-1.5 py-0.5 rounded">🏭 Fornecedor</span>}
+                        {deal.client_email && <p className="text-[11px] text-zinc-500 mt-0.5 truncate">✉ {deal.client_email}</p>}
+                        {deal.client_phone && <p className="text-[11px] text-zinc-500 truncate">📞 {deal.client_phone}</p>}
                         {displayValue > 0 && (
                           <p className={`text-[11px] font-mono font-semibold mt-1 ${isEstimated ? 'text-zinc-400' : 'text-emerald-500'}`}>
                             {isEstimated ? '~ ' : ''}{displayValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}
@@ -914,16 +937,16 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       <div className="mt-3 flex flex-wrap justify-between items-center gap-2 border-t border-zinc-900 pt-2.5">
                         <div className="flex gap-1 shrink-0">
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleShiftFunnel(client, 'LEFT'); }}
-                            disabled={funnelColumns.findIndex(fc => fc.column_key === client.funnel_status) === 0}
+                            onClick={(e) => { e.stopPropagation(); handleShiftFunnel(deal, 'LEFT'); }}
+                            disabled={funnelColumns.findIndex(fc => fc.column_key === deal.funnel_status) === 0}
                             className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 cursor-pointer"
                             title="Recuar etapa"
                           >
                             <ArrowLeft className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleShiftFunnel(client, 'RIGHT'); }}
-                            disabled={funnelColumns.findIndex(fc => fc.column_key === client.funnel_status) === funnelColumns.length - 1}
+                            onClick={(e) => { e.stopPropagation(); handleShiftFunnel(deal, 'RIGHT'); }}
+                            disabled={funnelColumns.findIndex(fc => fc.column_key === deal.funnel_status) === funnelColumns.length - 1}
                             className="p-1 text-zinc-500 hover:text-white disabled:opacity-20 cursor-pointer"
                             title="Avançar etapa"
                           >
@@ -933,15 +956,15 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                         {['ADMIN', 'GERENTE', 'PROJETISTA'].includes(userRole) && (
                           <div className="flex gap-1 flex-wrap justify-end">
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleOpenEditModal(client); }}
+                              onClick={(e) => { e.stopPropagation(); const c = clientById.get(deal.client_id); if (c) handleOpenEditModal(c); }}
                               className="p-1 text-zinc-500 hover:text-blue-400 cursor-pointer"
                               title="Editar"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
-                            {client.funnel_status !== 'PERDIDO' && (
+                            {deal.funnel_status !== 'PERDIDO' && (
                               <button
-                                onClick={(e) => { e.stopPropagation(); setLostModalClient(client); setLostReason(''); }}
+                                onClick={(e) => { e.stopPropagation(); setLostModalDeal(deal); setLostReason(''); }}
                                 className="p-1 text-zinc-500 hover:text-amber-400 cursor-pointer"
                                 title="Marcar como negócio perdido"
                               >
@@ -951,13 +974,15 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             {/* Botao explicito, nao amarrado ao nome da coluna: o
                                 cliente renomeia as etapas do funil, entao exigir
                                 funnel_status === 'FECHAMENTO' esconderia o botao. */}
-                            {client.funnel_status !== 'PERDIDO' && ['ADMIN', 'GERENTE'].includes(userRole) && (
+                            {deal.funnel_status !== 'PERDIDO' && ['ADMIN', 'GERENTE'].includes(userRole) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  const dv = clientDisplayValue(client, projects).value;
+                                  const c = clientById.get(deal.client_id);
+                                  const dv = dealDisplayValue(deal).value;
                                   setSaleDefaultValue(dv > 0 ? dv : 0);
-                                  setSaleClient(client);
+                                  if (c) setSaleClient(c);
+                                  setSaleDealId(deal.id);
                                 }}
                                 className="p-1 text-zinc-500 hover:text-emerald-400 cursor-pointer"
                                 title="Gerar venda — cadastra a venda, cria contas a receber e a Produção"
@@ -970,13 +995,15 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                                 NUNCA por posição: o funil padrão termina em
                                 PERDIDO. Venda já entregue: cria a Sale sem
                                 financeiro e sem produção. */}
-                            {client.funnel_status !== 'PERDIDO' && ['ADMIN', 'GERENTE'].includes(userRole)
-                              && isWonColumn(funnelColumns.find((fc) => fc.column_key === client.funnel_status)) && (
+                            {deal.funnel_status !== 'PERDIDO' && ['ADMIN', 'GERENTE'].includes(userRole)
+                              && isWonColumn(funnelColumns.find((fc) => fc.column_key === deal.funnel_status)) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  const dv = clientDisplayValue(client, projects).value;
-                                  setDirectClient(client);
+                                  const c = clientById.get(deal.client_id);
+                                  const dv = dealDisplayValue(deal).value;
+                                  if (c) setDirectClient(c);
+                                  setDirectDealId(deal.id);
                                   setDirectValue(dv > 0 ? String(dv) : '');
                                   setDirectDate(new Date().toISOString().substring(0, 10));
                                   setDirectError('');
@@ -989,7 +1016,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                             )}
                             {['ADMIN', 'GERENTE'].includes(userRole) && (
                               <button
-                                onClick={(e) => { e.stopPropagation(); handleDelete(client.id, client.name); }}
+                                onClick={(e) => { e.stopPropagation(); handleDelete(deal.id, `${deal.title} — ${deal.client_name}`); }}
                                 className="p-1 text-zinc-500 hover:text-red-400 cursor-pointer"
                                 title="Remover do funil (mantém o cadastro)"
                               >
@@ -1002,7 +1029,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                     </div>
                       );
                     })}
-                  {colClients.length === 0 && (
+                  {colDeals.length === 0 && (
                     <div className="py-10 border-2 border-dashed border-zinc-900 rounded-lg flex items-center justify-center">
                       <p className="text-[11px] text-zinc-600 font-mono">Vazio</p>
                     </div>
@@ -1018,48 +1045,47 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
             <table className="w-full text-left text-sm text-zinc-300">
               <thead className="text-xs uppercase font-mono text-zinc-500 bg-zinc-950/70 border-b border-zinc-905">
                 <tr>
-                  <th className="py-4 px-6 font-normal">Nome do Cliente</th>
-                  <th className="py-4 px-6 font-normal">CPF / CNPJ</th>
+                  <th className="py-4 px-6 font-normal">Negociação</th>
+                  <th className="py-4 px-6 font-normal">Cliente / CPF/CNPJ</th>
                   <th className="py-4 px-6 font-normal">Contatos</th>
-                  <th className="py-4 px-6 font-normal">Endereço de Entrega</th>
+                  <th className="py-4 px-6 font-normal">Etapa / Valor</th>
                   <th className="py-4 px-6 font-normal text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-900">
-                {filteredClients.map((client) => (
-                  <tr key={client.id} className="hover:bg-zinc-900/40 transition">
+                {filteredDeals.map((deal) => (
+                  <tr key={deal.id} className="hover:bg-zinc-900/40 transition">
                     <td className="py-4 px-6 font-sans">
-                      <div className="font-semibold text-white text-base">{client.name}</div>
-                      {(client as any).is_supplier && <span className="inline-flex items-center mt-1 text-[10px] font-mono text-sky-300 bg-sky-500/10 border border-sky-500/30 px-1.5 py-0.5 rounded">🏭 Fornecedor</span>}
-                      <span className="text-xs font-mono text-zinc-500 block mt-0.5">ID: {client.id}</span>
+                      <div className="font-semibold text-white text-base">{deal.title}</div>
+                      {deal.client_is_supplier && <span className="inline-flex items-center mt-1 text-[10px] font-mono text-sky-300 bg-sky-500/10 border border-sky-500/30 px-1.5 py-0.5 rounded">🏭 Fornecedor</span>}
+                      <span className="text-xs font-mono text-zinc-500 block mt-0.5">ID: {deal.id}</span>
                     </td>
-                    <td className="py-4 px-6 font-mono text-xs text-zinc-400">
-                      {client.cpf_cnpj}
+                    <td className="py-4 px-6 font-sans">
+                      <div className="text-sm text-zinc-200">{deal.client_name}</div>
+                      <div className="font-mono text-xs text-zinc-400 mt-0.5">{deal.client_cpf_cnpj}</div>
                     </td>
                     <td className="py-4 px-6 space-y-1">
-                      {client.email && (
+                      {deal.client_email && (
                         <div className="flex items-center gap-1.5 text-xs text-zinc-300">
                           <Mail className="w-3.5 h-3.5 text-red-600" />
-                          <span>{client.email}</span>
+                          <span>{deal.client_email}</span>
                         </div>
                       )}
-                      {client.phone && (
+                      {deal.client_phone && (
                         <div className="flex items-center gap-1.5 text-xs text-zinc-300">
                           <Phone className="w-3.5 h-3.5 text-red-600" />
-                          <span className="font-mono">{client.phone}</span>
+                          <span className="font-mono">{deal.client_phone}</span>
                         </div>
                       )}
                     </td>
-                    <td className="py-4 px-6 max-w-sm">
-                      <div className="flex items-start gap-1.5 text-xs text-zinc-400">
-                        <MapPin className="w-3.5 h-3.5 mt-0.5 text-zinc-500 shrink-0" />
-                        <span className="line-clamp-2">{client.address || 'Não cadastrado'}</span>
-                      </div>
+                    <td className="py-4 px-6">
+                      <span className="text-xs font-mono text-zinc-300">{deal.funnel_status}</span>
+                      <span className="text-xs font-mono text-emerald-500 block mt-0.5">{dealDisplayValue(deal).value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}</span>
                     </td>
                     <td className="py-4 px-6 text-right space-x-2 shrink-0">
                       {['ADMIN', 'GERENTE'].includes(userRole) && (
                         <button 
-                          onClick={() => handleOpenEditModal(client)}
+                          onClick={() => { const c = clientById.get(deal.client_id); if (c) handleOpenEditModal(c); }}
                           className="p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 transition shadow inline-flex justify-center items-center cursor-pointer"
                           title="Editar Cadastro"
                         >
@@ -1068,7 +1094,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       )}
                       {['ADMIN', 'GERENTE', 'PROJETISTA'].includes(userRole) && (
                         <button 
-                          onClick={() => setDetailClient(client)}
+                          onClick={() => { const c = clientById.get(deal.client_id); if (c) setDetailClient(c); }}
                           className="p-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded border border-zinc-800 transition shadow inline-flex justify-center items-center cursor-pointer"
                           title="Ver Detalhes"
                         >
@@ -1077,7 +1103,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                       )}
                       {['ADMIN', 'GERENTE'].includes(userRole) && (
                         <button 
-                          onClick={() => handleDelete(client.id, client.name)}
+                          onClick={() => handleDelete(deal.id, `${deal.title} — ${deal.client_name}`)}
                           className="p-2 bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-400 rounded border border-zinc-800 transition shadow inline-flex justify-center items-center cursor-pointer"
                           title="Remover do funil (mantém o cadastro)"
                         >
@@ -1088,7 +1114,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                   </tr>
                 ))}
 
-                {filteredClients.length === 0 && (
+                {filteredDeals.length === 0 && (
                   <tr>
                     <td colSpan={5} className="py-12 text-center text-zinc-500 font-mono">
                       Nenhum registro de cliente coincide com a pesquisa.
@@ -1103,28 +1129,28 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       {/* Aba Negócio Perdido — aparece abaixo do kanban ou da lista */}
       {viewMode === 'KANBAN' && (() => {
-        const lostClients = filteredClients.filter(c => c.funnel_status === 'PERDIDO');
-        if (lostClients.length === 0) return null;
+        const lostDeals = filteredDeals.filter(d => d.funnel_status === 'PERDIDO');
+        if (lostDeals.length === 0) return null;
         return (
           <div className="glass-panel rounded-lg overflow-hidden border-l-4 border-l-red-600">
             <div className="p-4 bg-zinc-950/60 border-b border-zinc-900 flex items-center gap-2">
               <XCircle className="w-4 h-4 text-red-500" />
               <h3 className="text-sm font-semibold text-white font-sans">Negócios Perdidos</h3>
-              <span className="text-xs font-mono text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 ml-auto">{lostClients.length}</span>
+              <span className="text-xs font-mono text-zinc-400 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800 ml-auto">{lostDeals.length}</span>
             </div>
             <div className="divide-y divide-zinc-900">
-              {lostClients.map(client => (
-                <div key={client.id} className="p-4 flex items-start justify-between gap-4">
+              {lostDeals.map(deal => (
+                <div key={deal.id} className="p-4 flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-zinc-300 font-sans">{client.name}</p>
-                    {client.lost_reason && (
-                      <p className="text-[11px] text-zinc-500 font-mono mt-0.5">Motivo: {client.lost_reason}</p>
+                    <p className="text-sm font-semibold text-zinc-300 font-sans">{deal.title} — {deal.client_name}</p>
+                    {deal.lost_reason && (
+                      <p className="text-[11px] text-zinc-500 font-mono mt-0.5">Motivo: {deal.lost_reason}</p>
                     )}
-                    {client.email && <p className="text-[11px] text-zinc-500 truncate">✉ {client.email}</p>}
+                    {deal.client_email && <p className="text-[11px] text-zinc-500 truncate">✉ {deal.client_email}</p>}
                   </div>
                   {['ADMIN', 'GERENTE'].includes(userRole) && (
                     <button
-                      onClick={() => clientService.updateFunnel(client.id, 'PROSPECCAO').then(loadClients)}
+                      onClick={() => dealService.updateFunnel(deal.id, 'PROSPECCAO').then(loadClients)}
                       className="text-[11px] font-mono text-zinc-400 hover:text-emerald-400 cursor-pointer whitespace-nowrap"
                       title="Reativar no funil"
                     >
@@ -1145,13 +1171,14 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         <GenerateSaleModal
           client={saleClient}
           defaultValue={saleDefaultValue}
-          onClose={() => setSaleClient(null)}
+          dealId={saleDealId}
+          onClose={() => { setSaleClient(null); setSaleDealId(null); }}
           onSaved={handleSaleSaved}
         />
       )}
 
       {/* Modal Negócio Perdido */}
-      {lostModalClient && (
+      {lostModalDeal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="glass-panel w-full max-w-md rounded-xl overflow-hidden border border-zinc-800 shadow-2xl">
             <div className="bg-zinc-950 p-5 border-b border-zinc-850 flex justify-between items-center">
@@ -1159,11 +1186,11 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 <AlertTriangle className="w-5 h-5 text-red-500" />
                 <h3 className="text-base font-serif font-semibold text-white">Negócio Perdido</h3>
               </div>
-              <button onClick={() => setLostModalClient(null)} className="text-zinc-500 hover:text-white cursor-pointer font-mono text-xs">Sair</button>
+              <button onClick={() => setLostModalDeal(null)} className="text-zinc-500 hover:text-white cursor-pointer font-mono text-xs">Sair</button>
             </div>
             <div className="p-6 space-y-4">
               <p className="text-sm text-zinc-400">
-                Registrando negócio perdido para <strong className="text-white">{lostModalClient.name}</strong>.
+                Registrando negócio perdido para <strong className="text-white">{lostModalDeal.title} — {lostModalDeal.client_name}</strong>.
               </p>
               <div className="space-y-2">
                 <label className="text-xs text-zinc-300 font-mono uppercase block">Motivo da perda</label>
@@ -1178,7 +1205,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
               {lostError && <p className="text-xs text-red-400 font-mono">{lostError}</p>}
               <div className="flex justify-end gap-3 pt-2">
                 <button
-                  onClick={() => setLostModalClient(null)}
+                  onClick={() => setLostModalDeal(null)}
                   className="px-4 py-2 text-xs bg-zinc-900 text-zinc-400 rounded border border-zinc-800 cursor-pointer font-mono"
                 >
                   Cancelar
@@ -1324,19 +1351,13 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
         </div>
       )}
 
-      {/* Modal Vincular Cliente — importa do cadastro central pro funil (padrao Producao) */}
+      {/* Modal Nova negociação — cria um card (deal) no funil (multi-card: N por cliente) */}
       {showLinkModal && (() => {
-        // Lista quem pode entrar neste funil: fora dele + concluidos dele.
-        // So filtrar por funnel_id null deixava o select vazio: os clientes
-        // antigos ja tem funil (backfill) e nunca apareceriam aqui.
-        // Concluido (sale_concluded_at) aparece com aviso: vincular reabre
-        // nova negociacao (as flags de conclusao sao limpas; a venda anterior
-        // segue em Vendas realizadas). Sem isso, cliente com venda entregue
-        // ficava no limbo — fora do kanban e fora deste select (caso real:
-        // Elisandra Lucas, out/2026).
-        const available = clients.filter(c =>
-          (c as any).funnel_id !== selectedFunnel?.id || (c as any).sale_concluded_at
-        );
+        // Multi-card: QUALQUER cliente do cadastro pode ganhar NOVA negociacao
+        // (antes: so quem estava fora do funil aparecia aqui).
+        const dealCountByClient: Record<string, number> = {};
+        deals.forEach(d => { if (d.client_id) dealCountByClient[d.client_id] = (dealCountByClient[d.client_id] || 0) + 1; });
+        const available = clients;
         const q = linkSearch.trim().toLowerCase();
         const options = available.filter(c =>
           !q || c.name.toLowerCase().includes(q) ||
@@ -1348,8 +1369,8 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
           <div className="glass-panel w-full max-w-lg rounded-xl overflow-hidden border border-zinc-800/80 shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="bg-gradient-to-r from-zinc-900 to-zinc-950 p-6 border-b border-zinc-800 flex justify-between items-center shrink-0">
               <div>
-                <h3 className="text-lg font-serif font-semibold text-white">Vincular Cliente</h3>
-                <p className="text-xs text-zinc-400 font-mono">Do cadastro central para o funil {selectedFunnel ? `“${selectedFunnel.name}”` : ''}</p>
+                <h3 className="text-lg font-serif font-semibold text-white">Nova negociação</h3>
+                <p className="text-xs text-zinc-400 font-mono">Criar negociação no funil {selectedFunnel ? `“${selectedFunnel.name}”` : ''} · o cliente pode ter várias</p>
               </div>
               <button onClick={() => setShowLinkModal(false)} className="text-zinc-500 hover:text-white transition font-mono text-sm uppercase px-2 py-1 rounded hover:bg-zinc-900">Sair</button>
             </div>
@@ -1392,7 +1413,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 >
                   <option value="">{linkLoading ? '-- Carregando clientes... --' : '-- Selecione o Cliente --'}</option>
                   {options.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}{(c as any).is_supplier ? '  🏭' : ''}{(c as any).sale_concluded_at ? '  ↩ venda concluída · reabre' : ''}</option>
+                    <option key={c.id} value={c.id}>{c.name}{(c as any).is_supplier ? '  🏭' : ''}{dealCountByClient[c.id] ? `  (${dealCountByClient[c.id]} negociação(ões))` : ''}</option>
                   ))}
                 </select>
                 ) : (
@@ -1421,9 +1442,19 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                     : linkSource === 'SUPPLIER'
                     ? `${suppliers.length} fornecedor(es) no cadastro · ao vincular, a venda caminha no mesmo funil.`
                     : available.length === 0
-                    ? 'Todos os clientes já estão neste funil. Cadastre novos em Clientes/Fornecedores.'
-                    : `${available.length} cliente(s) fora deste funil · Cadastre novos em Clientes/Fornecedores.`}
+                    ? 'Nenhum cliente no cadastro. Cadastre em Clientes/Fornecedores.'
+                    : `${available.length} cliente(s) no cadastro · cada vínculo cria uma nova negociação.`}
                 </p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-zinc-300 font-mono uppercase block">Título da negociação *</label>
+                <input
+                  type="text"
+                  value={linkTitle}
+                  onChange={e => setLinkTitle(e.target.value)}
+                  placeholder="Ex: Cozinha, Quarto, Closet..."
+                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded px-4 py-3 text-sm focus:outline-none focus:border-red-600"
+                />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -1454,7 +1485,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
               <div className="flex justify-end gap-3 pt-2">
                 <button onClick={() => setShowLinkModal(false)} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-sm rounded border border-zinc-700 cursor-pointer">Cancelar</button>
                 <button onClick={handleLinkClient} disabled={linkSaving} className="px-6 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded disabled:opacity-50 cursor-pointer">
-                  {linkSaving ? 'Vinculando...' : 'Vincular ao funil'}
+                  {linkSaving ? 'Criando...' : 'Criar negociação'}
                 </button>
               </div>
             </div>
@@ -1775,7 +1806,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
       {/* Modal Registrar venda direta — FECHAMENTO já entregue (sem financeiro/produção) */}
       {directClient && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setDirectClient(null)}>
+          onClick={() => { setDirectClient(null); setDirectDealId(null); }}>
           <div className="glass-panel w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-1">
               <ReceiptText size={17} className="text-sky-400" />
@@ -1791,10 +1822,17 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 setDirectSaving(true);
                 setDirectError('');
                 try {
-                  await clientService.registerDirectSale(directClient.id, {
-                    total_value: Number(directValue),
-                    sale_date: directDate || undefined,
-                  });
+                  if (directDealId) {
+                    await dealService.registerDirectSale(directDealId, {
+                      total_value: Number(directValue),
+                      sale_date: directDate || undefined,
+                    });
+                  } else {
+                    await clientService.registerDirectSale(directClient.id, {
+                      total_value: Number(directValue),
+                      sale_date: directDate || undefined,
+                    });
+                  }
                   setDirectClient(null);
                   await loadClients();
                 } catch (err) {
@@ -1819,7 +1857,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
               </div>
               {directError && <p className="text-xs text-red-400">{directError}</p>}
               <div className="flex justify-end gap-2 pt-1">
-                <button type="button" onClick={() => setDirectClient(null)}
+                <button type="button" onClick={() => { setDirectClient(null); setDirectDealId(null); }}
                   className="px-4 py-2 text-xs bg-zinc-900 text-zinc-300 hover:text-white rounded border border-zinc-800 cursor-pointer font-mono">
                   Cancelar
                 </button>

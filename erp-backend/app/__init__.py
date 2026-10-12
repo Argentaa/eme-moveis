@@ -23,6 +23,7 @@ def create_app(config_name=None):
     from app.api.auth_bp import bp as auth_bp
     from app.api.account_plan_bp import bp as account_plan_bp
     from app.api.sales_bp import bp as sales_bp
+    from app.api.deals_bp import bp as deals_bp
     from app.api.attachments_bp import bp as attachments_bp
     from app.api.bank_accounts_bp import bp as bank_accounts_bp
     from app.api.budget_bp import bp as budget_bp
@@ -50,7 +51,7 @@ def create_app(config_name=None):
     from app.api.commissions_bp import bp as commissions_bp
     from app.api.whatsapp_bp import bp as whatsapp_bp
 
-    for blueprint in (auth_bp, account_plan_bp, sales_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp, lead_options_bp, attachments_bp, products_bp, changelog_bp, suppliers_bp, satisfaction_bp, posvenda_bp, purchases_bp, budget_bp, tickets_bp, production_bp, bank_accounts_bp, partners_bp, vendors_bp, goals_bp, dashboard_bp, proposals_bp, commissions_bp, whatsapp_bp):
+    for blueprint in (auth_bp, account_plan_bp, sales_bp, deals_bp, clients_bp, projects_bp, financial_bp, stock_bp, calendar_bp, funnel_bp, reports_bp, lead_options_bp, attachments_bp, products_bp, changelog_bp, suppliers_bp, satisfaction_bp, posvenda_bp, purchases_bp, budget_bp, tickets_bp, production_bp, bank_accounts_bp, partners_bp, vendors_bp, goals_bp, dashboard_bp, proposals_bp, commissions_bp, whatsapp_bp):
         app.register_blueprint(blueprint)
 
     @app.get("/api/health")

@@ -56,6 +56,31 @@ export interface Client {
   avg_delivery_days?: number | null;
 }
 
+export interface Deal {
+  id: string;
+  client_id: string;
+  client_name: string | null;
+  client_email?: string;
+  client_phone?: string;
+  client_cpf_cnpj?: string | null;
+  client_is_supplier?: boolean;
+  client_partner_name?: string | null;
+  funnel_id?: string | null;
+  funnel_status: string;
+  title: string;
+  estimated_value?: number | null;
+  lost_reason?: string | null;
+  seller_id?: string | null;
+  seller_name?: string | null;
+  partner_id?: string | null;
+  partner_name?: string | null;
+  lead_source?: string | null;
+  campaign?: string | null;
+  sale_concluded_at?: string | null;
+  closed_at?: string | null;
+  created_at: string;
+}
+
 export type ProjectStatus = 'ORCAMENTO' | 'PROJETADO' | 'PRODUCAO' | 'MONTAGEM' | 'CONCLUIDO';
 
 export interface ProjectStep {
@@ -566,6 +591,8 @@ export interface FechamentoItem {
 /** Fechado no CRM sem Sale gerada — /api/reports/crm `vendas_pendentes_geracao`. */
 export interface VendaPendenteGeracao {
   client_id: string;
+  deal_id?: string | null;
+  title?: string | null;
   name: string;
   data?: string | null;
   valor?: number;

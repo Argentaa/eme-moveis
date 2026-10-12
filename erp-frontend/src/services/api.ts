@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { User, Client, Project, FinancialRecord, StockItem, StockMovement, StockLoss, StockLossKind, StockLossSummary, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
   PurchaseQuotation,
-  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage, AccountPlanCategory, AccountPlanItem, Sale, SaleItem, SaleInstallment, SaleListRow } from '../types';
+  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage, AccountPlanCategory, AccountPlanItem, Sale, SaleItem, SaleInstallment, SaleListRow, Deal } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -162,6 +162,57 @@ export const clientService = {
 
   async deleteInteraction(interactionId: string): Promise<any> {
     const response = await api.delete(`/api/interactions/${interactionId}`);
+    return response.data;
+  },
+};
+
+// Deal Services — negociacoes do funil (multi-card, out/2026). O CARD e o
+// deal; o cliente e so o cadastro. Criar deal = novo "Vincular".
+export const dealService = {
+  async getAll(params?: { funnel_id?: string; client_id?: string }): Promise<Deal[]> {
+    const response = await api.get('/api/deals', { params });
+    return response.data;
+  },
+  async getById(id: string): Promise<Deal> {
+    const response = await api.get(`/api/deals/${id}`);
+    return response.data;
+  },
+  async create(data: {
+    client_id: string; funnel_id?: string; funnel_status?: string; title?: string;
+    estimated_value?: number | null; seller_id?: string | null; partner_id?: string | null;
+    lead_source?: string; campaign?: string;
+  }): Promise<Deal> {
+    const response = await api.post('/api/deals', data);
+    return response.data;
+  },
+  async update(id: string, data: Partial<Deal>): Promise<Deal> {
+    const response = await api.put(`/api/deals/${id}`, data);
+    return response.data;
+  },
+  async remove(id: string): Promise<any> {
+    const response = await api.delete(`/api/deals/${id}`);
+    return response.data;
+  },
+  async updateFunnel(id: string, funnel_status: string): Promise<Deal> {
+    const response = await api.put(`/api/deals/${id}`, { funnel_status });
+    return response.data;
+  },
+  async concludeSale(
+    id: string,
+    data: { title?: string; value?: number; description?: string; steps?: unknown[] } = {}
+  ): Promise<Project> {
+    const response = await api.post(`/api/deals/${id}/conclude-sale`, data);
+    return response.data;
+  },
+  async registerDirectSale(
+    id: string,
+    data: { sale_date?: string; total_value?: number } = {}
+  ): Promise<Sale> {
+    const response = await api.post(`/api/deals/${id}/register-direct-sale`, data);
+    return response.data;
+  },
+  async markLost(id: string, lostReason: string): Promise<Deal> {
+    const response = await api.post(`/api/deals/${id}/mark-lost`, { lost_reason: lostReason });
     return response.data;
   },
 };

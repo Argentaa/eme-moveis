@@ -40,11 +40,12 @@ interface SaleItemRow {
 interface Props {
   client: Client;
   defaultValue: number;
+  dealId?: string | null;
   onClose: () => void;
   onSaved: (sale: Sale) => void;
 }
 
-export default function GenerateSaleModal({ client, defaultValue, onClose, onSaved }: Props) {
+export default function GenerateSaleModal({ client, defaultValue, dealId, onClose, onSaved }: Props) {
   const [users, setUsers] = useState<User[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [banks, setBanks] = useState<BankAccount[]>([]);
@@ -181,6 +182,7 @@ export default function GenerateSaleModal({ client, defaultValue, onClose, onSav
     try {
       const sale = await saleService.create({
         client_id: client.id,
+        ...(dealId ? { deal_id: dealId } : {}),
         seller_id: form.seller_id || undefined,
         partner_id: form.partner_id || undefined,
         lead_source: form.lead_source,

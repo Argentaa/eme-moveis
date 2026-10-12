@@ -4324,7 +4324,9 @@ def test_concluir_venda_grava_closed_at_e_entra_na_meta(client):
     assert conv.get("total_fechamentos") == 0, conv
     pend = crm.get("vendas_pendentes_geracao", {})
     assert pend.get("qtd") == 1, pend
-    assert pend["itens"][0]["name"] == "Cliente 12570", pend
+    # Multi-card: o pendente e o DEAL (nome = titulo + cliente), com client_id.
+    assert pend["itens"][0]["client_id"] == cid, pend
+    assert "Cliente 12570" in pend["itens"][0]["name"], pend
     assert crm["fechamentos_periodo"]["qtd"] == 0
 
 
@@ -5699,7 +5701,9 @@ def test_crm_conversao_respeita_periodo_e_declara_undated(client):
 
     pend = crm["vendas_pendentes_geracao"]
     assert pend["qtd"] == 2, pend
-    assert {i["name"] for i in pend["itens"]} == {"Fechado Hoje", "Fechado Antigo"}, pend
+    # Multi-card: pendentes sao deals (nome = titulo + cliente).
+    assert {i["client_id"] for i in pend["itens"]} == {cid, und.get_json()["id"]}, pend
+    assert all(("Fechado Hoje" in i["name"] or "Fechado Antigo" in i["name"]) for i in pend["itens"]), pend
 
     # mes antigo vazio: nada do periodo, pendentes continuam declarados
     vazio = client.get("/api/reports/crm?year=2001&month=1", headers=h).get_json()
@@ -5822,7 +5826,9 @@ def test_crm_fechado_sem_sale_vai_para_pendentes_e_nao_no_relatorio(client):
     assert crm["vendas_mes"]["qtd"] == 0
     pend = crm["vendas_pendentes_geracao"]
     assert pend["qtd"] == 1, pend
-    assert pend["itens"][0]["name"] == "Fechada Sem Venda", pend
+    # Multi-card: o pendente e o deal (nome = titulo + cliente).
+    assert pend["itens"][0]["client_id"] == cid, pend
+    assert "Fechada Sem Venda" in pend["itens"][0]["name"], pend
     assert pend["itens"][0]["valor"] == 12570, pend
 
 
@@ -6100,11 +6106,13 @@ def test_deal_modelo_campos(client):
         body = d.to_dict()
         assert body["client_id"] == cid and body["client_name"] == "Cliente Deal QA"
         assert body["sale_concluded_at"] is None and body["closed_at"] is None
-        # 2o card do mesmo cliente (ate no mesmo funil): permitido
+        # 2o e 3o cards do mesmo cliente (ate no mesmo funil): permitidos.
+        # (POST /api/clients ja garante o deal principal "Negociacao inicial".)
         d2 = Deal(client_id=cid, title="Quarto - QA")
         db.session.add(d2)
         db.session.commit()
-        assert db.session.query(Deal).filter_by(client_id=cid).count() == 2
+        titles = {t[0] for t in db.session.query(Deal.title).filter_by(client_id=cid).all()}
+        assert {"Cozinha - QA", "Quarto - QA"} <= titles, titles
         # cascade: apaga o cliente, os deals vao junto (ORM; SQLite sem FK)
         db.session.delete(db.session.get(ClientModel, cid))
         db.session.commit()
@@ -6112,13 +6120,17 @@ def test_deal_modelo_campos(client):
 
 
 def test_sale_e_project_aceitam_deal_id(client):
-    """Sale/Project apontam para o deal de origem; vendas antigas ficam NULL."""
+    """Sale/Project apontam para o deal de origem; legado sem deal_id vincula
+    ao deal unico do cliente (com N deals, fica sem vinculo)."""
     from app.models.models import Deal, Sale as SaleModel, Project as ProjectModel
     h = _login(client)
     cid = _mk_sale_client(client, h, name="Cliente Deal Link")
     r = client.post("/api/sales", headers=h, json=_sale_payload(client, h, cid))
     assert r.status_code == 201, r.get_data(as_text=True)
-    assert r.get_json().get("deal_id") is None  # venda sem deal (legado)
+    principal = client.get("/api/deals", headers=h,
+                           query_string={"client_id": cid}).get_json()
+    assert len(principal) == 1, principal
+    assert r.get_json().get("deal_id") == principal[0]["id"]  # auto-vinculo ao unico deal
     sale_id = r.get_json()["id"]
     projs = client.get("/api/projects", headers=h).get_json()
     card = next(p for p in projs if p.get("sale_id") == sale_id)
@@ -6162,3 +6174,244 @@ def test_backfill_0036_um_deal_por_cliente_com_funil(client):
         m.backfill(db.session.connection())  # re-run = no-op
         db.session.commit()
         assert db.session.query(Deal).filter_by(client_id=c1).count() == 1
+
+
+def test_deals_crud_multi_card_mesmo_cliente(client):
+    """Fase B: 2 deals do mesmo cliente no mesmo funil; kanban soma os dois."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Multi", "cpf_cnpj": "multi-1"}).get_json()["id"]
+    fid = client.get("/api/funnels", headers=h,
+                     query_string={"kind": "CRM"}).get_json()[0]["id"]
+
+    r1 = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "funnel_id": fid, "title": "Cozinha"})
+    assert r1.status_code == 201, r1.get_data(as_text=True)
+    d1 = r1.get_json()
+    assert d1["client_id"] == cid and d1["title"] == "Cozinha"
+    assert d1["funnel_status"] == "PROSPECCAO"
+
+    r2 = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "funnel_id": fid, "title": "Quarto"})
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+
+    got = client.get("/api/deals", headers=h,
+                     query_string={"funnel_id": fid}).get_json()
+    mine = [d for d in got if d["client_id"] == cid]
+    # POST /api/clients ja garante o deal principal ("Negociacao inicial");
+    # os 2 criados aqui somam com ele (multi-card: N por cliente).
+    titles = {d["title"] for d in mine}
+    assert {"Cozinha", "Quarto"} <= titles, titles
+
+    # mover etapa de um nao mexe no outro
+    up = client.put(f"/api/deals/{d1['id']}", headers=h,
+                    json={"funnel_status": "NEGOCIACAO"})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    assert up.get_json()["funnel_status"] == "NEGOCIACAO"
+    other = client.get(f"/api/deals/{r2.get_json()['id']}", headers=h).get_json()
+    assert other["funnel_status"] == "PROSPECCAO"
+
+    # 404 / validacoes
+    assert client.post("/api/deals", headers=h, json={
+        "client_id": "nao-existe"}).status_code == 404
+    assert client.post("/api/deals", headers=h, json={
+        "client_id": cid, "funnel_id": "funnel-lixo"}).status_code == 400
+    assert client.put(f"/api/deals/{d1['id']}", headers=h,
+                      json={"title": ""}).status_code == 400
+    assert client.get("/api/deals/nao-existe", headers=h).status_code == 404
+
+
+def test_deal_conclude_e_direct_sale_marcam_deal(client):
+    """Fase B: conclude/direct no deal marcam o deal (e espelham no cliente)."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Deal Venda", "cpf_cnpj": "dealv-1"}).get_json()["id"]
+    did = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "title": "Sala"}).get_json()["id"]
+
+    r = client.post(f"/api/deals/{did}/conclude-sale", headers=h,
+                    json={"title": "Projeto Sala", "value": 5000})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["deal_id"] == did
+    d = client.get(f"/api/deals/{did}", headers=h).get_json()
+    assert d["sale_concluded_at"] and d["closed_at"]
+    c = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert c["sale_concluded_at"] and c["closed_at"]  # espelho legado
+
+    cid2 = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Deal Direta", "cpf_cnpj": "dealv-2"}).get_json()["id"]
+    did2 = client.post("/api/deals", headers=h, json={
+        "client_id": cid2, "title": "Quarto",
+        "estimated_value": 3000}).get_json()["id"]
+    r2 = client.post(f"/api/deals/{did2}/register-direct-sale", headers=h, json={})
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+    assert r2.get_json()["deal_id"] == did2
+    assert r2.get_json()["total_value"] == 3000.0
+    d2 = client.get(f"/api/deals/{did2}", headers=h).get_json()
+    assert d2["sale_concluded_at"] and d2["closed_at"]
+
+
+def test_deal_mark_lost_e_delete_sem_venda(client):
+    """Fase B: perdida limpa flags; delete com venda bloqueia, sem venda sai."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Deal Lost", "cpf_cnpj": "deall-1"}).get_json()["id"]
+    did = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "title": "Cozinha"}).get_json()["id"]
+    r = client.post(f"/api/deals/{did}/mark-lost", headers=h,
+                    json={"lost_reason": "desistiu"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["funnel_status"] == "PERDIDO"
+    assert r.get_json()["sale_concluded_at"] is None
+
+    cid2 = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Deal Del", "cpf_cnpj": "deall-2"}).get_json()["id"]
+    did2 = client.post("/api/deals", headers=h, json={
+        "client_id": cid2, "title": "Sala",
+        "estimated_value": 2000}).get_json()["id"]
+    client.post(f"/api/deals/{did2}/register-direct-sale", headers=h, json={})
+    assert client.delete(f"/api/deals/{did2}", headers=h).status_code == 400
+    cid3 = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Deal Del2", "cpf_cnpj": "deall-3"}).get_json()["id"]
+    did3 = client.post("/api/deals", headers=h, json={
+        "client_id": cid3, "title": "Livre"}).get_json()["id"]
+    assert client.delete(f"/api/deals/{did3}", headers=h).status_code == 200
+    assert client.get(f"/api/deals/{did3}", headers=h).status_code == 404
+
+
+def test_sale_com_deal_id_vincula_e_marca_deal(client):
+    """Fase B: POST /api/sales com deal_id marca o deal e cria projeto ligado."""
+    h = _login(client)
+    cid = _mk_sale_client(client, h, name="Cliente Sale Deal")
+    did = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "title": "Cozinha Venda"}).get_json()["id"]
+    payload = _sale_payload(client, h, cid, deal_id=did)
+    r = client.post("/api/sales", headers=h, json=payload)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["deal_id"] == did
+    d = client.get(f"/api/deals/{did}", headers=h).get_json()
+    assert d["sale_concluded_at"] and d["closed_at"]
+    projs = client.get("/api/projects", headers=h).get_json()
+    cards = [p for p in projs if p.get("sale_id") == body["id"]]
+    assert cards and all(p["deal_id"] == did for p in cards)
+    # deal de outro cliente = 400
+    cid2 = _mk_sale_client(client, h, name="Cliente Sale Deal 2")
+    bad = _sale_payload(client, h, cid2, deal_id=did)
+    assert client.post("/api/sales", headers=h, json=bad).status_code == 400
+
+
+def test_put_legado_garante_deal_principal(client):
+    """Fase B: PUT /api/clients com funil cria/atualiza o deal (compat)."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Legado Deal", "cpf_cnpj": "legdeal-1",
+        "funnel_id": None}).get_json()["id"]
+    assert client.get("/api/deals", headers=h,
+                      query_string={"client_id": cid}).get_json() == []
+    fid = client.get("/api/funnels", headers=h,
+                     query_string={"kind": "CRM"}).get_json()[0]["id"]
+    up = client.put(f"/api/clients/{cid}", headers=h,
+                    json={"funnel_id": fid, "funnel_status": "NEGOCIACAO"})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    deals = client.get("/api/deals", headers=h,
+                       query_string={"client_id": cid}).get_json()
+    assert len(deals) == 1 and deals[0]["funnel_status"] == "NEGOCIACAO"
+
+
+def _brl(txt):
+    """'R$ 10.000,00' -> 10000.0 (formato _fmt_brl do backend)."""
+    t = str(txt).replace("R$", "").strip()
+    t = t.replace(".", "").replace(",", ".")
+    return float(t or 0)
+
+
+def test_crm_por_etapa_e_pendentes_usam_deals(client):
+    """Fase D: por_etapa/negociacoes/perdidas/pendentes derivam dos deals (paridade)."""
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente CRM Deal", "cpf_cnpj": "crmd-1"}).get_json()["id"]
+    did = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "title": "Cozinha CRM",
+        "estimated_value": 7000}).get_json()["id"]
+    r = client.get("/api/reports/crm", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    crm = r.get_json()
+    etapas = {e["funnel_status"]: e["total"] for e in crm["negociacoes"]["por_etapa"]}
+    assert etapas.get("PROSPECCAO", 0) >= 1, etapas
+    assert crm["negociacoes"]["total"] >= 1
+    # Mayra-like: deal em FECHAMENTO sem Sale aparece em pendentes com deal_id
+    up = client.put(f"/api/deals/{did}", headers=h, json={"funnel_status": "FECHAMENTO"})
+    assert up.status_code == 200, up.get_data(as_text=True)
+    crm2 = client.get("/api/reports/crm", headers=h).get_json()
+    pend = crm2["vendas_pendentes_geracao"]
+    achou = [i for i in pend["itens"] if i.get("deal_id") == did]
+    assert achou, pend["itens"]
+    assert achou[0]["client_id"] == cid and achou[0]["valor"] == 7000.0
+    # Gerou a venda para o deal: sai dos pendentes
+    payload = _sale_payload(client, h, cid, deal_id=did)
+    rs = client.post("/api/sales", headers=h, json=payload)
+    assert rs.status_code == 201, rs.get_data(as_text=True)
+    crm3 = client.get("/api/reports/crm", headers=h).get_json()
+    pend3 = crm3["vendas_pendentes_geracao"]
+    assert not [i for i in pend3["itens"] if i.get("deal_id") == did], pend3["itens"]
+
+
+def test_multi_card_duas_vendas_mesmo_cliente_contam(client):
+    """Fase D: 2 deals do mesmo cliente, cada um com sua Sale — as 2 contam
+    em fechamentos_periodo/vendas_mes (dedup por deal, nunca por cliente)."""
+    from datetime import date
+    h = _login(client)
+    cid = _mk_sale_client(client, h, name="Cliente Duas Vendas")
+    d1 = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "title": "Cozinha 2V"}).get_json()["id"]
+    d2 = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "title": "Quarto 2V"}).get_json()["id"]
+    hoje = date.today()
+    ym = hoje.strftime("%Y-%m")
+    p1 = _sale_payload(client, h, cid, deal_id=d1, sale_date=hoje.isoformat(), total_value=4000,
+                       down_payment=4000, installments=0, installment_value=0)
+    p2 = _sale_payload(client, h, cid, deal_id=d2, sale_date=hoje.isoformat(), total_value=6000,
+                       down_payment=6000, installments=0, installment_value=0)
+    # _sale_payload fixa bank/environments; zera ambientes p/ cards genericos
+    p1["environments"] = []
+    p2["environments"] = []
+    assert client.post("/api/sales", headers=h, json=p1).status_code == 201
+    assert client.post("/api/sales", headers=h, json=p2).status_code == 201
+    crm = client.get("/api/reports/crm", headers=h,
+                     query_string={"year": hoje.year, "month": hoje.month}).get_json()
+    fp = crm["fechamentos_periodo"]
+    minhas = [i for i in fp["itens"] if i["client_id"] == cid]
+    assert len(minhas) == 2, fp["itens"]
+    assert fp["valor_total"] >= 10000.0
+    assert crm["vendas_mes"]["qtd"] >= 2
+    # meta do mes soma as duas
+    meta = client.get("/api/goals/summary", headers=h,
+                      query_string={"year": hoje.year, "month": hoje.month}).get_json()
+    assert _brl(meta["achieved"]) >= 10000.0, meta
+
+
+def test_meta_nao_dobra_espelho_deal_cliente(client):
+    """Fase D: com espelho deal<->cliente, concluido SEM Sale conta 1x (deal vence)."""
+    from datetime import datetime
+    h = _login(client)
+    cid = client.post("/api/clients", headers=h, json={
+        "name": "Cliente Espelho Meta", "cpf_cnpj": "esp-1"}).get_json()["id"]
+    did = client.post("/api/deals", headers=h, json={
+        "client_id": cid, "title": "Sala Espelho"}).get_json()["id"]
+    with client.application.app_context():
+        from app.models.models import Deal as DealModel, Client as ClientModel
+        d = db.session.get(DealModel, did)
+        d.funnel_status = "FECHAMENTO"
+        d.estimated_value = 5000
+        d.sale_concluded_at = datetime(2026, 10, 8, 12, 0, 0)
+        d.closed_at = datetime(2026, 10, 8, 12, 0, 0)
+        c = db.session.get(ClientModel, cid)
+        c.funnel_status = "FECHAMENTO"
+        c.estimated_value = 5000
+        c.sale_concluded_at = datetime(2026, 10, 8, 12, 0, 0)
+        c.closed_at = datetime(2026, 10, 8, 12, 0, 0)
+        db.session.commit()
+    meta = client.get("/api/goals/summary", headers=h,
+                      query_string={"year": 2026, "month": 10}).get_json()
+    assert _brl(meta["achieved"]) == 5000.0, meta

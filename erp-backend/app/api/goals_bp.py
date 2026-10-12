@@ -15,7 +15,7 @@ from flask import Blueprint, jsonify, request
 from app.helpers import body_json, iso
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import Client, Funnel, FunnelColumn, Sale, SalesGoal, is_won_status, utcnow
+from app.models.models import Client, Deal, Funnel, FunnelColumn, Sale, SalesGoal, is_won_status, utcnow
 
 bp = Blueprint("goals", __name__)
 
@@ -230,12 +230,36 @@ def summary():
     start_d, end_d = start.date(), end.date()
     todas = db.session.query(Sale).all()
     com_sale = {s.client_id for s in todas if s.client_id}
+    com_sale_deal = {s.deal_id for s in todas if getattr(s, "deal_id", None)}
     achieved = 0.0
     deals = set()
     for s in todas:
         if s.sale_date and start_d <= s.sale_date < end_d:
             achieved += float(s.total_value or 0)
             deals.add(s.client_id)
+    # Multi-card: concluido pelo botao SEM Sale conta pelo DEAL (closed_at).
+    # Cliente com Sale nao entra (evita duplicar); como o PUT legado espelha
+    # as flags no cliente, contar os dois dobraria — o deal vence. Clientes
+    # com closed_at mas SEM nenhum deal (pre-backfill) contam pelo legado.
+    deal_client_ids = {d.client_id for d in db.session.query(Deal).all() if d.client_id}
+    for d in db.session.query(Deal).filter(
+        Deal.closed_at.isnot(None),
+        Deal.closed_at >= start,
+        Deal.closed_at < end,
+    ).all():
+        if d.id in com_sale_deal:
+            continue  # ja contado pela Sale (evita duplicar)
+        if d.client_id in com_sale and not getattr(d, "id", None):
+            continue
+        # Sale legada sem deal_id cobre o deal mais antigo do cliente.
+        if d.client_id in com_sale and not any(
+                getattr(s, "deal_id", None) for s in todas if getattr(s, "client_id", None) == d.client_id):
+            oldest = (db.session.query(Deal).filter_by(client_id=d.client_id)
+                      .order_by(Deal.created_at).first())
+            if oldest is not None and oldest.id == d.id:
+                continue
+        achieved += float(d.estimated_value or 0)
+        deals.add(d.client_id)
     for c in db.session.query(Client).filter(
         Client.closed_at.isnot(None),
         Client.closed_at >= start,
@@ -243,6 +267,8 @@ def summary():
     ).all():
         if c.id in com_sale:
             continue  # ja contado pela Sale (evita duplicar)
+        if c.id in deal_client_ids:
+            continue  # o deal ja contou (espelho) — evita duplicar
         achieved += float(c.estimated_value or 0)
         deals.add(c.id)
     deals_closed = len(deals)
@@ -260,11 +286,20 @@ def summary():
         ]
         if not won_keys:
             continue
-        undated += db.session.query(Client).filter(
-            Client.funnel_id == funnel.id,
-            Client.funnel_status.in_(won_keys),
-            Client.closed_at.is_(None),
+        # Multi-card: sem-data conta pelos deals (fallback p/ clients pre-backfill).
+        n_deals = db.session.query(Deal).filter(
+            Deal.funnel_id == funnel.id,
+            Deal.funnel_status.in_(won_keys),
+            Deal.closed_at.is_(None),
         ).count()
+        if n_deals or db.session.query(Deal).count() > 0:
+            undated += n_deals
+        else:
+            undated += db.session.query(Client).filter(
+                Client.funnel_id == funnel.id,
+                Client.funnel_status.in_(won_keys),
+                Client.closed_at.is_(None),
+            ).count()
 
     remaining = target - achieved
     percent = (achieved / target * 100) if target > 0 else None

@@ -11,9 +11,11 @@ from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
     Attachment,
+    BankAccount,
     CalendarEvent,
     Campaign,
     Client,
+    Deal,
     Funnel,
     FunnelColumn,
     is_lost_status,
@@ -238,6 +240,11 @@ def create_client():
     except IntegrityError:
         db.session.rollback()
         return jsonify({"detail": "cpf_cnpj ja cadastrado"}), 400
+    _ensure_principal_deal(client)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     ensure_supplier_mirror(client)
     return jsonify(client.to_dict()), 201
 
@@ -405,6 +412,75 @@ def delete_item(item_id):
     return jsonify({"ok": True})
 
 
+def _ensure_principal_deal(client):
+    """Compat multi-card (Fase B): o PUT legado do cliente garante o deal principal.
+
+    Se o cliente tem funnel e nenhum deal naquele funil, cria o deal inicial
+    espelhando os campos; se ja tem, atualiza o mais antigo para acompanhar.
+    Desvinculou (funnel_id None) = nao cria nada (o delete de deal cuida).
+    Nunca falha a requisicao: erro aqui nao pode quebrar o PUT legado.
+    """
+    try:
+        if not client.funnel_id:
+            return
+        deal = (
+            db.session.query(Deal)
+            .filter_by(client_id=client.id, funnel_id=client.funnel_id)
+            .order_by(Deal.created_at)
+            .first()
+        )
+        if deal is None:
+            deal = Deal(
+                client_id=client.id,
+                funnel_id=client.funnel_id,
+                funnel_status=(client.funnel_status or "PROSPECCAO")[:60],
+                title=("Negociacao inicial - " + (client.name or ""))[:200],
+            )
+            db.session.add(deal)
+            db.session.flush()
+        deal.funnel_status = (client.funnel_status or deal.funnel_status or "PROSPECCAO")[:60]
+        deal.estimated_value = client.estimated_value
+        deal.lost_reason = client.lost_reason
+        deal.seller_id = client.seller_id
+        deal.partner_id = client.partner_id
+        deal.lead_source = client.lead_source
+        deal.campaign = client.campaign
+        deal.sale_concluded_at = client.sale_concluded_at
+        deal.closed_at = client.closed_at
+        db.session.flush()
+    except Exception:
+        pass
+
+
+def _mirror_client_to_principal_deal(client):
+    """Compat multi-card (Fase B/D): escrita legada no cliente espelha no deal.
+
+    Os endpoints legados (conclude-sale, register-direct-sale, mark-lost,
+    DELETE /api/sales sem deal_id) gravam flags no Client; os relatorios leem
+    os deals. Sem este espelho o deal principal ficaria com flags velhas
+    (card sumido do kanban novo). Nunca falha a requisicao.
+    """
+    try:
+        if not client.funnel_id:
+            return
+        deal = (
+            db.session.query(Deal)
+            .filter_by(client_id=client.id, funnel_id=client.funnel_id)
+            .order_by(Deal.created_at)
+            .first()
+        )
+        if deal is None:
+            return
+        deal.funnel_status = (client.funnel_status or deal.funnel_status or "PROSPECCAO")[:60]
+        deal.estimated_value = client.estimated_value
+        deal.lost_reason = client.lost_reason
+        deal.sale_concluded_at = client.sale_concluded_at
+        deal.closed_at = client.closed_at
+        db.session.flush()
+    except Exception:
+        pass
+
+
 @bp.put("/api/clients/<client_id>")
 @token_required()
 def update_client(client_id):
@@ -510,6 +586,11 @@ def update_client(client_id):
     except IntegrityError:
         db.session.rollback()
         return jsonify({"detail": "cpf_cnpj ja cadastrado"}), 400
+    _ensure_principal_deal(client)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     ensure_supplier_mirror(client)
     return jsonify(client.to_dict())
 
@@ -586,6 +667,7 @@ def conclude_sale(client_id):
         funnel_id=funnel.id,
     )
     db.session.add(project)
+    _mirror_client_to_principal_deal(client)
     db.session.commit()
     return jsonify(project.to_dict()), 201
 
@@ -644,6 +726,7 @@ def register_direct_sale(client_id):
         f"Venda {sale.code} registrada sem producao (R$ {total_value:,.2f}) — "
         "card do FECHAMENTO passado direto para Vendas, sem financeiro.",
     )
+    _mirror_client_to_principal_deal(client)
     db.session.commit()
     return jsonify(sale.to_dict()), 201
 
@@ -714,6 +797,7 @@ def mark_lost(client_id):
     if deleted:
         content += f" {deleted} projeto(s) nao iniciado(s) da Producao excluido(s)."
     _log_interaction(client.id, "SISTEMA", content)
+    _mirror_client_to_principal_deal(client)
     db.session.commit()
     return jsonify(client.to_dict())
 

@@ -23,12 +23,13 @@ import {
   authService,
   calendarService,
   clientService,
+  dealService,
   getApiErrorMessage,
   itemService,
   productService,
   systemService,
 } from '../services/api';
-import { Attachment, Client, ClientDetail, FunnelStatus, NegotiationItem, Product } from '../types';
+import { Attachment, Client, ClientDetail, Deal, FunnelStatus, NegotiationItem, Product } from '../types';
 
 interface ClientDetailModalProps {
   client: Client;
@@ -237,6 +238,14 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
 
   const [shiftingFunnel, setShiftingFunnel] = useState(false);
 
+  // Negociações (multi-card): cards (deals) deste cliente no funil.
+  const [deals, setDeals] = useState<Deal[]>([]);
+  const [newDealTitle, setNewDealTitle] = useState('');
+  const [newDealError, setNewDealError] = useState('');
+  const [savingDeal, setSavingDeal] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renamingTitle, setRenamingTitle] = useState('');
+
   const notifyChanged = () => {
     if (onChanged) onChanged();
   };
@@ -245,12 +254,62 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
     setLoading(true);
     setErrorMsg('');
     try {
-      const data = await clientService.getDetail(client.id);
+      const [data, dealsData] = await Promise.all([
+        clientService.getDetail(client.id),
+        dealService.getAll({ client_id: client.id }).catch(() => [] as Deal[]),
+      ]);
       setDetail(data);
+      setDeals(Array.isArray(dealsData) ? dealsData : []);
     } catch (err) {
       setErrorMsg(getApiErrorMessage(err, 'Erro ao carregar o detalhamento do cliente.'));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCreateDeal = async () => {
+    const title = newDealTitle.trim();
+    if (!title) {
+      setNewDealError('Dê um nome à negociação (ex: Cozinha).');
+      return;
+    }
+    setNewDealError('');
+    setSavingDeal(true);
+    try {
+      await dealService.create({ client_id: client.id, title });
+      setNewDealTitle('');
+      const dealsData = await dealService.getAll({ client_id: client.id }).catch(() => [] as Deal[]);
+      setDeals(Array.isArray(dealsData) ? dealsData : []);
+      notifyChanged();
+    } catch (err) {
+      setNewDealError(getApiErrorMessage(err, 'Erro ao criar negociação.'));
+    } finally {
+      setSavingDeal(false);
+    }
+  };
+
+  const handleRenameDeal = async (id: string) => {
+    const title = renamingTitle.trim();
+    if (!title) return;
+    try {
+      await dealService.update(id, { title } as Partial<Deal>);
+      setRenamingId(null);
+      const dealsData = await dealService.getAll({ client_id: client.id }).catch(() => [] as Deal[]);
+      setDeals(Array.isArray(dealsData) ? dealsData : []);
+      notifyChanged();
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao renomear negociação.'));
+    }
+  };
+
+  const handleDeleteDeal = async (id: string, title: string) => {
+    if (!confirm(`Excluir a negociação "${title}"?\nA venda gerada (se houver) precisa ser excluída antes.`)) return;
+    try {
+      await dealService.remove(id);
+      setDeals(prev => prev.filter(d => d.id !== id));
+      notifyChanged();
+    } catch (err) {
+      alert(getApiErrorMessage(err, 'Erro ao excluir negociação.'));
     }
   };
 
@@ -739,6 +798,83 @@ export default function ClientDetailModal({ client, userRole, onClose, onChanged
                     {currentClient.funnel_status === 'PERDIDO' && (
                       <div className="mt-3 p-3 bg-red-950/40 border border-red-900/60 rounded text-xs text-red-300 font-mono">
                         Motivo da perda: {currentClient.lost_reason || 'Não informado'}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Negociações deste cliente (multi-card) */}
+                  <div className="glass-panel rounded-lg p-4 border border-zinc-900">
+                    <h4 className="text-[11px] uppercase font-mono text-zinc-500 tracking-wider mb-3">
+                      Negociações no funil ({deals.length})
+                    </h4>
+                    {deals.length === 0 ? (
+                      <p className="text-xs text-zinc-500 font-mono">Nenhuma negociação — crie a primeira abaixo.</p>
+                    ) : (
+                      <div className="divide-y divide-zinc-900 mb-3">
+                        {deals.map(d => (
+                          <div key={d.id} className="py-2 flex items-center gap-2">
+                            <div className="min-w-0 flex-1">
+                              {renamingId === d.id ? (
+                                <input
+                                  autoFocus
+                                  value={renamingTitle}
+                                  onChange={e => setRenamingTitle(e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') handleRenameDeal(d.id); if (e.key === 'Escape') setRenamingId(null); }}
+                                  className="w-full bg-zinc-950 border border-red-600 text-white rounded px-2 py-1 text-sm focus:outline-none"
+                                />
+                              ) : (
+                                <p className="text-sm font-semibold text-zinc-100 truncate">{d.title}</p>
+                              )}
+                              <p className="text-[11px] text-zinc-500 font-mono mt-0.5">
+                                {d.funnel_status}{d.sale_concluded_at ? ' · venda concluída' : ''}{d.estimated_value ? ` · ${Number(d.estimated_value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })}` : ''}
+                              </p>
+                            </div>
+                            {renamingId === d.id ? (
+                              <>
+                                <button onClick={() => handleRenameDeal(d.id)} className="text-[11px] font-mono text-emerald-400 hover:text-emerald-300 cursor-pointer">Salvar</button>
+                                <button onClick={() => setRenamingId(null)} className="text-[11px] font-mono text-zinc-500 hover:text-white cursor-pointer">Cancelar</button>
+                              </>
+                            ) : canEdit ? (
+                              <>
+                                <button
+                                  onClick={() => { setRenamingId(d.id); setRenamingTitle(d.title); }}
+                                  className="p-1 text-zinc-500 hover:text-blue-400 cursor-pointer"
+                                  title="Renomear negociação"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteDeal(d.id, d.title)}
+                                  className="p-1 text-zinc-500 hover:text-red-400 cursor-pointer"
+                                  title="Excluir negociação"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {canEdit && (
+                      <div>
+                        <div className="flex gap-2">
+                          <input
+                            value={newDealTitle}
+                            onChange={e => setNewDealTitle(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') handleCreateDeal(); }}
+                            placeholder="Nova negociação (ex: Quarto)..."
+                            className="flex-1 bg-zinc-950 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-red-600"
+                          />
+                          <button
+                            onClick={handleCreateDeal}
+                            disabled={savingDeal}
+                            className="px-4 py-2 text-xs bg-red-600 hover:bg-red-700 text-white rounded font-semibold disabled:opacity-50 cursor-pointer flex items-center gap-1"
+                          >
+                            <Plus className="w-3.5 h-3.5" /> {savingDeal ? 'Criando…' : 'Nova'}
+                          </button>
+                        </div>
+                        {newDealError && <p className="text-xs text-red-400 font-mono mt-1.5">{newDealError}</p>}
                       </div>
                     )}
                   </div>
