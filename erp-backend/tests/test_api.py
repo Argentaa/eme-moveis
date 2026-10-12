@@ -6004,3 +6004,82 @@ def test_mark_lost_projeto_inicial_deleta_e_iniciado_bloqueia(client):
     r = client.post(f"/api/clients/{cid3}/mark-lost", headers=h,
                     json={"lost_reason": "tentei"})
     assert r.status_code == 400, r.get_data(as_text=True)
+
+
+def test_revincular_concluido_reabre_negociacao_sem_apagar_venda(client):
+    """Caso real Elisandra Lucas (out/2026): cliente com venda concluida e
+    entregue ficava no limbo — invisivel no kanban (filtro de concluidos) e
+    fora do select de Vincular (ja esta neste funil). Revincular ao funil
+    limpa as flags para nova negociacao; a Sale permanece."""
+    h = _login(client)
+    cid = _mk_sale_client(client, h, name="Cliente Reabre")
+    payload = _sale_payload(client, h, cid)
+    r = client.post("/api/sales", headers=h, json=payload)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    sale_id = r.get_json()["id"]
+    cli = client.get(f"/api/clients/{cid}", headers=h).get_json()
+    assert cli["sale_concluded_at"] and cli["closed_at"]
+
+    fid = client.get("/api/funnels", headers=h,
+                     query_string={"kind": "CRM"}).get_json()[0]["id"]
+    r = client.put(f"/api/clients/{cid}", headers=h,
+                   json={"funnel_id": fid, "funnel_status": "PROSPECCAO"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["funnel_id"] == fid
+    assert body["sale_concluded_at"] is None and body["closed_at"] is None
+
+    # historico preservado: a venda segue em Vendas realizadas
+    sales = client.get("/api/sales", headers=h).get_json()
+    assert any(s["id"] == sale_id for s in sales)
+    # trilha de auditoria
+    inter = client.get(f"/api/clients/{cid}/interactions", headers=h).get_json()
+    assert any("reabert" in (i.get("content") or "").lower() for i in inter), inter
+
+
+def test_comissoes_unem_sale_e_botao_sem_dobrar(client):
+    """Comissoes com a mesma base do planejamento: Sale por sale_date +
+    concluido pelo botao SEM Sale por closed_at (cliente com Sale nao duplica).
+    Reabrir a negociacao nao apaga a comissao da venda anterior."""
+    h = _login(client)
+    seller = _mk_sale_seller(client)
+    r = client.post("/api/commission-rules", headers=h,
+                    json={"seller_id": seller, "percent": 10})
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    # venda gerada com vendedor (estado da Elisandra em prod)
+    cid = _mk_sale_client(client, h, name="Cliente Comissao Sale")
+    payload = _sale_payload(client, h, cid, seller_id=seller)
+    r = client.post("/api/sales", headers=h, json=payload)
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+    # concluido pelo botao SEM Sale, mesmo vendedor, mesmo mes (via banco)
+    from datetime import datetime
+    cid2 = _mk_sale_client(client, h, name="Cliente Comissao Botao")
+    with client.application.app_context():
+        from app.models.models import Client as ClientModel
+        c2 = db.session.get(ClientModel, cid2)
+        c2.seller_id = seller
+        c2.estimated_value = 5000
+        c2.funnel_status = "FECHAMENTO"
+        c2.sale_concluded_at = datetime(2026, 10, 8, 12, 0, 0)
+        c2.closed_at = datetime(2026, 10, 8, 12, 0, 0)
+        db.session.commit()
+
+    rel = client.get("/api/commissions?year=2026&month=10", headers=h)
+    assert rel.status_code == 200, rel.get_data(as_text=True)
+    dados = rel.get_json()
+    linha = [x for x in dados["rows"] if x["seller_id"] == seller]
+    assert linha, dados["rows"]
+    assert linha[0]["sold_value"] == 15000.0, linha[0]
+    assert dados["closed_count"] == 2, dados
+
+    # reabre a negociacao do cliente com Sale: a comissao da venda segue
+    fid = client.get("/api/funnels", headers=h,
+                     query_string={"kind": "CRM"}).get_json()[0]["id"]
+    r = client.put(f"/api/clients/{cid}", headers=h,
+                   json={"funnel_id": fid, "funnel_status": "PROSPECCAO"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    rel2 = client.get("/api/commissions?year=2026&month=10", headers=h).get_json()
+    linha2 = [x for x in rel2["rows"] if x["seller_id"] == seller]
+    assert linha2 and linha2[0]["sold_value"] == 15000.0, rel2

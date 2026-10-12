@@ -442,6 +442,24 @@ def update_client(client_id):
             if not funnel or funnel.kind != "CRM" or not funnel.active:
                 return jsonify({"detail": "funnel_id invalido"}), 400
             client.funnel_id = fid
+            # Reabertura de negociacao (out/2026): vincular ao funil um cliente
+            # com venda concluida limpa as flags de conclusao para o card
+            # voltar ao kanban como nova negociacao. O historico nao se perde:
+            # a venda concluida permanece em Vendas realizadas (tabela Sale) e
+            # nas metas por data da venda; sem a limpeza o cliente ficava no
+            # limbo — invisivel no kanban (filtro de concluidos) e fora do
+            # select de vincular (ja esta neste funil). Caso real: Elisandra
+            # Lucas, venda entregue, sem caminho para nova negociacao.
+            if client.sale_concluded_at is not None or client.closed_at is not None:
+                from app.models.models import Sale as SaleModel
+                had_sale = db.session.query(SaleModel).filter_by(client_id=client.id).count() > 0
+                client.sale_concluded_at = None
+                client.closed_at = None
+                _log_interaction(
+                    client_id, "SISTEMA",
+                    "Nova negociacao reaberta no funil — flags de conclusao limpas"
+                    + (" (venda(s) anterior(es) preservada(s) em Vendas realizadas)." if had_sale else "."),
+                )
     if "partner_id" in data:
         raw = data.get("partner_id")
         if raw is None or (isinstance(raw, str) and str(raw).strip() == ""):

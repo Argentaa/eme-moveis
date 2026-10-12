@@ -1326,10 +1326,17 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
 
       {/* Modal Vincular Cliente — importa do cadastro central pro funil (padrao Producao) */}
       {showLinkModal && (() => {
-        // Lista quem NAO esta no funil atual (fora do funil + de outros funis).
+        // Lista quem pode entrar neste funil: fora dele + concluidos dele.
         // So filtrar por funnel_id null deixava o select vazio: os clientes
         // antigos ja tem funil (backfill) e nunca apareceriam aqui.
-        const available = clients.filter(c => (c as any).funnel_id !== selectedFunnel?.id);
+        // Concluido (sale_concluded_at) aparece com aviso: vincular reabre
+        // nova negociacao (as flags de conclusao sao limpas; a venda anterior
+        // segue em Vendas realizadas). Sem isso, cliente com venda entregue
+        // ficava no limbo — fora do kanban e fora deste select (caso real:
+        // Elisandra Lucas, out/2026).
+        const available = clients.filter(c =>
+          (c as any).funnel_id !== selectedFunnel?.id || (c as any).sale_concluded_at
+        );
         const q = linkSearch.trim().toLowerCase();
         const options = available.filter(c =>
           !q || c.name.toLowerCase().includes(q) ||
@@ -1385,7 +1392,7 @@ export default function ClientsView({ userRole }: ClientsViewProps) {
                 >
                   <option value="">{linkLoading ? '-- Carregando clientes... --' : '-- Selecione o Cliente --'}</option>
                   {options.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}{(c as any).is_supplier ? '  🏭' : ''}</option>
+                    <option key={c.id} value={c.id}>{c.name}{(c as any).is_supplier ? '  🏭' : ''}{(c as any).sale_concluded_at ? '  ↩ venda concluída · reabre' : ''}</option>
                   ))}
                 </select>
                 ) : (

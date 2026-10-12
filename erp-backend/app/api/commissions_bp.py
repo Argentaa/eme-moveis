@@ -6,13 +6,17 @@ vendedor hoje nao reescreve o que ja foi pago nos meses anteriores — recalcula
 o mes passado continua dando o mesmo numero.
 
 "Venda fechada" e exatamente a mesma definicao do planejamento comercial
-(goals_bp): cliente com `closed_at` dentro do periodo, valor = `estimated_value`.
+(goals_bp): vendas geradas (Sale, por sale_date) + concluido pelo botao SEM
+Sale (por clients.closed_at, sem duplicar: cliente com Sale nao entra aqui).
 Se as duas telas usassem definicoes diferentes, a meta e a comissao contariam
-historias diferentes sobre o mesmo mes.
+historias diferentes sobre o mesmo mes. A base em Sale tambem preserva o
+historico quando o cliente reabre nova negociacao no funil (as flags do
+cliente sao limpas na reabertura, mas a Sale permanece).
 
 Atribuicao:
-  - vendedor -> `clients.seller_id`
-  - parceiro -> `clients.partner_id`
+  - vendedor -> `sales.seller_id` (venda gerada) ou `clients.seller_id`
+    (concluido pelo botao sem Sale)
+  - parceiro -> `sales.partner_id` ou `clients.partner_id`
 Vendas fechadas sem vendedor aparecem em `sem_atribuicao` (vendedor), para o
 numero nao parecer completo quando nao e.
 """
@@ -23,7 +27,7 @@ from flask import Blueprint, jsonify, request
 from app.helpers import body_json, num, parse_date
 from app.auth import token_required
 from app.extensions import db
-from app.models.models import Client, CommissionRule, Partner, User, utcnow
+from app.models.models import Client, CommissionRule, Partner, Sale, User, utcnow
 
 bp = Blueprint("commissions", __name__)
 
@@ -75,28 +79,47 @@ def commissions():
     if erro:
         return erro
 
-    fechadas = db.session.query(Client).filter(
-        Client.closed_at.isnot(None),
-        Client.closed_at >= start,
-        Client.closed_at < end,
-    ).all()
+    # Fonte unica = mesma do planejamento (goals_bp): vendas geradas contam
+    # por Sale.sale_date; concluido pelo botao SEM Sale conta por closed_at.
+    # Cliente com qualquer Sale nao entra pela flag (evita duplicar).
+    com_sale_ids = {
+        r[0] for r in db.session.query(Sale.client_id).distinct().all()
+    }
+    fechadas = [
+        {"seller_id": s.seller_id, "partner_id": s.partner_id,
+         "value": float(s.total_value or 0)}
+        for s in db.session.query(Sale).filter(
+            Sale.sale_date >= start.date(),
+            Sale.sale_date < end.date(),
+        ).all()
+    ]
+    fechadas += [
+        {"seller_id": c.seller_id, "partner_id": c.partner_id,
+         "value": float(c.estimated_value or 0)}
+        for c in db.session.query(Client).filter(
+            Client.closed_at.isnot(None),
+            Client.closed_at >= start,
+            Client.closed_at < end,
+        ).all()
+        if c.id not in com_sale_ids
+    ]
 
     regras = [r for r in db.session.query(CommissionRule).all() if _regra_vale(r, start, end)]
 
     linhas = []
     for r in regras:
         if r.seller_id:
-            vendas = [c for c in fechadas if c.seller_id == r.seller_id]
+            vendas = [v for v in fechadas if v["seller_id"] == r.seller_id]
             quem = r.seller.username if r.seller else "vendedor removido"
             tipo = "VENDEDOR"
         elif r.partner_id:
-            vendas = [c for c in fechadas if c.partner_id == r.partner_id]
+            vendas = [v for v in fechadas if v["partner_id"] == r.partner_id]
             quem = r.partner.name if r.partner else "parceiro removido"
             tipo = "PARCEIRO"
         else:
             continue  # regra sem dono nao calcula nada
 
-        vendido = round(sum(float(c.estimated_value or 0) for c in vendas), 2)
+        vendido = round(sum(v["value"] for v in vendas), 2)
         pct = float(r.percent or 0)
         linhas.append({
             "rule_id": r.id,
@@ -114,16 +137,16 @@ def commissions():
 
     # Vendas fechadas que nao entram na conta de ninguem: mostrar em vez de sumir.
     com_vendedor = {r.seller_id for r in regras if r.seller_id}
-    sem_vendedor = [c for c in fechadas if not c.seller_id or c.seller_id not in com_vendedor]
+    sem_vendedor = [v for v in fechadas if not v["seller_id"] or v["seller_id"] not in com_vendedor]
     sem_atribuicao = {
         "count": len(sem_vendedor),
-        "sold_value": round(sum(float(c.estimated_value or 0) for c in sem_vendedor), 2),
+        "sold_value": round(sum(v["value"] for v in sem_vendedor), 2),
     }
 
     return jsonify({
         "year": start.year,
         "month": start.month if end.month != 1 or start.month != 1 else None,
-        "total_sold": round(sum(float(c.estimated_value or 0) for c in fechadas), 2),
+        "total_sold": round(sum(v["value"] for v in fechadas), 2),
         "closed_count": len(fechadas),
         "total_commission": round(sum(l["commission_value"] for l in linhas), 2),
         "rows": linhas,
