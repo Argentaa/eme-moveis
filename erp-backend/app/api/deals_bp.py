@@ -28,6 +28,7 @@ from app.models.models import (
     Partner,
     Project,
     User,
+    next_sale_code,
     utcnow,
 )
 
@@ -384,9 +385,8 @@ def deal_register_direct_sale(deal_id):
     if deal.closed_at is None:
         deal.closed_at = deal.sale_concluded_at
 
-    n = db.session.query(Sale).count()
     sale = Sale(
-        code="V-%04d" % (n + 1),
+        code=next_sale_code(),
         client_id=deal.client_id,
         deal_id=deal.id,
         seller_id=deal.seller_id,

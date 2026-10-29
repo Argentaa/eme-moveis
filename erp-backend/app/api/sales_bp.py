@@ -63,8 +63,8 @@ PLANO_CONTA_VENDA = "1.1"  # Venda de produtos (plano de contas importado)
 
 
 def _resolve_code():
-    n = db.session.query(Sale).count()
-    return "V-%04d" % (n + 1)
+    from app.models.models import next_sale_code
+    return next_sale_code()
 
 
 def _first_production_status():

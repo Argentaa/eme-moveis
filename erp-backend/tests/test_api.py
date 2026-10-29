@@ -6415,3 +6415,28 @@ def test_meta_nao_dobra_espelho_deal_cliente(client):
     meta = client.get("/api/goals/summary", headers=h,
                       query_string={"year": 2026, "month": 10}).get_json()
     assert _brl(meta["achieved"]) == 5000.0, meta
+
+
+def test_sale_code_usa_maximo_apos_exclusao(client):
+    """Regressao prod 2026-10-29: V-0004 excluida + COUNT+1 gerava V-0007
+    duplicado (UniqueViolation em sales_code_key, TODA venda nova com 500).
+    Codigo novo = MAIOR existente + 1, buracos nao reaproveitados."""
+    h = _login(client)
+    cid = _mk_sale_client(client, h, name="Cliente Codigo Venda")
+
+    def _venda_rapida(**over):
+        p = _sale_payload(client, h, cid, down_payment=10000, installments=0,
+                          installment_value=0, installments_due=[], environments=[],
+                          **over)
+        r = client.post("/api/sales", headers=h, json=p)
+        assert r.status_code == 201, r.get_data(as_text=True)
+        return r.get_json()
+
+    s1 = _venda_rapida()
+    s2 = _venda_rapida()
+    assert s1["code"] == "V-0001"
+    assert s2["code"] == "V-0002"
+    # exclui a V-0001 -> buraco; proxima venda NAO pode reaproveitar V-0001
+    assert client.delete(f"/api/sales/{s1['id']}", headers=h).status_code == 200
+    s3 = _venda_rapida()
+    assert s3["code"] == "V-0003", s3["code"]

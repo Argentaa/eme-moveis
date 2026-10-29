@@ -878,6 +878,25 @@ class Sale(db.Model):
         }
 
 
+def next_sale_code():
+    """Proximo codigo de venda (V-NNNN) a partir do MAIOR existente.
+
+    Usa MAX, nunca COUNT: venda excluida (ex.: V-0004 apagada) deixa buraco
+    na sequencia e COUNT+1 colidiria com codigo ja existente (UniqueViolation
+    em sales_code_key, travando TODA venda nova). Buracos nao sao
+    reaproveitados — proximo = maior + 1.
+    """
+    max_n = 0
+    for (code,) in db.session.query(Sale.code).all():
+        try:
+            n = int(str(code).split('-', 1)[1])
+        except (IndexError, ValueError, AttributeError):
+            continue
+        if n > max_n:
+            max_n = n
+    return 'V-%04d' % (max_n + 1)
+
+
 class SaleInstallment(db.Model):
     """Parcela da venda, com vencimento explicito e vinculo ao contas a receber."""
 

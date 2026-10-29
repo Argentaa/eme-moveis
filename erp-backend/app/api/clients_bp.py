@@ -25,6 +25,7 @@ from app.models.models import (
     NegotiationItem,
     Partner,
     Product,
+    next_sale_code,
     utcnow,
     Project,
     User,
@@ -704,9 +705,8 @@ def register_direct_sale(client_id):
     if client.closed_at is None:
         client.closed_at = client.sale_concluded_at
 
-    n = db.session.query(Sale).count()
     sale = Sale(
-        code="V-%04d" % (n + 1),
+        code=next_sale_code(),
         client_id=client.id,
         seller_id=client.seller_id,
         partner_id=client.partner_id,
