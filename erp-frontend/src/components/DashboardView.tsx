@@ -53,11 +53,24 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
   const MONTH_NAMES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
                        'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
+  const nowYear = today.getFullYear();
+  const nowMonth = today.getMonth() + 1;
+  const isAtCurrentMonth = selectedYear > nowYear || (selectedYear === nowYear && selectedMonth >= nowMonth);
+
+  // Trava: o painel nunca abre nem navega para competência futura (sem dados).
+  useEffect(() => {
+    if (selectedYear > nowYear || (selectedYear === nowYear && selectedMonth > nowMonth)) {
+      setSelectedMonth(nowMonth);
+      setSelectedYear(nowYear);
+    }
+  }, [selectedYear, selectedMonth, nowYear, nowMonth]);
+
   const prevMonth = () => {
     if (selectedMonth === 1) { setSelectedMonth(12); setSelectedYear(y => y - 1); }
     else setSelectedMonth(m => m - 1);
   };
   const nextMonth = () => {
+    if (isAtCurrentMonth) return;
     if (selectedMonth === 12) { setSelectedMonth(1); setSelectedYear(y => y + 1); }
     else setSelectedMonth(m => m + 1);
   };
@@ -370,9 +383,8 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
               }}
               className="bg-transparent text-zinc-300 font-mono text-xs focus:outline-none cursor-pointer"
             >
-              {Array.from({ length: 24 }, (_, i) => {
-                const d = new Date();
-                d.setMonth(d.getMonth() - 12 + i);
+              {Array.from({ length: 13 }, (_, i) => {
+                const d = new Date(nowYear, nowMonth - 1 - 12 + i, 1);
                 const y = d.getFullYear();
                 const m = d.getMonth() + 1;
                 const val = `${y}-${String(m).padStart(2,'0')}`;
@@ -381,7 +393,7 @@ export default function DashboardView({ userRole }: DashboardViewProps) {
               })}
             </select>
           </div>
-          <button onClick={nextMonth} className="px-2 py-2 hover:bg-zinc-800 transition cursor-pointer">
+          <button onClick={nextMonth} disabled={isAtCurrentMonth} title={isAtCurrentMonth ? 'Já está no mês atual' : 'Próximo mês'} className={`px-2 py-2 transition ${isAtCurrentMonth ? 'opacity-30 cursor-not-allowed' : 'hover:bg-zinc-800 cursor-pointer'}`}>
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>
