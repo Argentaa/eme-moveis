@@ -1800,11 +1800,15 @@ class WhatsappConversation(db.Model):
     name = db.Column(String(160), nullable=True, default="")  # pushName / perfil
     client_id = db.Column(String(36), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True)
     last_message_at = db.Column(DateTime, nullable=True)
+    # Nao-lidas REAIS: o webhook incrementa quando chega mensagem do cliente;
+    # abrir a conversa (ou responder) zera. O sync NAO incrementa — historico
+    # antigo nao pode acender badge de mensagem nova.
+    unread_count = db.Column(Integer, nullable=False, default=0)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
     client = db.relationship("Client")
     __table_args__ = (UniqueConstraint("instance", "phone", name="uq_waconv_instance_phone"),)
 
-    def to_dict(self, last=None, unread=0):
+    def to_dict(self, last=None, unread=None):
         return {
             "id": self.id,
             "instance": self.instance,
@@ -1815,7 +1819,7 @@ class WhatsappConversation(db.Model):
             "last_message_at": iso(self.last_message_at),
             "last_body": (last.body if last else "") or "",
             "last_direction": last.direction if last else "",
-            "unread": unread,
+            "unread": int(self.unread_count or 0) if unread is None else unread,
             "created_at": iso(self.created_at),
         }
 
@@ -1840,8 +1844,12 @@ class WhatsappMessage(db.Model):
     media_filename = db.Column(String(255), nullable=True)
     media_mime = db.Column(String(120), nullable=True)
     media_size = db.Column(Integer, nullable=True)
-    status = db.Column(String(20), nullable=False, default="stored")  # stored|sent|failed
+    status = db.Column(String(20), nullable=False, default="stored")  # stored|sent|failed|deleted
     created_by = db.Column(String(80), nullable=True, default="")
+    # Reacao (emoji unico) aplicada a mensagem e id da mensagem citada —
+    # ambos so no ERP, espelhando o que foi feito na Evolution.
+    reaction = db.Column(String(16), nullable=False, default="")
+    reply_to_id = db.Column(String(36), nullable=True, default=None)
     created_at = db.Column(DateTime, nullable=False, default=utcnow)
     conversation = db.relationship(
         "WhatsappConversation",
@@ -1863,9 +1871,57 @@ class WhatsappMessage(db.Model):
             "media_mime": self.media_mime or "",
             "media_size": self.media_size,
             "status": self.status,
+            "deleted": self.status == "deleted",
+            "reaction": self.reaction or "",
+            "reply_to_id": self.reply_to_id,
             "created_by": self.created_by or "",
             "created_at": iso(self.created_at),
         }
+
+
+class WhatsappQuickReply(db.Model):
+    """Resposta rapida do atendimento (texto pronto, com variavel {nome}).
+
+    Vive so no ERP: nada e criado na Evolution. `position` ordena o painel;
+    titulo unico evita duplicar a mesma resposta no seed e na mao.
+    """
+    __tablename__ = "whatsapp_quick_replies"
+    id = db.Column(String(36), primary_key=True, default=new_uuid)
+    title = db.Column(String(80), nullable=False, unique=True, index=True)
+    body = db.Column(Text, nullable=False, default="")
+    position = db.Column(Integer, nullable=False, default=0)
+    created_at = db.Column(DateTime, nullable=False, default=utcnow)
+    updated_at = db.Column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "body": self.body or "",
+            "position": int(self.position or 0),
+            "created_at": iso(self.created_at),
+            "updated_at": iso(self.updated_at),
+        }
+
+
+DEFAULT_WHATSAPP_QUICK_REPLIES = [
+    ("Saudação", "Olá, {nome}! Aqui é da EME Móveis. Como posso ajudar?"),
+    ("Orçamento enviado", "Oi, {nome}! Seu orçamento foi enviado. Qualquer dúvida sobre medidas, acabamentos ou prazo, me chama por aqui."),
+    ("Prazo de produção", "Oi, {nome}! Assim que o projeto é aprovado, entramos na fila de produção. O prazo é confirmado na assinatura do contrato."),
+    ("Visita técnica", "Oi, {nome}! Podemos agendar a medição no local. Qual o melhor dia e horário para você?"),
+    ("Agradecimento", "Obrigado pelo contato, {nome}! Qualquer coisa estamos à disposição. 🙂"),
+]
+
+
+def ensure_default_whatsapp_quick_replies():
+    """Semeia as respostas rapidas padrao (idempotente por titulo)."""
+    for i, (title, body) in enumerate(DEFAULT_WHATSAPP_QUICK_REPLIES):
+        row = db.session.query(WhatsappQuickReply).filter_by(title=title).first()
+        if not row:
+            db.session.add(WhatsappQuickReply(title=title, body=body, position=i))
+    db.session.commit()
+
+
 class ProjectEnvironment(db.Model):
     __tablename__ = "project_environments"
     id = db.Column(String(36), primary_key=True, default=new_uuid)
@@ -2084,6 +2140,15 @@ def ensure_default_campaigns():
 # Novidades (changelog): mantido pela equipe de desenvolvimento (Donna) a cada
 # entrega — titulo eh a chave de idempotencia (nao duplica no boot).
 DEFAULT_CHANGELOG_ENTRIES = [
+    ("WhatsApp: não lidas de verdade, responder citando, reações e apagar para todos",
+     "O WhatsApp do sistema ficou parecido com o do celular: o contador de mensagens não lidas agora funciona (antes ficava sempre zerado) e aparece no topo e no filtro 'Não lidas'. Em cada mensagem, ao passar o mouse, dá para reagir com 👍 ❤️ 😂, responder citando a mensagem e — nas mensagens que você enviou — apagar para todos, sumindo também no celular do cliente. O sistema avisa o cliente que você está digitando e mostra a foto de perfil do contato quando ele tem.",
+     "NOVIDADE", "2026-11-10"),
+    ("WhatsApp: respostas rápidas com o nome do cliente",
+     "No campo de mensagem tem o botão de raio (Respostas rápidas): textos prontos como saudação, prazo de produção e visita técnica, que entram já com o primeiro nome do cliente no lugar de {nome}. ADMIN e GERENTE podem criar, editar e excluir as respostas pelo Gerenciar; já vêm cinco prontas.",
+     "NOVIDADE", "2026-11-10"),
+    ("WhatsApp: áudio enviado vira mensagem de voz",
+     "Ao anexar um áudio, ele agora sai como mensagem de voz (aquele player redondo do WhatsApp) em vez de arquivo. Se o WhatsApp recusar, o sistema envia como anexo normal sozinho, sem dar erro.",
+     "MELHORIA", "2026-11-10"),
     ("Vendas realizadas abria tela preta",
      "Correção: ao entrar na aba Vendas realizadas do Comercial, a tela ficava toda preta com erro 'm.map is not a function'. O painel esperava uma lista de pendências, mas o relatório manda um objeto com a lista dentro — agora ele lê a lista de dentro do objeto e a aba abre normal.",
      "CORRECAO", "2026-10-09"),

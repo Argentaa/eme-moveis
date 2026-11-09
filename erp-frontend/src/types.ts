@@ -914,8 +914,23 @@ export interface WhatsappMessage {
   media_mime: string;
   media_size: number | null;
   status: string;
+  /** Mensagem apagada para todos (o histórico mostra "mensagem apagada"). */
+  deleted: boolean;
+  /** Emoji de reação aplicado à mensagem ('' = sem reação). */
+  reaction: string;
+  /** Id da mensagem citada (resposta com quote). */
+  reply_to_id: string | null;
   created_by: string;
   created_at: string;
+}
+
+export interface WhatsappQuickReply {
+  id: string;
+  title: string;
+  body: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AccountPlanCategory {

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { User, Client, Project, FinancialRecord, StockItem, StockMovement, StockLoss, StockLossKind, StockLossSummary, Category, ReportResult, ReportArea, Interaction, Attachment, LeadOption, Product, NegotiationItem, ClientDetail, Recurrence, CrmReport, ChangelogEntry, Supplier, Vendor, BudgetGoal, BudgetAnalysis, Funnel, FunnelColumn, PurchaseOrder, ServiceTicket, ProjectEnvironment, Worker, Machine, TimeEntry, ProductionIssue, BankAccount, BankBalance, BankOverview, ChecklistItem, Partner, GoalScope, SalesGoal, SalesGoalSummary, AttentionResult, AgingResult, FinancialType, ProductionPending,
   PurchaseQuotation,
-  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage, AccountPlanCategory, AccountPlanItem, Sale, SaleItem, SaleInstallment, SaleListRow, Deal } from '../types';
+  Proposal, CommissionRule, CommissionReport, AppSetting, SatisfactionSurvey, SatisfactionSummary, PosvendaCheckin, FollowupEvent, WhatsappStatus, WhatsappConversation, WhatsappMessage, WhatsappQuickReply, AccountPlanCategory, AccountPlanItem, Sale, SaleItem, SaleInstallment, SaleListRow, Deal } from '../types';
 
 // Same-origin by default: the frontend server proxies /api to FastAPI.
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
@@ -1417,22 +1417,70 @@ export const whatsappService = {
     const response = await api.get('/api/whatsapp/conversations');
     return response.data;
   },
+  /** Total de não-lidas (badge) — o webhook é quem incrementa. */
+  async unread(): Promise<{ total: number; conversations: number }> {
+    const response = await api.get('/api/whatsapp/unread');
+    return response.data;
+  },
   async messages(conversationId: string): Promise<WhatsappMessage[]> {
     const response = await api.get(`/api/whatsapp/conversations/${conversationId}/messages`);
     return response.data;
   },
-  async sendText(conversationId: string, text: string): Promise<WhatsappMessage> {
-    const response = await api.post(`/api/whatsapp/conversations/${conversationId}/send`, { text });
+  /** Marca a conversa como lida no ERP e na Evolution (melhor esforço). */
+  async markRead(conversationId: string): Promise<{ ok: boolean; unread: number; marked_on_whatsapp: number }> {
+    const response = await api.post(`/api/whatsapp/conversations/${conversationId}/read`);
     return response.data;
   },
-  async sendMedia(conversationId: string, file: File, caption?: string): Promise<WhatsappMessage> {
+  /** "digitando…" / "gravando…" para o cliente. */
+  async presence(conversationId: string, presence: 'composing' | 'recording' | 'paused'): Promise<{ ok: boolean }> {
+    const response = await api.post(`/api/whatsapp/conversations/${conversationId}/presence`, { presence });
+    return response.data;
+  },
+  /** Reação (emoji único; string vazia remove). */
+  async react(messageId: string, reaction: string): Promise<WhatsappMessage> {
+    const response = await api.post(`/api/whatsapp/messages/${messageId}/reaction`, { reaction });
+    return response.data;
+  },
+  /** Apaga a mensagem PARA TODOS (só enviada pelo ERP). */
+  async removeMessage(messageId: string): Promise<WhatsappMessage> {
+    const response = await api.delete(`/api/whatsapp/messages/${messageId}`);
+    return response.data;
+  },
+  /** Foto de perfil do contato (url vazia quando ele não tem). */
+  async avatar(conversationId: string): Promise<{ url: string }> {
+    const response = await api.get(`/api/whatsapp/conversations/${conversationId}/avatar`);
+    return response.data;
+  },
+  async sendText(conversationId: string, text: string, replyTo?: string | null): Promise<WhatsappMessage> {
+    const response = await api.post(`/api/whatsapp/conversations/${conversationId}/send`,
+      replyTo ? { text, reply_to: replyTo } : { text });
+    return response.data;
+  },
+  async sendMedia(conversationId: string, file: File, caption?: string, replyTo?: string | null): Promise<WhatsappMessage> {
     const formData = new FormData();
     formData.append('file', file);
     if (caption) formData.append('caption', caption);
+    if (replyTo) formData.append('reply_to', replyTo);
     // Multipart exige override do Content-Type padrao (ver attachmentService).
     const response = await api.post(`/api/whatsapp/conversations/${conversationId}/send`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
+    return response.data;
+  },
+  async quickReplies(): Promise<WhatsappQuickReply[]> {
+    const response = await api.get('/api/whatsapp/quick-replies');
+    return response.data;
+  },
+  async createQuickReply(data: { title: string; body: string }): Promise<WhatsappQuickReply> {
+    const response = await api.post('/api/whatsapp/quick-replies', data);
+    return response.data;
+  },
+  async updateQuickReply(id: string, data: { title?: string; body?: string; position?: number }): Promise<WhatsappQuickReply> {
+    const response = await api.put(`/api/whatsapp/quick-replies/${id}`, data);
+    return response.data;
+  },
+  async removeQuickReply(id: string): Promise<{ ok: boolean }> {
+    const response = await api.delete(`/api/whatsapp/quick-replies/${id}`);
     return response.data;
   },
   async start(phone: string, name?: string): Promise<WhatsappConversation> {

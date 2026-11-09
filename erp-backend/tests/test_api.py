@@ -4901,6 +4901,254 @@ def test_whatsapp_sync_puxa_historico_sem_duplicar(client, monkeypatch):
     assert r2.get_json()["stored"] == 0 and r2.get_json()["duplicate"] == 2, r2.get_json()
 
 
+def _wa_config(client, url="https://evo.exemplo.com", key="segredo-local"):
+    """Config mínima da Evolution (o chat não sobe sem URL+chave)."""
+    from app.models.models import AppSetting
+    with client.application.app_context():
+        if not db.session.query(AppSetting).filter_by(key="evolution_key").first():
+            db.session.add(AppSetting(key="evolution_key", value=key))
+        if not db.session.query(AppSetting).filter_by(key="evolution_url").first():
+            db.session.add(AppSetting(key="evolution_url", value=url))
+        db.session.commit()
+
+
+def test_whatsapp_unread_conta_webhook_e_zera_ao_ler(client, monkeypatch):
+    """Badge de não-lidas REAL: webhook incrementa, fromMe/abrir zeram e o
+    sync de histórico NÃO acende badge (mensagem antiga não é mensagem nova)."""
+    import app.api.whatsapp_bp as wb
+    from app.api.whatsapp_bp import webhook_token
+    h = _login(client)
+    _wa_config(client)
+    tok = webhook_token("segredo-local", "eme-moveis")
+    _wa_hook(client, tok, _wa_upsert("eme-moveis", "U-1", "5555999000444", "oi"))
+    _wa_hook(client, tok, _wa_upsert("eme-moveis", "U-2", "5555999000444", "tudo bem?"))
+    convs = client.get("/api/whatsapp/conversations", headers=h).get_json()
+    assert convs[0]["unread"] == 2, convs
+    assert client.get("/api/whatsapp/unread", headers=h).get_json()["total"] == 2
+    # dono respondeu pelo celular -> já leu o que havia
+    _wa_hook(client, tok, _wa_upsert("eme-moveis", "U-3", "5555999000444", "respondi", from_me=True))
+    assert client.get("/api/whatsapp/conversations", headers=h).get_json()[0]["unread"] == 0
+    # nova mensagem conta; sync de histórico não conta
+    _wa_hook(client, tok, _wa_upsert("eme-moveis", "U-4", "5555999000444", "mais uma"))
+    cid = client.get("/api/whatsapp/conversations", headers=h).get_json()[0]["id"]
+    hist = {"messages": [
+        {"key": {"remoteJid": "5555999000444@s.whatsapp.net", "fromMe": False, "id": "H-9"},
+         "pushName": "Cliente", "message": {"conversation": "antiga"},
+         "messageTimestamp": 1700000000},
+    ]}
+    monkeypatch.setattr(wb, "_evo_call", lambda *a, **k: (200, hist))
+    assert client.post(f"/api/whatsapp/conversations/{cid}/sync", headers=h).status_code == 200
+    assert client.get("/api/whatsapp/conversations", headers=h).get_json()[0]["unread"] == 1
+    # abrir (marcar lida) zera e avisa a Evolution
+    calls = []
+
+    def fake_evo(method, path, key, body=None, timeout=None):
+        calls.append((method, path, body))
+        return 200, {}
+
+    monkeypatch.setattr(wb, "_evo_call", fake_evo)
+    r = client.post(f"/api/whatsapp/conversations/{cid}/read", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["unread"] == 0 and r.get_json()["ok"] is True
+    assert any(p.startswith("/chat/markMessageAsRead/") for _, p, _ in calls), calls
+    assert client.get("/api/whatsapp/unread", headers=h).get_json()["total"] == 0
+
+
+def test_whatsapp_envio_cita_mensagem(client, monkeypatch):
+    """`reply_to` manda o `quoted` da mensagem certa — e só da MESMA conversa."""
+    import app.api.whatsapp_bp as wb
+    h = _login(client)
+    _wa_config(client)
+    bodies = []
+
+    def fake_evo(method, path, key, body=None, timeout=None):
+        bodies.append((path, body))
+        return 200, {"key": {"id": f"S-{len(bodies)}"}}
+
+    monkeypatch.setattr(wb, "_evo_call", fake_evo)
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999000555"}).get_json()
+    first = client.post(f"/api/whatsapp/conversations/{conv['id']}/send", headers=h,
+                        json={"text": "primeira"}).get_json()
+    r = client.post(f"/api/whatsapp/conversations/{conv['id']}/send", headers=h,
+                    json={"text": "respondendo", "reply_to": first["id"]})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["reply_to_id"] == first["id"]
+    path, body = bodies[-1]
+    assert path.startswith("/message/sendText/")
+    assert body["quoted"]["key"]["id"] == first["provider_id"], body
+    # id de OUTRA conversa não cita (citar errado é pior que não citar)
+    conv2 = client.post("/api/whatsapp/conversations", headers=h,
+                        json={"phone": "5555999000666"}).get_json()
+    r2 = client.post(f"/api/whatsapp/conversations/{conv2['id']}/send", headers=h,
+                     json={"text": "oi", "reply_to": first["id"]})
+    assert r2.get_json()["reply_to_id"] is None
+    assert "quoted" not in bodies[-1][1]
+
+
+def test_whatsapp_reacao_envia_e_grava(client, monkeypatch):
+    """Reação vai para a Evolution com a chave certa e fica no histórico local."""
+    import app.api.whatsapp_bp as wb
+    from app.models.models import WhatsappMessage
+    h = _login(client)
+    _wa_config(client)
+    monkeypatch.setattr(wb, "_evo_call", lambda *a, **k: (200, {"key": {"id": "R-1"}}))
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999000999"}).get_json()
+    msg = client.post(f"/api/whatsapp/conversations/{conv['id']}/send", headers=h,
+                      json={"text": "segue o orçamento"}).get_json()
+    calls = []
+
+    def fake_evo(method, path, key, body=None, timeout=None):
+        calls.append((method, path, body))
+        return 201, {}
+
+    monkeypatch.setattr(wb, "_evo_call", fake_evo)
+    r = client.post(f"/api/whatsapp/messages/{msg['id']}/reaction", headers=h,
+                    json={"reaction": "👍"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["reaction"] == "👍"
+    assert calls[-1][1] == "/chat/sendReaction/eme-moveis", calls
+    assert calls[-1][2]["key"]["id"] == "R-1" and calls[-1][2]["key"]["fromMe"] is True
+    # reação vazia remove
+    r2 = client.post(f"/api/whatsapp/messages/{msg['id']}/reaction", headers=h,
+                     json={"reaction": ""})
+    assert r2.get_json()["reaction"] == ""
+    # texto longo demais não é emoji
+    assert client.post(f"/api/whatsapp/messages/{msg['id']}/reaction", headers=h,
+                       json={"reaction": "123456789"}).status_code == 400
+    # mensagem sem id da Evolution não tem como reagir
+    with client.application.app_context():
+        row = WhatsappMessage(conversation_id=conv["id"], direction="in",
+                              body="sem provider", provider_id=None)
+        db.session.add(row)
+        db.session.commit()
+        sem_id = row.id
+    assert client.post(f"/api/whatsapp/messages/{sem_id}/reaction", headers=h,
+                       json={"reaction": "👍"}).status_code == 409
+
+
+def test_whatsapp_apagar_para_todos_so_mensagem_enviada(client, monkeypatch):
+    """DELETE apaga no celular do cliente; mensagem RECEBIDA não dá para apagar."""
+    import app.api.whatsapp_bp as wb
+    from app.models.models import WhatsappMessage
+    h = _login(client)
+    _wa_config(client)
+    monkeypatch.setattr(wb, "_evo_call", lambda *a, **k: (200, {"key": {"id": "D-1"}}))
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999001234"}).get_json()
+    msg = client.post(f"/api/whatsapp/conversations/{conv['id']}/send", headers=h,
+                      json={"text": "valor errado, desconsidere"}).get_json()
+    calls = []
+
+    def fake_evo(method, path, key, body=None, timeout=None):
+        calls.append((method, path, body))
+        return 201, {}
+
+    monkeypatch.setattr(wb, "_evo_call", fake_evo)
+    r = client.delete(f"/api/whatsapp/messages/{msg['id']}", headers=h)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["deleted"] is True and r.get_json()["body"] == ""
+    assert calls[-1][0] == "DELETE"
+    assert calls[-1][1] == "/chat/deleteMessageForEveryone/eme-moveis", calls
+    assert calls[-1][2] == {"id": "D-1", "remoteJid": "5555999001234@s.whatsapp.net", "fromMe": True}
+    with client.application.app_context():
+        row = WhatsappMessage(conversation_id=conv["id"], direction="in",
+                              body="do cliente", provider_id="IN-1")
+        db.session.add(row)
+        db.session.commit()
+        in_id = row.id
+    assert client.delete(f"/api/whatsapp/messages/{in_id}", headers=h).status_code == 400
+
+
+def test_whatsapp_presenca_digitando(client, monkeypatch):
+    """Presença ("digitando…") usa o payload exigido pela v2: number+presence+delay."""
+    import app.api.whatsapp_bp as wb
+    h = _login(client)
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999000777"}).get_json()
+    # sem config -> 409 honesto
+    assert client.post(f"/api/whatsapp/conversations/{conv['id']}/presence", headers=h,
+                       json={"presence": "composing"}).status_code == 409
+    _wa_config(client)
+    calls = []
+
+    def fake_evo(method, path, key, body=None, timeout=None):
+        calls.append((path, body))
+        return 201, {}
+
+    monkeypatch.setattr(wb, "_evo_call", fake_evo)
+    r = client.post(f"/api/whatsapp/conversations/{conv['id']}/presence", headers=h,
+                    json={"presence": "composing"})
+    assert r.status_code == 200 and r.get_json()["ok"] is True, r.get_data(as_text=True)
+    assert calls[-1][0] == "/chat/sendPresence/eme-moveis"
+    assert calls[-1][1] == {"number": "5555999000777", "presence": "composing", "delay": 0}
+    assert client.post(f"/api/whatsapp/conversations/{conv['id']}/presence", headers=h,
+                       json={"presence": "dancando"}).status_code == 400
+
+
+def test_whatsapp_respostas_rapidas_crud(client):
+    """Seed no boot + CRUD com título único (idempotência do seed)."""
+    h = _login(client)
+    lista = client.get("/api/whatsapp/quick-replies", headers=h).get_json()
+    assert len(lista) >= 5, lista
+    assert any("{nome}" in q["body"] for q in lista)
+    r = client.post("/api/whatsapp/quick-replies", headers=h,
+                    json={"title": "Teste Donna", "body": "Oi {nome}, tudo certo?"})
+    assert r.status_code == 201, r.get_data(as_text=True)
+    rid = r.get_json()["id"]
+    assert client.post("/api/whatsapp/quick-replies", headers=h,
+                       json={"title": "Teste Donna", "body": "x"}).status_code == 409
+    assert client.post("/api/whatsapp/quick-replies", headers=h,
+                       json={"title": "", "body": ""}).status_code == 400
+    up = client.put(f"/api/whatsapp/quick-replies/{rid}", headers=h, json={"body": "novo texto"})
+    assert up.status_code == 200 and up.get_json()["body"] == "novo texto"
+    assert client.put("/api/whatsapp/quick-replies/nao-existe", headers=h,
+                      json={"body": "x"}).status_code == 404
+    assert client.delete(f"/api/whatsapp/quick-replies/{rid}", headers=h).status_code == 200
+    assert client.delete(f"/api/whatsapp/quick-replies/{rid}", headers=h).status_code == 404
+
+
+def test_whatsapp_audio_vira_nota_de_voz_com_fallback(client, monkeypatch, tmp_path):
+    """Áudio sai por sendWhatsAppAudio (PTT); se a Evolution recusar, cai no anexo."""
+    import io
+    import app.api.whatsapp_bp as wb
+    h = _login(client)
+    _wa_config(client)
+    client.application.config["UPLOAD_DIR"] = str(tmp_path)
+    paths = []
+
+    def fake_evo(method, path, key, body=None, timeout=None):
+        paths.append(path)
+        if path.startswith("/message/sendWhatsAppAudio/"):
+            return 200, {"key": {"id": "PTT-1"}}
+        return 200, {"key": {"id": "MEDIA-1"}}
+
+    monkeypatch.setattr(wb, "_evo_call", fake_evo)
+    conv = client.post("/api/whatsapp/conversations", headers=h,
+                       json={"phone": "5555999000888"}).get_json()
+    r = client.post(f"/api/whatsapp/conversations/{conv['id']}/send", headers=h,
+                    data={"file": (io.BytesIO(b"OggS-fake"), "recado.ogg")},
+                    content_type="multipart/form-data")
+    assert r.status_code == 201, r.get_data(as_text=True)
+    assert r.get_json()["kind"] == "audio"
+    assert "/message/sendWhatsAppAudio/eme-moveis" in paths, paths
+    assert not any(p.startswith("/message/sendMedia/") for p in paths), paths
+
+    def fake_fail_ptt(method, path, key, body=None, timeout=None):
+        paths.append(path)
+        if path.startswith("/message/sendWhatsAppAudio/"):
+            return 400, {"message": "audio invalido"}
+        return 200, {"key": {"id": "MEDIA-2"}}
+
+    monkeypatch.setattr(wb, "_evo_call", fake_fail_ptt)
+    r2 = client.post(f"/api/whatsapp/conversations/{conv['id']}/send", headers=h,
+                     data={"file": (io.BytesIO(b"OggS-fake2"), "recado2.ogg")},
+                     content_type="multipart/form-data")
+    assert r2.status_code == 201, r2.get_data(as_text=True)
+    assert any(p.startswith("/message/sendMedia/") for p in paths), paths
+
+
 def test_whatsapp_logout_desconecta_sem_apagar(client, monkeypatch):
     """POST /logout derruba a sessão na Evolution e marca o espelho local
     como desconectada — sem apagar conversas nem mensagens."""

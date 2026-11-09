@@ -32,6 +32,17 @@ O que este blueprint faz, em ordem de uso:
 9. `DELETE /api/whatsapp/conversations/<id>` (ADMIN/GERENTE): apaga conversa
    e mensagens SÓ no ERP (o celular continua com tudo); apaga os arquivos de
    mídia enviada junto (melhor esforço).
+10. `POST /api/whatsapp/conversations/<id>/read`: zera as não-lidas do ERP e
+    marca como lidas na Evolution (o badge só existia no HTML: sempre 0).
+11. `POST /api/whatsapp/conversations/<id>/presence`: "digitando…"/"gravando…"
+    (`chat/sendPresence`).
+12. `POST /api/whatsapp/messages/<id>/reaction` + `DELETE .../messages/<id>`:
+    reação (emoji único) e apagar PARA TODOS (só mensagem enviada pelo ERP).
+13. `GET /api/whatsapp/conversations/<id>/avatar`: foto de perfil do contato.
+14. `GET/POST/PUT/DELETE /api/whatsapp/quick-replies`: respostas rápidas com
+    variável {nome} (só no ERP; seed padrão no boot).
+15. `send` aceita `reply_to` (cita mensagem da conversa) e áudio vira NOTA DE
+    VOZ (`sendWhatsAppAudio`) com fallback para anexo.
 
 Contrato v2 real (nao o da doc v1): connect e GET, hash vem no create,
 fetchInstances usa name/connectionStatus/ownerJid. Envio de midia tenta o
@@ -55,7 +66,7 @@ from app.auth import token_required
 from app.extensions import db
 from app.models.models import (
     AppSetting, Client, WhatsappConversation, WhatsappInstance,
-    WhatsappMessage, utcnow,
+    WhatsappMessage, WhatsappQuickReply, utcnow,
 )
 
 # urllib (stdlib): a imagem do container nao tem requests, mesma decisao das
@@ -275,7 +286,7 @@ def _msg_time(item):
         return utcnow()
 
 
-def _store_inbound(instance, item):
+def _store_inbound(instance, item, count_unread=False):
     """Grava UM messages.upsert. Devolve 'stored'|'duplicate'|'ignored'.
 
     fromMe=True (enviado pelo celular pareado ou eco do envio do ERP) entra
@@ -284,6 +295,10 @@ def _store_inbound(instance, item):
     pelo próprio ERP não duplica: o send grava o provider_id da Evolution e o
     dedupe abaixo cobre os dois sentidos. pushName do fromMe NÃO renomeia a
     conversa (é o nome do próprio dono).
+
+    `count_unread=True` (só o WEBHOOK ao vivo) incrementa o contador de
+    não-lidas. O sync de histórico passa False: mensagem antiga não pode
+    acender badge de mensagem nova.
     """
     key = (item or {}).get("key") or {}
     from_me = bool(key.get("fromMe"))
@@ -334,6 +349,11 @@ def _store_inbound(instance, item):
     if not _naive(conv.last_message_at) or (
             _naive(row.created_at) and _naive(row.created_at) >= _naive(conv.last_message_at)):
         conv.last_message_at = row.created_at
+    if count_unread and not from_me:
+        conv.unread_count = int(conv.unread_count or 0) + 1
+    elif from_me:
+        # O dono respondeu (pelo celular ou pelo ERP): já leu o que havia.
+        conv.unread_count = 0
     db.session.flush()
     return "stored"
 
@@ -551,7 +571,7 @@ def whatsapp_webhook():
         if not isinstance(it, dict):
             ignored += 1
             continue
-        r = _store_inbound(instance, it)
+        r = _store_inbound(instance, it, count_unread=True)
         if r == "stored":
             stored += 1
         elif r == "duplicate":
@@ -577,8 +597,19 @@ def list_conversations():
                   WhatsappConversation.created_at.desc())
         .all()
     )
+    q = (request.args.get("q") or "").strip().lower()
+    only_unread = (request.args.get("unread") or "") in ("1", "true", "yes")
     out = []
     for c in rows:
+        if only_unread and not (c.unread_count or 0):
+            continue
+        if q:
+            alvo = " ".join([
+                (c.name or ""), (c.phone or ""),
+                (c.client.name if c.client else ""),
+            ]).lower()
+            if q not in alvo:
+                continue
         last = (
             db.session.query(WhatsappMessage)
             .filter_by(conversation_id=c.id)
@@ -587,6 +618,24 @@ def list_conversations():
         )
         out.append(c.to_dict(last=last))
     return jsonify(out)
+
+
+@bp.get("/api/whatsapp/unread")
+@token_required()
+def unread_total():
+    """Total de não-lidas (badge do menu) + quantas conversas têm pendência."""
+    cfg = _cfg()
+    instance = cfg.get("evolution_instance", "") or DEFAULT_INSTANCE
+    rows = (
+        db.session.query(WhatsappConversation)
+        .filter_by(instance=instance)
+        .filter(WhatsappConversation.unread_count > 0)
+        .all()
+    )
+    return jsonify({
+        "total": sum(int(c.unread_count or 0) for c in rows),
+        "conversations": len(rows),
+    })
 
 
 @bp.get("/api/whatsapp/conversations/<conv_id>/messages")
@@ -601,12 +650,18 @@ def list_messages(conv_id):
         .order_by(WhatsappMessage.created_at.asc())
         .all()
     )
+    q = (request.args.get("q") or "").strip().lower()
+    if q:
+        rows = [r for r in rows if q in (r.body or "").lower()]
     return jsonify([r.to_dict() for r in rows])
 
 
-def _send_text(global_key, instance, number, text):
+def _send_text(global_key, instance, number, text, quoted=None):
+    body = {"number": number, "text": text}
+    if quoted:
+        body["quoted"] = quoted
     return _evo_call("POST", f"/message/sendText/{instance}", global_key,
-                     {"number": number, "text": text}, timeout=20)
+                     body, timeout=20)
 
 
 def _extract_provider_id(resp):
@@ -625,19 +680,56 @@ def _extract_provider_id(resp):
     return None
 
 
-def _send_media(global_key, instance, number, kind, b64, filename, caption):
+def _send_media(global_key, instance, number, kind, b64, filename, caption, quoted=None):
     payloads = [
         {"number": number, "mediatype": kind, "media": b64,
          "caption": caption or "", "fileName": filename},
         {"number": number, "mediaType": kind, "mimetype": None, "media": b64,
          "caption": caption or "", "fileName": filename},
     ]
+    if quoted:
+        for p in payloads:
+            p["quoted"] = quoted
     last = (0, {"error": "sem tentativa"})
     for p in payloads:
         last = _evo_call("POST", f"/message/sendMedia/{instance}", global_key, p, timeout=30)
         if last[0] < 400:
             return last
     return last
+
+
+def _send_audio_ptt(global_key, instance, number, b64, quoted=None):
+    """Nota de voz de verdade (sendWhatsAppAudio). 4xx cai para sendMedia.
+
+    Sem esse caminho o audio sai como anexo de audio comum: toca, mas nao
+    aparece como mensagem de voz (PTT) no WhatsApp do cliente.
+    """
+    body = {"number": number, "audio": b64, "delay": 800}
+    if quoted:
+        body["quoted"] = quoted
+    status, resp = _evo_call("POST", f"/message/sendWhatsAppAudio/{instance}",
+                             global_key, body, timeout=30)
+    if status and status < 400:
+        return status, resp
+    return 0, {}
+
+
+def _quoted_payload(conv, raw_id):
+    """(quoted, reply_to_id) para o envio citar uma mensagem local.
+
+    Só cita mensagem da MESMA conversa e que tenha id da Evolution — sem
+    provider_id não existe chave para o WhatsApp apontar, e citar a mensagem
+    errada é pior que não citar.
+    """
+    rid = str(raw_id or "").strip()
+    if not rid:
+        return None, None
+    alvo = db.session.get(WhatsappMessage, rid)
+    if not alvo or alvo.conversation_id != conv.id or not alvo.provider_id:
+        return None, None
+    jid = alvo.remote_jid or f"{_digits(conv.phone)}@s.whatsapp.net"
+    return {"key": {"id": alvo.provider_id, "remoteJid": jid,
+                    "fromMe": alvo.direction == "out"}}, alvo.id
 
 
 @bp.post("/api/whatsapp/conversations/<conv_id>/send")
@@ -652,6 +744,11 @@ def send_message(conv_id):
     if not conv:
         return jsonify({"detail": "Conversa nao encontrada"}), 404
     file = request.files.get("file")
+    data = body_json() if not (file and file.filename) else {}
+    data = data if isinstance(data, dict) else {}
+    reply_raw = (request.form.get("reply_to") if (file and file.filename)
+                 else data.get("reply_to"))
+    quoted, reply_to_id = _quoted_payload(conv, reply_raw)
     if file and file.filename:
         original = secure_filename(file.filename) or "arquivo"
         if len(original) > 255:
@@ -671,7 +768,15 @@ def send_message(conv_id):
         else:
             kind = "document"
         b64 = base64.b64encode(blob).decode()
-        status, resp = _send_media(global_key, instance, conv.phone, kind, b64, original, caption)
+        if kind == "audio":
+            # Áudio vira NOTA DE VOZ; se a Evolution recusar, cai no anexo.
+            status, resp = _send_audio_ptt(global_key, instance, conv.phone, b64, quoted)
+            if status == 0:
+                status, resp = _send_media(global_key, instance, conv.phone, kind,
+                                           b64, original, caption, quoted)
+        else:
+            status, resp = _send_media(global_key, instance, conv.phone, kind,
+                                       b64, original, caption, quoted)
         if status >= 300 or status == 0:
             return jsonify({**_evo_fail(resp, "Falha ao enviar midia"),
                             "status": status}), 502
@@ -685,14 +790,14 @@ def send_message(conv_id):
             body=caption, media_stored=stored, media_filename=original,
             media_mime=file.mimetype or "", media_size=len(blob),
             status="sent", provider_id=_extract_provider_id(resp),
+            reply_to_id=reply_to_id,
             created_by=g.current_user.username if hasattr(g, "current_user") else "",
         )
     else:
-        data = body_json()
         text = ((data.get("text") if isinstance(data, dict) else "") or "").strip()
         if not text:
             return jsonify({"detail": "text ou file obrigatorio"}), 400
-        status, resp = _send_text(global_key, instance, conv.phone, text[:4000])
+        status, resp = _send_text(global_key, instance, conv.phone, text[:4000], quoted)
         if status >= 300 or status == 0:
             return jsonify({**_evo_fail(resp, "Falha ao enviar"),
                             "status": status}), 502
@@ -700,10 +805,12 @@ def send_message(conv_id):
             conversation_id=conv.id, direction="out", kind="text",
             body=text[:4000], status="sent",
             provider_id=_extract_provider_id(resp),
+            reply_to_id=reply_to_id,
             created_by=g.current_user.username if hasattr(g, "current_user") else "",
         )
     db.session.add(row)
     conv.last_message_at = utcnow()
+    conv.unread_count = 0
     if conv.client_id is None:
         conv.client_id = _match_client_id(conv.phone)
     db.session.commit()
@@ -909,3 +1016,244 @@ def delete_conversation(conv_id):
         except OSError:
             pass
     return jsonify({"ok": True, "deleted_messages": total})
+
+
+# ── não-lidas / presença / reação / apagar para todos ────────────────
+
+PRESENCES = ("composing", "recording", "paused", "available", "unavailable")
+
+
+def _evo_ready():
+    """(cfg, chave, instância, configurado?) — sem repetir 4 linhas por rota."""
+    cfg = _cfg()
+    key = cfg.get("evolution_key", "")
+    inst = cfg.get("evolution_instance", "") or DEFAULT_INSTANCE
+    return cfg, key, inst, bool(cfg.get("evolution_url") and key)
+
+
+@bp.post("/api/whatsapp/conversations/<conv_id>/read")
+@token_required()
+def mark_conversation_read(conv_id):
+    """Zera o contador local e marca como lida na Evolution (melhor esforço).
+
+    O badge de não-lidas é do ERP; marcar no WhatsApp evita o cliente ver
+    "não lida" no celular do dono depois de a equipe já ter respondido pelo
+    sistema. Se a Evolution estiver fora, o ERP continua zerado (ok=True) e
+    `marked_on_whatsapp` diz a verdade.
+    """
+    conv = db.session.get(WhatsappConversation, conv_id)
+    if not conv:
+        return jsonify({"detail": "Conversa nao encontrada"}), 404
+    pendentes = (
+        db.session.query(WhatsappMessage)
+        .filter_by(conversation_id=conv.id, direction="in")
+        .filter(WhatsappMessage.provider_id.isnot(None))
+        .order_by(WhatsappMessage.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    conv.unread_count = 0
+    db.session.commit()
+    _, key, inst, ready = _evo_ready()
+    marcadas = 0
+    if ready and pendentes:
+        jid_padrao = f"{_digits(conv.phone)}@s.whatsapp.net"
+        lidas = [{"id": m.provider_id, "fromMe": False,
+                  "remoteJid": m.remote_jid or jid_padrao} for m in pendentes]
+        status, _ = _evo_call("POST", f"/chat/markMessageAsRead/{inst}", key,
+                              {"readMessages": lidas}, timeout=10)
+        if status and status < 300:
+            marcadas = len(lidas)
+    return jsonify({"ok": True, "unread": 0, "marked_on_whatsapp": marcadas})
+
+
+@bp.post("/api/whatsapp/conversations/<conv_id>/presence")
+@token_required()
+def conversation_presence(conv_id):
+    """Manda "digitando…"/"gravando…" para o cliente (presença do WhatsApp)."""
+    conv = db.session.get(WhatsappConversation, conv_id)
+    if not conv:
+        return jsonify({"detail": "Conversa nao encontrada"}), 404
+    data = body_json() or {}
+    presence = str((data or {}).get("presence") or "composing")
+    if presence not in PRESENCES:
+        return jsonify({"detail": "presence invalida"}), 400
+    _, key, inst, ready = _evo_ready()
+    if not ready:
+        return jsonify({"detail": "WhatsApp nao configurado (rode o setup)"}), 409
+    status, resp = _evo_call(
+        "POST", f"/chat/sendPresence/{inst}", key,
+        {"number": conv.phone, "presence": presence, "delay": 0}, timeout=8)
+    ok = bool(status and status < 300)
+    out = {"ok": ok, "presence": presence}
+    if not ok:
+        out.update(_evo_fail(resp, "Falha ao enviar presenca"))
+    return jsonify(out), (200 if ok else 502)
+
+
+@bp.post("/api/whatsapp/messages/<msg_id>/reaction")
+@token_required()
+def react_message(msg_id):
+    """Aplica (ou remove, com reaction vazia) uma reação na mensagem."""
+    row = db.session.get(WhatsappMessage, msg_id)
+    if not row:
+        return jsonify({"detail": "Mensagem nao encontrada"}), 404
+    data = body_json() or {}
+    reaction = str((data or {}).get("reaction") or "").strip()
+    if len(reaction) > 8:
+        return jsonify({"detail": "Reacao invalida (um emoji ou vazio)"}), 400
+    conv = db.session.get(WhatsappConversation, row.conversation_id)
+    if not conv:
+        return jsonify({"detail": "Conversa nao encontrada"}), 404
+    if not row.provider_id:
+        return jsonify({"detail": "Mensagem sem id da Evolution — sincronize a conversa"}), 409
+    _, key, inst, ready = _evo_ready()
+    if not ready:
+        return jsonify({"detail": "WhatsApp nao configurado (rode o setup)"}), 409
+    jid = row.remote_jid or f"{_digits(conv.phone)}@s.whatsapp.net"
+    status, resp = _evo_call(
+        "POST", f"/chat/sendReaction/{inst}", key,
+        {"key": {"id": row.provider_id, "remoteJid": jid,
+                 "fromMe": row.direction == "out"},
+         "reaction": reaction}, timeout=15)
+    if status >= 300 or status == 0:
+        return jsonify({**_evo_fail(resp, "Falha ao reagir"),
+                        "status": status}), 502
+    row.reaction = reaction[:16]
+    db.session.commit()
+    return jsonify(row.to_dict())
+
+
+@bp.delete("/api/whatsapp/messages/<msg_id>")
+@token_required(roles=["ADMIN", "GERENTE"])
+def delete_message(msg_id):
+    """Apaga a mensagem PARA TODOS (no celular do cliente também).
+
+    Só mensagem enviada pelo ERP e com id da Evolution: apagar mensagem do
+    cliente não existe no WhatsApp. O arquivo de mídia local vai junto
+    (melhor esforço) e a linha fica com status `deleted` para a tela mostrar
+    "mensagem apagada" em vez de sumir do histórico.
+    """
+    row = db.session.get(WhatsappMessage, msg_id)
+    if not row:
+        return jsonify({"detail": "Mensagem nao encontrada"}), 404
+    if row.direction != "out":
+        return jsonify({"detail": "So da para apagar para todos as mensagens enviadas pelo ERP"}), 400
+    if not row.provider_id:
+        return jsonify({"detail": "Mensagem sem id da Evolution — nao da para apagar no celular do cliente"}), 409
+    conv = db.session.get(WhatsappConversation, row.conversation_id)
+    if not conv:
+        return jsonify({"detail": "Conversa nao encontrada"}), 404
+    _, key, inst, ready = _evo_ready()
+    if not ready:
+        return jsonify({"detail": "WhatsApp nao configurado (rode o setup)"}), 409
+    jid = row.remote_jid or f"{_digits(conv.phone)}@s.whatsapp.net"
+    status, resp = _evo_call(
+        "DELETE", f"/chat/deleteMessageForEveryone/{inst}", key,
+        {"id": row.provider_id, "remoteJid": jid, "fromMe": True}, timeout=15)
+    if status >= 300 or status == 0:
+        return jsonify({**_evo_fail(resp, "Falha ao apagar a mensagem"),
+                        "status": status}), 502
+    arquivo = row.media_stored
+    row.body = ""
+    row.status = "deleted"
+    row.media_stored = None
+    db.session.commit()
+    if arquivo:
+        try:
+            os.remove(os.path.join(current_app.config["UPLOAD_DIR"], arquivo))
+        except OSError:
+            pass
+    return jsonify(row.to_dict())
+
+
+@bp.get("/api/whatsapp/conversations/<conv_id>/avatar")
+@token_required()
+def conversation_avatar(conv_id):
+    """Foto de perfil do contato (URL da Evolution). Sem foto -> url vazia."""
+    conv = db.session.get(WhatsappConversation, conv_id)
+    if not conv:
+        return jsonify({"detail": "Conversa nao encontrada"}), 404
+    _, key, inst, ready = _evo_ready()
+    if not ready:
+        return jsonify({"url": ""})
+    status, resp = _evo_call("POST", f"/chat/fetchProfilePictureUrl/{inst}", key,
+                             {"number": conv.phone}, timeout=10)
+    url = ""
+    if status and status < 300 and isinstance(resp, dict):
+        for k in ("profilePictureUrl", "profilePicture", "url", "picture"):
+            v = resp.get(k)
+            if isinstance(v, str) and v.startswith("http"):
+                url = v[:1000]
+                break
+    return jsonify({"url": url})
+
+
+# ── respostas rápidas (só no ERP) ────────────────────────────────────
+
+
+@bp.get("/api/whatsapp/quick-replies")
+@token_required()
+def list_quick_replies():
+    rows = (
+        db.session.query(WhatsappQuickReply)
+        .order_by(WhatsappQuickReply.position, WhatsappQuickReply.title)
+        .all()
+    )
+    return jsonify([r.to_dict() for r in rows])
+
+
+@bp.post("/api/whatsapp/quick-replies")
+@token_required(roles=["ADMIN", "GERENTE"])
+def create_quick_reply():
+    data = body_json() or {}
+    title = str((data or {}).get("title") or "").strip()[:80]
+    body = str((data or {}).get("body") or "").strip()
+    if not title or not body:
+        return jsonify({"detail": "title e body obrigatorios"}), 400
+    if db.session.query(WhatsappQuickReply).filter_by(title=title).first():
+        return jsonify({"detail": "Ja existe uma resposta com esse titulo"}), 409
+    maxpos = db.session.query(db.func.max(WhatsappQuickReply.position)).scalar() or 0
+    row = WhatsappQuickReply(title=title, body=body[:2000], position=int(maxpos) + 1)
+    db.session.add(row)
+    db.session.commit()
+    return jsonify(row.to_dict()), 201
+
+
+@bp.put("/api/whatsapp/quick-replies/<rid>")
+@token_required(roles=["ADMIN", "GERENTE"])
+def update_quick_reply(rid):
+    row = db.session.get(WhatsappQuickReply, rid)
+    if not row:
+        return jsonify({"detail": "Resposta nao encontrada"}), 404
+    data = body_json() or {}
+    if "title" in (data or {}):
+        title = str(data.get("title") or "").strip()[:80]
+        if not title:
+            return jsonify({"detail": "title obrigatorio"}), 400
+        dup = db.session.query(WhatsappQuickReply).filter(
+            WhatsappQuickReply.title == title, WhatsappQuickReply.id != row.id).first()
+        if dup:
+            return jsonify({"detail": "Ja existe uma resposta com esse titulo"}), 409
+        row.title = title
+    if "body" in (data or {}):
+        row.body = str(data.get("body") or "").strip()[:2000]
+    if "position" in (data or {}):
+        try:
+            row.position = int(data.get("position") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"detail": "position invalida"}), 400
+    row.updated_at = utcnow()
+    db.session.commit()
+    return jsonify(row.to_dict())
+
+
+@bp.delete("/api/whatsapp/quick-replies/<rid>")
+@token_required(roles=["ADMIN", "GERENTE"])
+def delete_quick_reply(rid):
+    row = db.session.get(WhatsappQuickReply, rid)
+    if not row:
+        return jsonify({"detail": "Resposta nao encontrada"}), 404
+    db.session.delete(row)
+    db.session.commit()
+    return jsonify({"ok": True, "deleted": rid})

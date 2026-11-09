@@ -116,4 +116,10 @@ def create_app(config_name=None):
         except Exception:
             pass
 
+        from app.models.models import ensure_default_whatsapp_quick_replies
+        try:
+            ensure_default_whatsapp_quick_replies()
+        except Exception:
+            pass
+
     return app

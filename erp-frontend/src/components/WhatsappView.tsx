@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   MessageCircle, QrCode, Send, Paperclip, RefreshCw, Plus, X,
   CheckCircle, Phone, Download, Settings, Wifi, WifiOff, CheckCheck,
-  Pencil, Trash2,
+  Pencil, Trash2, CornerUpLeft, Zap,
 } from 'lucide-react';
 import { api, whatsappService, clientService, getApiErrorMessage } from '../services/api';
-import type { WhatsappConversation, WhatsappMessage, WhatsappStatus, Client } from '../types';
+import type {
+  WhatsappConversation, WhatsappMessage, WhatsappStatus, WhatsappQuickReply, Client,
+} from '../types';
 import ModuleTabs, { type ModuleTab, ActiveTabPlaceholder, useModuleTab } from './ModuleTabs';
 
 const WHATSAPP_TABS: ModuleTab[] = [
@@ -136,6 +138,20 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
 
+  // ── resposta citando / reação / respostas rápidas ──────────────────
+  const [replyTo, setReplyTo] = useState<WhatsappMessage | null>(null);
+  const [reactingId, setReactingId] = useState<string | null>(null);
+  const [quickReplies, setQuickReplies] = useState<WhatsappQuickReply[]>([]);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [quickError, setQuickError] = useState('');
+  const [isQuickManageOpen, setIsQuickManageOpen] = useState(false);
+  const [quickForm, setQuickForm] = useState({ id: '', title: '', body: '' });
+  const [quickSaving, setQuickSaving] = useState(false);
+  const [listFilter, setListFilter] = useState<'all' | 'unread' | 'client'>('all');
+  const [avatarUrl, setAvatarUrl] = useState('');
+  // "digitando…" não pode virar enxurrada: no máximo 1 envio a cada 8 s.
+  const presenceAt = useRef(0);
+
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [newPhone, setNewPhone] = useState('');
   const [newName, setNewName] = useState('');
@@ -196,6 +212,40 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
     }
   }, []);
 
+  const loadQuickReplies = useCallback(async () => {
+    try {
+      setQuickReplies(await whatsappService.quickReplies());
+    } catch {
+      setQuickReplies([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadQuickReplies();
+  }, [loadQuickReplies]);
+
+  // Trocar de conversa limpa a citação pendente e o painel de respostas.
+  useEffect(() => {
+    setReplyTo(null);
+    setQuickOpen(false);
+    setAvatarUrl('');
+    if (!selectedId) return;
+    let alive = true;
+    whatsappService.avatar(selectedId)
+      .then((r) => { if (alive) setAvatarUrl(r.url || ''); })
+      .catch(() => { /* sem foto: fica nas iniciais */ });
+    return () => { alive = false; };
+  }, [selectedId]);
+
+  // Digitar avisa o cliente ("digitando…"), no máximo 1 vez a cada 8 s.
+  useEffect(() => {
+    if (!selectedId || !draft.trim()) return;
+    const now = Date.now();
+    if (now - presenceAt.current < 8000) return;
+    presenceAt.current = now;
+    whatsappService.presence(selectedId, 'composing').catch(() => { /* presença é enfeite */ });
+  }, [draft, selectedId]);
+
   useEffect(() => {
     loadStatus();
     loadConversations();
@@ -213,13 +263,16 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
     return () => clearInterval(t);
   }, [activeTab, loadConversations]);
 
-  // Atualiza o thread aberto a cada 5 s.
+  // Atualiza o thread aberto a cada 5 s e marca como lido ao abrir.
   useEffect(() => {
     if (activeTab !== 'conversas' || !selectedId) return;
     loadMessages(selectedId);
+    whatsappService.markRead(selectedId)
+      .then(() => loadConversations())
+      .catch(() => { /* badge local já zerou no backend */ });
     const t = setInterval(() => loadMessages(selectedId), 5000);
     return () => clearInterval(t);
-  }, [activeTab, selectedId, loadMessages]);
+  }, [activeTab, selectedId, loadMessages, loadConversations]);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -227,11 +280,14 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
 
   const selected = conversations.find((c) => c.id === selectedId) || null;
   const filtered = conversations.filter((c) => {
+    if (listFilter === 'unread' && !(c.unread || 0)) return false;
+    if (listFilter === 'client' && !c.client_id) return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return c.phone.includes(q) || (c.name || '').toLowerCase().includes(q)
       || (c.client_name || '').toLowerCase().includes(q);
   });
+  const totalUnread = conversations.reduce((soma, c) => soma + (c.unread || 0), 0);
 
   async function handleSend(e: FormEvent) {
     e.preventDefault();
@@ -241,18 +297,95 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
     setSendError('');
     try {
       if (attachFile) {
-        await whatsappService.sendMedia(selected.id, attachFile, draft.trim());
+        await whatsappService.sendMedia(selected.id, attachFile, draft.trim(), replyTo?.id || null);
         setAttachFile(null);
       } else {
-        await whatsappService.sendText(selected.id, draft.trim());
+        await whatsappService.sendText(selected.id, draft.trim(), replyTo?.id || null);
       }
       setDraft('');
+      setReplyTo(null);
+      whatsappService.presence(selected.id, 'paused').catch(() => { /* opcional */ });
       await loadMessages(selected.id);
       await loadConversations();
     } catch (err) {
       setSendError(getApiErrorMessage(err, 'Falha ao enviar. Tente de novo.'));
     } finally {
       setSending(false);
+    }
+  }
+
+  /** Reação: clicar no mesmo emoji remove (reaction vazia). */
+  async function handleReact(m: WhatsappMessage, emoji: string) {
+    if (reactingId) return;
+    setReactingId(m.id);
+    setSendError('');
+    try {
+      const updated = await whatsappService.react(m.id, m.reaction === emoji ? '' : emoji);
+      setMessages((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (err) {
+      setSendError(getApiErrorMessage(err, 'Não foi possível reagir.'));
+    } finally {
+      setReactingId(null);
+    }
+  }
+
+  /** Apaga para todos — some também no celular do cliente. */
+  async function handleDeleteMessage(m: WhatsappMessage) {
+    if (!window.confirm('Apagar esta mensagem para todos? Ela some também no celular do cliente.')) return;
+    setSendError('');
+    try {
+      const updated = await whatsappService.removeMessage(m.id);
+      setMessages((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+    } catch (err) {
+      setSendError(getApiErrorMessage(err, 'Não foi possível apagar a mensagem.'));
+    }
+  }
+
+  /** Resposta rápida: troca {nome} pelo primeiro nome do contato/cliente. */
+  function applyQuickReply(q: WhatsappQuickReply) {
+    const nome = ((selected?.client_name || selected?.name || '').trim().split(/\s+/)[0]) || 'cliente';
+    const texto = q.body.replace(/\{nome\}/g, nome);
+    setDraft((prev) => (prev ? `${prev} ${texto}` : texto));
+    setQuickOpen(false);
+  }
+
+  function openQuickManage() {
+    setQuickError('');
+    setQuickForm({ id: '', title: '', body: '' });
+    setIsQuickManageOpen(true);
+    setQuickOpen(false);
+  }
+
+  async function handleQuickSave(e: FormEvent) {
+    e.preventDefault();
+    if (quickSaving) return;
+    if (!quickForm.title.trim() || !quickForm.body.trim()) {
+      setQuickError('Título e texto são obrigatórios.');
+      return;
+    }
+    setQuickSaving(true);
+    setQuickError('');
+    try {
+      const payload = { title: quickForm.title.trim(), body: quickForm.body.trim() };
+      if (quickForm.id) await whatsappService.updateQuickReply(quickForm.id, payload);
+      else await whatsappService.createQuickReply(payload);
+      setQuickForm({ id: '', title: '', body: '' });
+      await loadQuickReplies();
+    } catch (err) {
+      setQuickError(getApiErrorMessage(err, 'Não foi possível salvar.'));
+    } finally {
+      setQuickSaving(false);
+    }
+  }
+
+  async function handleQuickDelete(id: string) {
+    if (!window.confirm('Excluir esta resposta rápida?')) return;
+    setQuickError('');
+    try {
+      await whatsappService.removeQuickReply(id);
+      await loadQuickReplies();
+    } catch (err) {
+      setQuickError(getApiErrorMessage(err, 'Não foi possível excluir.'));
     }
   }
 
@@ -429,6 +562,12 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
       <div className="flex items-center gap-3 mb-4">
         <MessageCircle size={22} className="text-emerald-400" />
         <h2 className="text-xl font-semibold">WhatsApp</h2>
+        {totalUnread > 0 && (
+          <span className="text-[11px] font-bold bg-emerald-600 text-white rounded-full min-w-5 h-5 px-1.5 flex items-center justify-center"
+            title="Mensagens não lidas">
+            {totalUnread}
+          </span>
+        )}
         {!statusLoading && (
           <span className={`text-xs px-2 py-1 rounded-full flex items-center gap-1 ${connected ? 'bg-emerald-900 text-emerald-200' : 'bg-zinc-800 text-zinc-300'}`}>
             {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
@@ -461,6 +600,16 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
                     className="p-2 rounded-full bg-zinc-800 hover:bg-zinc-700 shrink-0">
                     <RefreshCw size={15} />
                   </button>
+                </div>
+                <div className="flex items-center gap-1 mt-2">
+                  {([['all', 'Todas'], ['unread', 'Não lidas'], ['client', 'Com cliente']] as const).map(([id, label]) => (
+                    <button key={id} type="button" onClick={() => setListFilter(id)}
+                      className={`text-[11px] px-2.5 py-1 rounded-full border transition ${listFilter === id
+                        ? 'bg-emerald-800/60 border-emerald-700 text-emerald-200'
+                        : 'border-zinc-800 text-zinc-400 hover:bg-zinc-800/60'}`}>
+                      {label}{id === 'unread' && totalUnread > 0 ? ` (${totalUnread})` : ''}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div className="overflow-y-auto max-h-[28vh] lg:max-h-none lg:flex-1">
@@ -525,9 +674,15 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
               ) : (
                 <>
                   <div className="flex items-center gap-3 px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/60">
-                    <span className={`w-9 h-9 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${avatarTone(selected.phone)}`}>
-                      {initials(selected.name || selected.phone)}
-                    </span>
+                    {avatarUrl ? (
+                      <img src={avatarUrl} alt={selected.name || selected.phone}
+                        className="w-9 h-9 rounded-full object-cover shrink-0 bg-zinc-800"
+                        onError={() => setAvatarUrl('')} />
+                    ) : (
+                      <span className={`w-9 h-9 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${avatarTone(selected.phone)}`}>
+                        {initials(selected.name || selected.phone)}
+                      </span>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm truncate">{selected.name || selected.phone}</div>
                       <div className="text-[11px] text-zinc-400 truncate flex items-center gap-1">
@@ -563,6 +718,7 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
                       const prev = idx > 0 ? messages[idx - 1] : null;
                       const showDay = !prev || dayLabel(prev.created_at) !== dayLabel(m.created_at);
                       const out = m.direction === 'out';
+                      const citada = m.reply_to_id ? messages.find((x) => x.id === m.reply_to_id) : null;
                       return (
                         <div key={m.id}>
                           {showDay && (
@@ -572,18 +728,62 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
                               </span>
                             </div>
                           )}
-                          <div className={`flex ${out ? 'justify-end' : 'justify-start'} mb-1.5`}>
-                            <div className={`max-w-[85%] sm:max-w-[75%] px-3 py-2 text-sm shadow ${out ? 'bg-emerald-900/90 text-zinc-100 rounded-lg rounded-tr-none' : 'bg-zinc-800 text-zinc-100 rounded-lg rounded-tl-none'}`}>
-                              <MediaPreview m={m} />
-                              {m.kind !== 'text' && (
-                                <div className="text-xs opacity-80 mb-1">[{kindLabel(m.kind)}]{m.media_filename ? ` ${m.media_filename}` : ''}</div>
-                              )}
-                              {m.body && <div className="whitespace-pre-wrap break-words">{m.body}</div>}
-                              {(m.has_media || m.media_pending) && (
-                                <button type="button" onClick={() => handleDownload(m)}
-                                  className="mt-1 flex items-center gap-1 text-xs underline opacity-90">
-                                  <Download size={12} /> Baixar arquivo
+                          <div className={`flex items-end gap-1.5 ${out ? 'justify-end' : 'justify-start'} mb-1.5 group`}>
+                            {/* Ações no hover: reagir, responder citando, apagar para todos */}
+                            <div className={`flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition shrink-0 ${out ? 'order-1' : 'order-2'}`}>
+                              {['👍', '❤️', '😂'].map((emoji) => (
+                                <button key={emoji} type="button" title={`Reagir ${emoji}`}
+                                  onClick={() => handleReact(m, emoji)}
+                                  disabled={reactingId === m.id}
+                                  className="text-sm leading-none p-1 rounded hover:bg-zinc-800 disabled:opacity-40">
+                                  {emoji}
                                 </button>
+                              ))}
+                              <button type="button" title="Responder citando" onClick={() => setReplyTo(m)}
+                                className="p-1 rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+                                <CornerUpLeft size={13} />
+                              </button>
+                              {out && !m.deleted && m.provider_id && (
+                                <button type="button" title="Apagar para todos" onClick={() => handleDeleteMessage(m)}
+                                  className="p-1 rounded text-zinc-400 hover:bg-red-900/60 hover:text-red-200">
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
+                            <div className={`${out ? 'order-2' : 'order-1'} max-w-[85%] sm:max-w-[75%] px-3 py-2 text-sm shadow ${out ? 'bg-emerald-900/90 text-zinc-100 rounded-lg rounded-tr-none' : 'bg-zinc-800 text-zinc-100 rounded-lg rounded-tl-none'}`}>
+                              {citada && (
+                                <div className={`mb-1 rounded border-l-2 pl-2 py-0.5 text-[11px] ${out ? 'border-emerald-400/70 bg-emerald-950/40' : 'border-zinc-500 bg-zinc-900/60'}`}>
+                                  <div className="font-semibold opacity-90">
+                                    {citada.direction === 'out' ? 'Você' : (selected.name || selected.phone)}
+                                  </div>
+                                  <div className="truncate opacity-80">
+                                    {citada.body || (citada.deleted ? 'Mensagem apagada' : kindLabel(citada.kind))}
+                                  </div>
+                                </div>
+                              )}
+                              <MediaPreview m={m} />
+                              {m.deleted ? (
+                                <div className="italic opacity-70">Mensagem apagada</div>
+                              ) : (
+                                <>
+                                  {m.kind !== 'text' && (
+                                    <div className="text-xs opacity-80 mb-1">[{kindLabel(m.kind)}]{m.media_filename ? ` ${m.media_filename}` : ''}</div>
+                                  )}
+                                  {m.body && <div className="whitespace-pre-wrap break-words">{m.body}</div>}
+                                  {(m.has_media || m.media_pending) && (
+                                    <button type="button" onClick={() => handleDownload(m)}
+                                      className="mt-1 flex items-center gap-1 text-xs underline opacity-90">
+                                      <Download size={12} /> Baixar arquivo
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                              {m.reaction && (
+                                <div className="mt-1">
+                                  <span className="inline-block text-xs bg-zinc-900/70 border border-zinc-700 rounded-full px-1.5 py-0.5">
+                                    {m.reaction}
+                                  </span>
+                                </div>
                               )}
                               <div className={`flex items-center gap-1 mt-1 text-[10px] opacity-70 ${out ? 'justify-end' : 'justify-start'}`}>
                                 <span>{fmtHour(m.created_at)}</span>
@@ -598,6 +798,47 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
                   </div>
                   {syncMsg && <p className="text-[11px] text-zinc-400 font-mono px-4 py-1.5 bg-zinc-900/60 border-t border-zinc-800/60">{syncMsg}</p>}
                   {sendError && <p className="text-xs text-red-400 px-4 pt-1">{sendError}</p>}
+                  {quickOpen && (
+                    <div className="mx-3 mb-1 max-h-48 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900/95 p-2">
+                      <div className="flex items-center justify-between mb-1 px-1">
+                        <span className="text-[11px] uppercase tracking-wide text-zinc-500">Respostas rápidas</span>
+                        {canManage && (
+                          <button type="button" onClick={openQuickManage}
+                            className="text-[11px] text-emerald-300 hover:underline">Gerenciar</button>
+                        )}
+                      </div>
+                      {quickReplies.length === 0 ? (
+                        <p className="text-xs text-zinc-500 px-1 py-2">Nenhuma resposta cadastrada.</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {quickReplies.map((q) => (
+                            <li key={q.id}>
+                              <button type="button" onClick={() => applyQuickReply(q)}
+                                className="w-full text-left px-2 py-1.5 rounded hover:bg-zinc-800">
+                                <span className="block text-xs font-medium text-zinc-200">{q.title}</span>
+                                <span className="block text-[11px] text-zinc-500 truncate">{q.body}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                  {replyTo && (
+                    <div className="mx-3 mt-2 flex items-start gap-2 rounded-lg border-l-2 border-emerald-600 bg-zinc-800/80 px-2 py-1.5">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] font-semibold text-emerald-300">
+                          Respondendo {replyTo.direction === 'out' ? 'sua mensagem' : (selected.name || selected.phone)}
+                        </div>
+                        <div className="text-[11px] text-zinc-400 truncate">
+                          {replyTo.body || (replyTo.deleted ? 'Mensagem apagada' : kindLabel(replyTo.kind))}
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => setReplyTo(null)} title="Cancelar citação">
+                        <X size={13} />
+                      </button>
+                    </div>
+                  )}
                   {attachFile && (
                     <div className="flex items-center gap-2 mx-3 mt-2 text-xs bg-zinc-800 rounded-lg px-2 py-1.5">
                       <Paperclip size={12} />
@@ -614,6 +855,10 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
                       onClick={() => fileInputRef.current?.click()}
                       className="p-2.5 rounded-full bg-zinc-800 hover:bg-zinc-700 shrink-0">
                       <Paperclip size={16} />
+                    </button>
+                    <button type="button" title="Respostas rápidas" onClick={() => setQuickOpen((v) => !v)}
+                      className={`p-2.5 rounded-full shrink-0 ${quickOpen ? 'bg-emerald-800 text-emerald-200' : 'bg-zinc-800 hover:bg-zinc-700'}`}>
+                      <Zap size={16} />
                     </button>
                     <input value={draft} onChange={(e) => setDraft(e.target.value)}
                       placeholder={attachFile ? 'Legenda (opcional)…' : 'Digite uma mensagem…'}
@@ -820,6 +1065,69 @@ export default function WhatsappView({ userRole }: WhatsappViewProps) {
                 {editSaving ? 'Salvando…' : 'Salvar'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isQuickManageOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setIsQuickManageOpen(false)}>
+          <div className="glass-panel w-full max-w-lg max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-5 py-3 border-b border-zinc-800 shrink-0">
+              <Zap size={17} className="text-emerald-400" />
+              <h3 className="font-semibold">Respostas rápidas</h3>
+              <div className="flex-1" />
+              <button type="button" onClick={() => setIsQuickManageOpen(false)} title="Fechar">
+                <X size={17} />
+              </button>
+            </div>
+            <div className="px-5 py-3 overflow-y-auto flex-1 overscroll-contain space-y-3">
+              <ul className="space-y-1">
+                {quickReplies.map((q) => (
+                  <li key={q.id} className="flex items-start gap-2 rounded-lg border border-zinc-800 px-2 py-1.5">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium">{q.title}</div>
+                      <div className="text-[11px] text-zinc-400 truncate">{q.body}</div>
+                    </div>
+                    <button type="button" title="Editar"
+                      onClick={() => setQuickForm({ id: q.id, title: q.title, body: q.body })}
+                      className="p-1 text-zinc-400 hover:text-zinc-100">
+                      <Pencil size={13} />
+                    </button>
+                    <button type="button" title="Excluir" onClick={() => handleQuickDelete(q.id)}
+                      className="p-1 text-zinc-400 hover:text-red-300">
+                      <Trash2 size={13} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <form onSubmit={handleQuickSave} className="space-y-2 border-t border-zinc-800 pt-3">
+                <div className="text-xs text-zinc-400">
+                  {quickForm.id ? 'Editando resposta' : 'Nova resposta'}
+                </div>
+                <input value={quickForm.title} maxLength={80}
+                  onChange={(e) => setQuickForm((f) => ({ ...f, title: e.target.value }))}
+                  placeholder="Título (ex.: Prazo de entrega)"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm" />
+                <textarea value={quickForm.body} rows={3}
+                  onChange={(e) => setQuickForm((f) => ({ ...f, body: e.target.value }))}
+                  placeholder="Texto. Use {nome} para o nome do cliente."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm resize-y" />
+                {quickError && <p className="text-xs text-red-400">{quickError}</p>}
+                <div className="flex items-center gap-2">
+                  <button type="submit" disabled={quickSaving}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-sm disabled:opacity-50">
+                    {quickSaving ? 'Salvando…' : quickForm.id ? 'Salvar alterações' : 'Adicionar'}
+                  </button>
+                  {quickForm.id && (
+                    <button type="button" onClick={() => setQuickForm({ id: '', title: '', body: '' })}
+                      className="text-xs text-zinc-400 hover:text-zinc-200">
+                      Cancelar edição
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}
